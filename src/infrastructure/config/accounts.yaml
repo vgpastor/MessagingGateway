@@ -1,0 +1,124 @@
+accounts:
+  # === WHATSAPP ===
+  - id: wa-samur
+    alias: "SAMUR WhatsApp"
+    channel: whatsapp
+    provider: wwebjs-api
+    identity:
+      phoneNumber: "+34600000001"
+    credentialsRef: WWEBJS_SAMUR
+    providerConfig:
+      baseUrl: http://wwebjs-samur:3001
+    metadata:
+      owner: global-emergency
+      environment: production
+      tags: [emergency, samur, madrid]
+
+  - id: wa-patroltech
+    alias: "PatrolTech WhatsApp"
+    channel: whatsapp
+    provider: wwebjs-api
+    identity:
+      phoneNumber: "+34600000002"
+    credentialsRef: WWEBJS_PATROLTECH
+    providerConfig:
+      baseUrl: http://wwebjs-patroltech:3002
+    metadata:
+      owner: patroltech
+      environment: production
+      tags: [patroltech, security]
+
+  - id: wa-globalemerg
+    alias: "Global Emergency WhatsApp"
+    channel: whatsapp
+    provider: wwebjs-api
+    identity:
+      phoneNumber: "+34600000003"
+    credentialsRef: WWEBJS_GLOBALEMERG
+    providerConfig:
+      baseUrl: http://wwebjs-globalemerg:3003
+    metadata:
+      owner: global-emergency
+      environment: production
+      tags: [emergency, global]
+
+  # === TELEGRAM ===
+  - id: tg-deamap-bot
+    alias: "DeaMap Alerts Bot"
+    channel: telegram
+    provider: telegram-bot-api
+    identity:
+      botUsername: test_alerts_bot
+    credentialsRef: TG_DEAMAP_ALERTS
+    metadata:
+      owner: global-emergency
+      environment: production
+      tags: [deamap, alerts]
+
+  - id: tg-patroltech-bot
+    alias: "PatrolTech Bot"
+    channel: telegram
+    provider: telegram-bot-api
+    identity:
+      botUsername: test_support_bot
+    credentialsRef: TG_PATROLTECH_BOT
+    metadata:
+      owner: patroltech
+      environment: production
+      tags: [patroltech, bot]
+
+  # === EMAIL ===
+  - id: email-patroltech-soporte
+    alias: "PatrolTech Soporte"
+    channel: email
+    provider: brevo
+    identity:
+      address: support@example.com
+    credentialsRef: BREVO_MAIN
+    providerConfig:
+      senderName: "PatrolTech Soporte"
+    metadata:
+      owner: patroltech
+      environment: production
+      tags: [patroltech, soporte]
+
+  - id: email-noreply
+    alias: "No Reply"
+    channel: email
+    provider: brevo
+    identity:
+      address: noreply@example.com
+    credentialsRef: BREVO_MAIN
+    providerConfig:
+      senderName: "Global Emergency"
+    metadata:
+      owner: global-emergency
+      environment: production
+      tags: [noreply, system]
+
+  # === SMS ===
+  - id: sms-alerts
+    alias: "SMS Alerts (Twilio)"
+    channel: sms
+    provider: twilio
+    identity:
+      phoneNumber: "+34900000001"
+    credentialsRef: TWILIO_ALERTS
+    providerConfig:
+      accountSid: "${TWILIO_ALERTS_ACCOUNT_SID}"
+    metadata:
+      owner: global-emergency
+      environment: production
+      tags: [alerts, twilio]
+
+  - id: sms-patrol
+    alias: "SMS Patrol (MessageBird)"
+    channel: sms
+    provider: messagebird
+    identity:
+      phoneNumber: "+34900000002"
+    credentialsRef: MESSAGEBIRD_PATROL
+    metadata:
+      owner: patroltech
+      environment: production
+      tags: [patroltech, messagebird]
