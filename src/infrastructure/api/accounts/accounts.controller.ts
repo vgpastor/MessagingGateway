@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
 import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
 import { accountResponseSchema, errorResponseSchema } from '../schemas.js';
-import { hasValidCredential } from '../../config/env.config.js';
+import { validateAccount } from '../../credential-validator.js';
 
 interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
@@ -109,6 +109,7 @@ export async function accountsController(
             accountId: { type: 'string' },
             status: { type: 'string', enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
             credentialsConfigured: { type: 'boolean' },
+            detail: { type: 'string' },
             lastChecked: { type: 'string', format: 'date-time' },
           },
           required: ['accountId', 'status', 'credentialsConfigured', 'lastChecked'],
@@ -127,12 +128,13 @@ export async function accountsController(
       });
     }
 
-    const credentialsOk = hasValidCredential(account.credentialsRef, account.provider);
+    const result = await validateAccount(account);
 
     return {
       accountId: account.id,
-      status: credentialsOk ? account.status : 'unchecked',
-      credentialsConfigured: credentialsOk,
+      status: result.status,
+      credentialsConfigured: result.credentialsConfigured,
+      detail: result.detail,
       lastChecked: new Date().toISOString(),
     };
   });

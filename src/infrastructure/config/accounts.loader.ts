@@ -5,7 +5,6 @@ import type { ChannelAccount } from '../../domain/accounts/channel-account.js';
 import type { AccountIdentity } from '../../domain/accounts/account-identity.js';
 import type { ChannelType, ProviderType } from '../../domain/messaging/channel.types.js';
 import { accountsConfigSchema } from './accounts.schema.js';
-import { hasValidCredential } from './env.config.js';
 
 export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
   const resolvedPath = filePath ?? resolve(process.cwd(), 'src/infrastructure/config/accounts.yaml');
@@ -14,18 +13,6 @@ export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
   const parsed = accountsConfigSchema.parse(rawConfig);
 
   return parsed.accounts.map((acc) => mapToChannelAccount(acc));
-}
-
-export function validateAccountCredentials(accounts: ChannelAccount[]): ChannelAccount[] {
-  return accounts.map((account) => {
-    if (account.status !== 'unchecked') return account;
-
-    const valid = hasValidCredential(account.credentialsRef, account.provider);
-    return {
-      ...account,
-      status: valid ? 'active' : 'unchecked',
-    };
-  });
 }
 
 function mapToChannelAccount(
