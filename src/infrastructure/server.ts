@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import fastifyCors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { ChannelAccountRepository } from '../domain/accounts/channel-account.repository.js';
@@ -24,14 +25,26 @@ export interface ServerDeps {
 }
 
 export async function createServer(deps: ServerDeps) {
+  const isDev = process.env['NODE_ENV'] !== 'production';
+
   const fastify = Fastify({
-    logger: {
-      level: deps.logLevel,
-      transport: {
-        target: 'pino-pretty',
-        options: { colorize: true },
-      },
-    },
+    logger: isDev
+      ? {
+          level: deps.logLevel,
+          transport: {
+            target: 'pino-pretty',
+            options: { colorize: true },
+          },
+        }
+      : {
+          level: deps.logLevel,
+        },
+  });
+
+  // CORS — allow external tools to consume the API and OpenAPI spec
+  await fastify.register(fastifyCors, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
   // OpenAPI / Swagger
@@ -60,6 +73,16 @@ export async function createServer(deps: ServerDeps) {
       docExpansion: 'list',
       deepLinking: true,
     },
+  });
+
+  // OpenAPI spec at a well-known path (easier for external tooling)
+  fastify.get('/openapi.json', {
+    schema: { hide: true },
+  }, async (_request, reply) => {
+    return reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300')
+      .send(fastify.swagger());
   });
 
   // Health
