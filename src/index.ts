@@ -1,21 +1,26 @@
 import { loadEnvConfig } from './infrastructure/config/env.config.js';
-import { loadAccountsFromYaml, validateAccountCredentials } from './infrastructure/config/accounts.loader.js';
+import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { AdapterFactory } from './adapters/adapter.factory.js';
 import { WwebjsApiAdapter } from './adapters/whatsapp/wwebjs-api/wwebjs.adapter.js';
 import { MessageRouterService } from './domain/routing/message-router.service.js';
 import { WebhookForwarder } from './infrastructure/webhook-forwarder.js';
 import { createServer } from './infrastructure/server.js';
+import { validateAllAccounts } from './infrastructure/credential-validator.js';
 
 async function main() {
   // 1. Load configuration
   const envConfig = loadEnvConfig();
   const rawAccounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
-  const accounts = validateAccountCredentials(rawAccounts);
+
+  console.log(`Loaded ${rawAccounts.length} account(s) from configuration, validating credentials...`);
+  const accounts = await validateAllAccounts(rawAccounts);
 
   const active = accounts.filter((a) => a.status === 'active').length;
+  const authExpired = accounts.filter((a) => a.status === 'auth_expired').length;
   const unchecked = accounts.filter((a) => a.status === 'unchecked').length;
-  console.log(`Loaded ${accounts.length} account(s): ${active} active, ${unchecked} unchecked (missing credentials)`);
+  const errored = accounts.filter((a) => a.status === 'error').length;
+  console.log(`Validation complete: ${active} active, ${authExpired} auth_expired, ${unchecked} unchecked, ${errored} error`);
 
   // 2. Create repository
   const accountRepository = new InMemoryAccountRepository(accounts);
