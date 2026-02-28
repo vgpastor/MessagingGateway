@@ -152,7 +152,7 @@ export const accountResponseSchema = {
     alias: { type: 'string' as const },
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: { type: 'string' as const },
-    status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error'] },
+    status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
     metadata: {
       type: 'object' as const,

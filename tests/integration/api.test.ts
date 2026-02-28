@@ -129,7 +129,8 @@ describe('GET /api/v1/accounts/:id/health', () => {
 
     const body = response.json();
     expect(body.accountId).toBe('wa-samur');
-    expect(body.status).toBe('active');
+    expect(body.status).toBe('unchecked');
+    expect(body.credentialsConfigured).toBe(false);
     expect(body.lastChecked).toBeDefined();
   });
 });

@@ -1,7 +1,7 @@
 import type { ChannelType, ProviderType } from '../messaging/channel.types.js';
 import type { AccountIdentity } from './account-identity.js';
 
-export type AccountStatus = 'active' | 'suspended' | 'auth_expired' | 'error';
+export type AccountStatus = 'active' | 'suspended' | 'auth_expired' | 'error' | 'unchecked';
 
 export interface RateLimitConfig {
   maxPerMinute: number;
