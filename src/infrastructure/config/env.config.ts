@@ -9,6 +9,7 @@ export interface EnvConfig {
   logLevel: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
+  accountsConfigPath?: string;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -18,6 +19,7 @@ export function loadEnvConfig(): EnvConfig {
     logLevel: process.env['LOG_LEVEL'] ?? 'info',
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
+    accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
   };
 }
 

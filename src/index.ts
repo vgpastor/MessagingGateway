@@ -10,7 +10,7 @@ import { createServer } from './infrastructure/server.js';
 async function main() {
   // 1. Load configuration
   const envConfig = loadEnvConfig();
-  const accounts = loadAccountsFromYaml();
+  const accounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
 
   console.log(`Loaded ${accounts.length} account(s) from configuration`);
 

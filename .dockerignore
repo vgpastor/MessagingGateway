@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.github
+tests
+coverage
+*.log
+.env.local
+.env
+.DS_Store
+*.md
+.vscode
+.idea
+vitest.config.ts

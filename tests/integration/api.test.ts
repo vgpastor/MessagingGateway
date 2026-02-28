@@ -260,7 +260,7 @@ describe('Swagger UI', () => {
     expect(response.headers['content-type']).toContain('text/html');
   });
 
-  it('should serve OpenAPI spec', async () => {
+  it('should serve OpenAPI spec at /docs/json', async () => {
     const response = await app.inject({ method: 'GET', url: '/docs/json' });
     expect(response.statusCode).toBe(200);
 
@@ -271,5 +271,19 @@ describe('Swagger UI', () => {
     expect(spec.paths['/api/v1/accounts']).toBeDefined();
     expect(spec.paths['/api/v1/messages/send']).toBeDefined();
     expect(spec.paths['/webhooks/whatsapp/{accountId}/inbound']).toBeDefined();
+  });
+});
+
+describe('GET /openapi.json', () => {
+  it('should serve the OpenAPI spec at root level for external tools', async () => {
+    const response = await app.inject({ method: 'GET', url: '/openapi.json' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.headers['cache-control']).toBe('public, max-age=300');
+
+    const spec = response.json();
+    expect(spec.openapi).toBe('3.1.0');
+    expect(spec.info.title).toBe('Unified Messaging Gateway');
+    expect(spec.paths['/api/v1/messages/send']).toBeDefined();
   });
 });
