@@ -46,3 +46,26 @@ export function resolveProviderCredential(
   const suffix = PROVIDER_CREDENTIAL_SUFFIXES[provider] ?? 'API_KEY';
   return resolveCredential(credentialsRef, suffix);
 }
+
+const PLACEHOLDER_PATTERNS = [
+  /^api-key-/i,
+  /^\d{6}:ABC/,
+  /^xkeysib-\.{3}$/,
+  /^AKIA\.{3}$/,
+  /^AC\.{3}$/,
+  /\.\.\.$/,
+  /^your-/i,
+  /^change-me/i,
+  /^xxx/i,
+  /^placeholder/i,
+];
+
+export function isPlaceholderValue(value: string): boolean {
+  return PLACEHOLDER_PATTERNS.some((p) => p.test(value));
+}
+
+export function hasValidCredential(credentialsRef: string, provider: string): boolean {
+  const value = resolveProviderCredential(credentialsRef, provider);
+  if (!value || value.trim() === '') return false;
+  return !isPlaceholderValue(value);
+}

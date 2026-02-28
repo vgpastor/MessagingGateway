@@ -1,5 +1,5 @@
 import { loadEnvConfig } from './infrastructure/config/env.config.js';
-import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
+import { loadAccountsFromYaml, validateAccountCredentials } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { AdapterFactory } from './adapters/adapter.factory.js';
 import { WwebjsApiAdapter } from './adapters/whatsapp/wwebjs-api/wwebjs.adapter.js';
@@ -10,9 +10,12 @@ import { createServer } from './infrastructure/server.js';
 async function main() {
   // 1. Load configuration
   const envConfig = loadEnvConfig();
-  const accounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
+  const rawAccounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
+  const accounts = validateAccountCredentials(rawAccounts);
 
-  console.log(`Loaded ${accounts.length} account(s) from configuration`);
+  const active = accounts.filter((a) => a.status === 'active').length;
+  const unchecked = accounts.filter((a) => a.status === 'unchecked').length;
+  console.log(`Loaded ${accounts.length} account(s): ${active} active, ${unchecked} unchecked (missing credentials)`);
 
   // 2. Create repository
   const accountRepository = new InMemoryAccountRepository(accounts);

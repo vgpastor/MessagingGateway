@@ -43,7 +43,7 @@ const accountSchema = z.object({
   alias: z.string().min(1),
   channel: z.enum(channelTypes),
   provider: z.enum(providerTypes),
-  status: z.enum(['active', 'suspended', 'auth_expired', 'error']).default('active'),
+  status: z.enum(['active', 'suspended', 'auth_expired', 'error', 'unchecked']).default('unchecked'),
   identity: z.union([
     whatsappIdentitySchema,
     telegramIdentitySchema,
