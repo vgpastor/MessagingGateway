@@ -1,6 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { validateAccount, validateAllAccounts } from '../../../src/infrastructure/credential-validator.js';
+import { CredentialValidator } from '../../../src/infrastructure/credential-validator.js';
+import { HealthCheckerRegistry } from '../../../src/adapters/health-checker.registry.js';
+import { WwebjsHealthChecker } from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.health-checker.js';
+import { TelegramBotHealthChecker } from '../../../src/adapters/telegram/bot-api/telegram-bot.health-checker.js';
+import { BrevoHealthChecker } from '../../../src/adapters/email/brevo/brevo.health-checker.js';
+import { TwilioHealthChecker } from '../../../src/adapters/sms/twilio/twilio.health-checker.js';
+import { MessageBirdHealthChecker } from '../../../src/adapters/sms/messagebird/messagebird.health-checker.js';
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+
+function makeRegistry(): HealthCheckerRegistry {
+  const registry = new HealthCheckerRegistry();
+  registry.register('wwebjs-api', new WwebjsHealthChecker());
+  registry.register('telegram-bot-api', new TelegramBotHealthChecker());
+  registry.register('brevo', new BrevoHealthChecker());
+  registry.register('twilio', new TwilioHealthChecker());
+  registry.register('messagebird', new MessageBirdHealthChecker());
+  return registry;
+}
 
 function makeAccount(overrides: Partial<ChannelAccount> = {}): ChannelAccount {
   return {
@@ -21,9 +37,12 @@ function makeAccount(overrides: Partial<ChannelAccount> = {}): ChannelAccount {
   };
 }
 
-describe('validateAccount', () => {
+describe('CredentialValidator', () => {
+  let validator: CredentialValidator;
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    validator = new CredentialValidator(makeRegistry());
   });
 
   afterEach(() => {
@@ -34,8 +53,7 @@ describe('validateAccount', () => {
   // --- wwebjs-api ---
 
   it('should return unchecked when wwebjs API key is missing', async () => {
-    const account = makeAccount();
-    const result = await validateAccount(account);
+    const result = await validator.validate(makeAccount());
 
     expect(result.status).toBe('unchecked');
     expect(result.credentialsConfigured).toBe(false);
@@ -46,8 +64,7 @@ describe('validateAccount', () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'real-key');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
-    const account = makeAccount();
-    const result = await validateAccount(account);
+    const result = await validator.validate(makeAccount());
 
     expect(result.status).toBe('active');
     expect(result.credentialsConfigured).toBe(true);
@@ -61,9 +78,7 @@ describe('validateAccount', () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'bad-key');
     vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }));
 
-    const account = makeAccount();
-    const result = await validateAccount(account);
-
+    const result = await validator.validate(makeAccount());
     expect(result.status).toBe('auth_expired');
     expect(result.credentialsConfigured).toBe(true);
   });
@@ -72,20 +87,16 @@ describe('validateAccount', () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'some-key');
     vi.mocked(fetch).mockResolvedValue(new Response('Server Error', { status: 500 }));
 
-    const account = makeAccount();
-    const result = await validateAccount(account);
-
+    const result = await validator.validate(makeAccount());
     expect(result.status).toBe('error');
     expect(result.credentialsConfigured).toBe(true);
   });
 
-  it('should return error when wwebjs fetch throws (network error)', async () => {
+  it('should return error when fetch throws (network error)', async () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'some-key');
     vi.mocked(fetch).mockRejectedValue(new Error('ECONNREFUSED'));
 
-    const account = makeAccount();
-    const result = await validateAccount(account);
-
+    const result = await validator.validate(makeAccount());
     expect(result.status).toBe('error');
     expect(result.detail).toContain('ECONNREFUSED');
   });
@@ -96,15 +107,14 @@ describe('validateAccount', () => {
     vi.stubEnv('TG_DEAMAP_ALERTS_TOKEN', '123456:AAF-realtoken');
     vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
 
-    const account = makeAccount({
+    const result = await validator.validate(makeAccount({
       id: 'tg-deamap-bot',
       channel: 'telegram',
       provider: 'telegram-bot-api',
       credentialsRef: 'TG_DEAMAP_ALERTS',
       identity: { channel: 'telegram', botUsername: 'deamap_alerts_bot' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
+    }));
 
     expect(result.status).toBe('active');
     expect(fetch).toHaveBeenCalledWith(
@@ -117,30 +127,22 @@ describe('validateAccount', () => {
     vi.stubEnv('TG_DEAMAP_ALERTS_TOKEN', 'bad-token');
     vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }));
 
-    const account = makeAccount({
-      id: 'tg-deamap-bot',
-      channel: 'telegram',
+    const result = await validator.validate(makeAccount({
       provider: 'telegram-bot-api',
       credentialsRef: 'TG_DEAMAP_ALERTS',
       identity: { channel: 'telegram', botUsername: 'deamap_alerts_bot' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
-
+    }));
     expect(result.status).toBe('auth_expired');
   });
 
   it('should return unchecked when Telegram token is missing', async () => {
-    const account = makeAccount({
-      id: 'tg-deamap-bot',
-      channel: 'telegram',
+    const result = await validator.validate(makeAccount({
       provider: 'telegram-bot-api',
       credentialsRef: 'TG_DEAMAP_ALERTS',
       identity: { channel: 'telegram', botUsername: 'deamap_alerts_bot' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
-
+    }));
     expect(result.status).toBe('unchecked');
     expect(result.credentialsConfigured).toBe(false);
   });
@@ -151,15 +153,12 @@ describe('validateAccount', () => {
     vi.stubEnv('BREVO_MAIN_API_KEY', 'xkeysib-real');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
-    const account = makeAccount({
-      id: 'email-noreply',
-      channel: 'email',
+    const result = await validator.validate(makeAccount({
       provider: 'brevo',
       credentialsRef: 'BREVO_MAIN',
       identity: { channel: 'email', address: 'noreply@test.com' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
+    }));
 
     expect(result.status).toBe('active');
     expect(fetch).toHaveBeenCalledWith(
@@ -175,15 +174,12 @@ describe('validateAccount', () => {
     vi.stubEnv('TWILIO_ALERTS_ACCOUNT_SID', 'AC1234567890');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
-    const account = makeAccount({
-      id: 'sms-alerts',
-      channel: 'sms',
+    const result = await validator.validate(makeAccount({
       provider: 'twilio',
       credentialsRef: 'TWILIO_ALERTS',
       identity: { channel: 'sms', phoneNumber: '+34900000001' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
+    }));
 
     expect(result.status).toBe('active');
     expect(fetch).toHaveBeenCalledWith(
@@ -194,18 +190,13 @@ describe('validateAccount', () => {
 
   it('should return unchecked when Twilio account SID is missing', async () => {
     vi.stubEnv('TWILIO_ALERTS_AUTH_TOKEN', 'real-auth-token');
-    // No ACCOUNT_SID
 
-    const account = makeAccount({
-      id: 'sms-alerts',
-      channel: 'sms',
+    const result = await validator.validate(makeAccount({
       provider: 'twilio',
       credentialsRef: 'TWILIO_ALERTS',
       identity: { channel: 'sms', phoneNumber: '+34900000001' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
-
+    }));
     expect(result.status).toBe('unchecked');
     expect(result.credentialsConfigured).toBe(false);
   });
@@ -216,15 +207,12 @@ describe('validateAccount', () => {
     vi.stubEnv('MESSAGEBIRD_PATROL_API_KEY', 'real-api-key');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
-    const account = makeAccount({
-      id: 'sms-patrol',
-      channel: 'sms',
+    const result = await validator.validate(makeAccount({
       provider: 'messagebird',
       credentialsRef: 'MESSAGEBIRD_PATROL',
       identity: { channel: 'sms', phoneNumber: '+34900000002' },
       providerConfig: {},
-    });
-    const result = await validateAccount(account);
+    }));
 
     expect(result.status).toBe('active');
     expect(fetch).toHaveBeenCalledWith(
@@ -233,22 +221,23 @@ describe('validateAccount', () => {
     );
   });
 
-  // --- unknown provider ---
+  // --- no health checker registered ---
 
-  it('should return unchecked for unknown provider', async () => {
-    const account = makeAccount({
+  it('should return unchecked for unregistered provider', async () => {
+    const result = await validator.validate(makeAccount({
       provider: 'evolution-api' as ChannelAccount['provider'],
-    });
-    const result = await validateAccount(account);
-
+    }));
     expect(result.status).toBe('unchecked');
-    expect(result.detail).toContain('No validator');
+    expect(result.detail).toContain('No health checker');
   });
 });
 
-describe('validateAllAccounts', () => {
+describe('CredentialValidator.validateAll', () => {
+  let validator: CredentialValidator;
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    validator = new CredentialValidator(makeRegistry());
   });
 
   afterEach(() => {
@@ -258,7 +247,7 @@ describe('validateAllAccounts', () => {
 
   it('should skip accounts that are not unchecked', async () => {
     const account = makeAccount({ status: 'suspended' });
-    const results = await validateAllAccounts([account]);
+    const results = await validator.validateAll([account]);
 
     expect(results[0].status).toBe('suspended');
     expect(fetch).not.toHaveBeenCalled();
@@ -281,7 +270,7 @@ describe('validateAllAccounts', () => {
       }),
     ];
 
-    const results = await validateAllAccounts(accounts);
+    const results = await validator.validateAll(accounts);
 
     expect(results[0].status).toBe('active');
     expect(results[1].status).toBe('active');

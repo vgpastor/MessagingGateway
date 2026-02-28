@@ -6,6 +6,7 @@ import type { ChannelAccountRepository } from '../domain/accounts/channel-accoun
 import type { MessageRouterService } from '../domain/routing/message-router.service.js';
 import type { AdapterFactory } from '../adapters/adapter.factory.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
+import type { CredentialValidator } from './credential-validator.js';
 import { healthController } from './api/health/health.controller.js';
 import { accountsController } from './api/accounts/accounts.controller.js';
 import { sendController } from './api/messaging/send.controller.js';
@@ -19,6 +20,7 @@ export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
   messageRouter: MessageRouterService;
   adapterFactory: AdapterFactory;
+  credentialValidator: CredentialValidator;
   webhookForwarder: WebhookForwarder;
   port: number;
   logLevel: string;
@@ -92,6 +94,7 @@ export async function createServer(deps: ServerDeps) {
   await fastify.register(
     async (instance) => accountsController(instance, {
       accountRepository: deps.accountRepository,
+      credentialValidator: deps.credentialValidator,
     }),
   );
 

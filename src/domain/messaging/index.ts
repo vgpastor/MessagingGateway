@@ -18,3 +18,4 @@ export type {
 } from './message-result.js';
 export type { MessagingPort } from './messaging.port.js';
 export type { InboundWebhookPort, RawRequest } from './inbound-webhook.port.js';
+export type { ProviderHealthChecker, ValidationResult } from './provider-health.port.js';

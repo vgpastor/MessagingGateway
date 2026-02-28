@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
 import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
+import type { CredentialValidator } from '../../credential-validator.js';
 import { accountResponseSchema, errorResponseSchema } from '../schemas.js';
-import { validateAccount } from '../../credential-validator.js';
 
 interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
+  credentialValidator: CredentialValidator;
 }
 
 function sanitizeAccount(account: ChannelAccount) {
@@ -128,7 +129,7 @@ export async function accountsController(
       });
     }
 
-    const result = await validateAccount(account);
+    const result = await deps.credentialValidator.validate(account);
 
     return {
       accountId: account.id,

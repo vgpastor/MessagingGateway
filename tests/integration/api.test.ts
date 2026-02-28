@@ -4,8 +4,10 @@ import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
 import { AdapterFactory } from '../../src/adapters/adapter.factory.js';
+import { HealthCheckerRegistry } from '../../src/adapters/health-checker.registry.js';
 import { MessageRouterService } from '../../src/domain/routing/message-router.service.js';
 import { WebhookForwarder } from '../../src/infrastructure/webhook-forwarder.js';
+import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
 import { createServer } from '../../src/infrastructure/server.js';
 
 let app: FastifyInstance;
@@ -16,6 +18,8 @@ beforeAll(async () => {
   );
   const accountRepository = new InMemoryAccountRepository(accounts);
   const adapterFactory = new AdapterFactory();
+  const healthCheckerRegistry = new HealthCheckerRegistry();
+  const credentialValidator = new CredentialValidator(healthCheckerRegistry);
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
   const webhookForwarder = new WebhookForwarder(undefined, undefined);
 
@@ -23,6 +27,7 @@ beforeAll(async () => {
     accountRepository,
     messageRouter,
     adapterFactory,
+    credentialValidator,
     webhookForwarder,
     port: 0,
     logLevel: 'silent',
