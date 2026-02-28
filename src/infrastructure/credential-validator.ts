@@ -28,8 +28,10 @@ export class CredentialValidator {
       }),
     );
 
-    return results.map((r, i) =>
-      r.status === 'fulfilled' ? r.value : { ...accounts[i], status: 'error' as const },
-    );
+    return results.map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      const original = accounts[i]!;
+      return { ...original, status: 'error' as const };
+    });
   }
 }
