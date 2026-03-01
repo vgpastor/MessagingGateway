@@ -39,7 +39,8 @@ function mapToChannelAccount(
     provider: raw.provider as ProviderType,
     status: raw.status,
     identity: raw.identity ? buildIdentity(channel, raw.identity) : buildDefaultIdentity(channel),
-    credentialsRef: raw.credentialsRef,
+    credentialsRef: raw.credentialsRef ?? '',
+    credentials: raw.credentials,
     providerConfig: raw.providerConfig,
     metadata: {
       owner: raw.metadata.owner,

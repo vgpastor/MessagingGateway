@@ -50,7 +50,8 @@ const accountSchema = z.object({
     emailIdentitySchema,
     smsIdentitySchema,
   ]).optional(),
-  credentialsRef: z.string().min(1),
+  credentialsRef: z.string().min(1).optional(),
+  credentials: z.string().min(1).optional(),
   providerConfig: z.record(z.string(), z.unknown()).default({}),
   metadata: z.object({
     owner: z.string().min(1),
@@ -59,7 +60,10 @@ const accountSchema = z.object({
     rateLimit: rateLimitSchema.optional(),
     tags: z.array(z.string()).default([]),
   }),
-});
+}).refine(
+  (data) => data.credentialsRef || data.credentials,
+  { message: 'Either credentialsRef or credentials must be provided' },
+);
 
 export const accountsConfigSchema = z.object({
   accounts: z.array(accountSchema).min(1),

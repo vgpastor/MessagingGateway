@@ -195,7 +195,8 @@ export async function accountsController(
       identity: data.identity
         ? ({ channel, ...data.identity } as AccountIdentity)
         : buildDefaultIdentity(channel),
-      credentialsRef: data.credentialsRef,
+      credentialsRef: data.credentialsRef ?? '',
+      credentials: data.credentials,
       providerConfig: data.providerConfig,
       metadata: {
         owner: data.metadata.owner,

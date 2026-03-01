@@ -5,7 +5,7 @@ import { fetchWithTimeout } from '../../shared/http.js';
 
 export class TelegramBotHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const token = resolveProviderCredential(account.credentialsRef, account.provider);
+    const token = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
     if (!token) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing bot token' };
     }

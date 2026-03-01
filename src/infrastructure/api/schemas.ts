@@ -188,7 +188,8 @@ export const createAccountBodySchema = {
       enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
     },
     identity: { type: 'object' as const, additionalProperties: true, description: 'Channel-specific identity (e.g. phoneNumber for WhatsApp)' },
-    credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars' },
+    credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
+    credentials: { type: 'string' as const, minLength: 1, description: 'Inline credential string (e.g. "user:apiKey@host:port"). Stored in YAML, used when env vars are not available.' },
     providerConfig: { type: 'object' as const, additionalProperties: true },
     metadata: {
       type: 'object' as const,
@@ -208,7 +209,7 @@ export const createAccountBodySchema = {
       required: ['owner'] as const,
     },
   },
-  required: ['id', 'alias', 'channel', 'provider', 'credentialsRef', 'metadata'] as const,
+  required: ['id', 'alias', 'channel', 'provider', 'metadata'] as const,
 };
 
 export const updateAccountBodySchema = {
@@ -221,6 +222,7 @@ export const updateAccountBodySchema = {
     },
     identity: { type: 'object' as const, additionalProperties: true },
     credentialsRef: { type: 'string' as const, minLength: 1 },
+    credentials: { type: 'string' as const, minLength: 1 },
     providerConfig: { type: 'object' as const, additionalProperties: true },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     metadata: {

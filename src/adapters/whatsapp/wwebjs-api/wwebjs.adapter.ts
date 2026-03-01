@@ -18,10 +18,11 @@ export class WwebjsApiAdapter implements MessagingPort {
   constructor(
     providerConfig: Record<string, unknown>,
     credentialsRef: string,
+    inlineCredential?: string,
   ) {
     const configBaseUrl = (providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
     const configSessionId = providerConfig['sessionId'] as string | undefined;
-    const parsed = resolveProviderCredentialParsed(credentialsRef, 'wwebjs-api');
+    const parsed = resolveProviderCredentialParsed(credentialsRef, 'wwebjs-api', inlineCredential);
 
     const rawApiKey = parsed?.apiKey ?? '';
 

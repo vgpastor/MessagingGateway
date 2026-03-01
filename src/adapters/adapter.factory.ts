@@ -6,6 +6,7 @@ import { AdapterNotFoundError } from '../domain/errors.js';
 export type AdapterConstructor = new (
   providerConfig: Record<string, unknown>,
   credentialsRef: string,
+  inlineCredential?: string,
 ) => MessagingPort;
 
 export class AdapterFactory {
@@ -20,7 +21,7 @@ export class AdapterFactory {
     if (!AdapterClass) {
       throw new AdapterNotFoundError(account.provider);
     }
-    return new AdapterClass(account.providerConfig, account.credentialsRef);
+    return new AdapterClass(account.providerConfig, account.credentialsRef, account.credentials);
   }
 
   hasAdapter(provider: ProviderType): boolean {
