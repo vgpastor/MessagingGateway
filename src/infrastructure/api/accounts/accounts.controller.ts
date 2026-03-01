@@ -212,10 +212,18 @@ export async function accountsController(
       fastify.log.info(`Account created: ${saved.id}`);
       return reply.status(201).send(sanitizeAccount(saved));
     } catch (err) {
-      return reply.status(409).send({
-        error: 'Conflict',
-        code: 'ACCOUNT_ALREADY_EXISTS',
-        message: (err as Error).message,
+      const message = (err as Error).message;
+      if (message.includes('already exists')) {
+        return reply.status(409).send({
+          error: 'Conflict',
+          code: 'ACCOUNT_ALREADY_EXISTS',
+          message,
+        });
+      }
+      return reply.status(500).send({
+        error: 'Internal Server Error',
+        code: 'SAVE_FAILED',
+        message,
       });
     }
   });
