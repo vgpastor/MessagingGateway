@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag & Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $tag"
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          latest="${{ steps.latest_tag.outputs.tag }}"
+          latest="${latest#v}"
+          IFS='.' read -r major minor patch <<< "$latest"
+
+          # Analyze commits since last tag
+          if git log "v${latest}..HEAD" --pretty=format:"%s" 2>/dev/null | grep -qiE "^(feat|feature)(\(.+\))?!:|^BREAKING CHANGE"; then
+            major=$((major + 1)); minor=0; patch=0
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+          elif git log "v${latest}..HEAD" --pretty=format:"%s" 2>/dev/null | grep -qiE "^feat(\(.+\))?:"; then
+            minor=$((minor + 1)); patch=0
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+          elif git log "v${latest}..HEAD" --pretty=format:"%s" 2>/dev/null | grep -qiE "^fix(\(.+\))?:"; then
+            patch=$((patch + 1))
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "No version bump needed"
+          fi
+
+          version="v${major}.${minor}.${patch}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Next version: $version (bump: $(grep bump "$GITHUB_OUTPUT" | head -1 | cut -d= -f2))"
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.bump.outputs.bump != 'none'
+        run: |
+          latest="${{ steps.latest_tag.outputs.tag }}"
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            feats=$(git log "${latest}..HEAD" --pretty=format:"- %s" --grep="^feat" --extended-regexp 2>/dev/null || true)
+            if [ -n "$feats" ]; then
+              echo "### Features"
+              echo "$feats"
+              echo ""
+            fi
+
+            fixes=$(git log "${latest}..HEAD" --pretty=format:"- %s" --grep="^fix" --extended-regexp 2>/dev/null || true)
+            if [ -n "$fixes" ]; then
+              echo "### Bug Fixes"
+              echo "$fixes"
+              echo ""
+            fi
+
+            others=$(git log "${latest}..HEAD" --pretty=format:"- %s" --grep="^feat\|^fix" --invert-grep --extended-regexp 2>/dev/null || true)
+            if [ -n "$others" ]; then
+              echo "### Other Changes"
+              echo "$others"
+              echo ""
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and release
+        if: steps.bump.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          git tag "$version"
+          git push origin "$version"
+          gh release create "$version" \
+            --title "$version" \
+            --notes "${{ steps.changelog.outputs.changelog }}" \
+            --latest
