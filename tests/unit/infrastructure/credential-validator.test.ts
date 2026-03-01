@@ -60,17 +60,22 @@ describe('CredentialValidator', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('should return active when wwebjs API responds 200', async () => {
+  it('should return active when wwebjs /ping responds 200', async () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'real-key');
-    vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.mocked(fetch).mockResolvedValue(new Response('{"success":true,"message":"pong"}', { status: 200 }));
 
     const result = await validator.validate(makeAccount());
 
     expect(result.status).toBe('active');
     expect(result.credentialsConfigured).toBe(true);
     expect(fetch).toHaveBeenCalledWith(
-      'http://wwebjs-samur:3001/api/status',
-      expect.objectContaining({ method: 'GET' }),
+      'http://wwebjs-samur:3001/ping',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          'x-api-key': 'real-key',
+        }),
+      }),
     );
   });
 
@@ -83,19 +88,19 @@ describe('CredentialValidator', () => {
     expect(result.credentialsConfigured).toBe(true);
   });
 
-  it('should use baseUrl from connection string when present', async () => {
+  it('should use baseUrl from connection string and extract apiKey from sessionId:key format', async () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'samur:real-key@external-host:4000');
-    vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.mocked(fetch).mockResolvedValue(new Response('{"success":true,"message":"pong"}', { status: 200 }));
 
     const result = await validator.validate(makeAccount());
 
     expect(result.status).toBe('active');
     expect(fetch).toHaveBeenCalledWith(
-      'http://external-host:4000/api/status',
+      'http://external-host:4000/ping',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
-          Authorization: 'Bearer samur:real-key',
+          'x-api-key': 'real-key',
         }),
       }),
     );

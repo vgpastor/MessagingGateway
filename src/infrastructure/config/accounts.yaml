@@ -9,6 +9,7 @@ accounts:
     credentialsRef: WWEBJS_SAMUR
     providerConfig:
       baseUrl: http://wwebjs-samur:3001
+      sessionId: samur
     metadata:
       owner: global-emergency
       environment: production
@@ -23,6 +24,7 @@ accounts:
     credentialsRef: WWEBJS_PATROLTECH
     providerConfig:
       baseUrl: http://wwebjs-patroltech:3002
+      sessionId: patroltech
     metadata:
       owner: patroltech
       environment: production
@@ -37,6 +39,7 @@ accounts:
     credentialsRef: WWEBJS_GLOBALEMERG
     providerConfig:
       baseUrl: http://wwebjs-globalemerg:3003
+      sessionId: globalemerg
     metadata:
       owner: global-emergency
       environment: production
