@@ -14,6 +14,7 @@ import { MessageRouterService } from './domain/routing/message-router.service.js
 import { WebhookForwarder } from './infrastructure/webhook-forwarder.js';
 import { FileWebhookConfigStore } from './infrastructure/webhooks/file-webhook-config.store.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
+import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
 
 async function main() {
@@ -62,13 +63,22 @@ async function main() {
   const webhookConfigs = await webhookConfigRepo.findAll();
   console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
 
-  // 7. Create and start server
+  // 7. Create health check scheduler
+  const healthCheckIntervalMs = parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10);
+  const healthCheckScheduler = new HealthCheckScheduler(
+    accountRepository,
+    credentialValidator,
+    { intervalMs: healthCheckIntervalMs },
+  );
+
+  // 8. Create and start server
   const server = await createServer({
     accountRepository,
     webhookConfigRepo,
     messageRouter,
     adapterFactory,
     credentialValidator,
+    healthCheckScheduler,
     webhookForwarder,
     port: envConfig.port,
     logLevel: envConfig.logLevel,
@@ -78,6 +88,9 @@ async function main() {
     await server.listen({ port: envConfig.port, host: '0.0.0.0' });
     console.log(`Unified Messaging Gateway listening on port ${envConfig.port}`);
     console.log(`Swagger UI available at http://localhost:${envConfig.port}/docs`);
+
+    // Start periodic health checks after server is ready
+    healthCheckScheduler.start();
   } catch (err) {
     server.log.error(err);
     process.exit(1);
