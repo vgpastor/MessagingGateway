@@ -132,15 +132,32 @@ export async function whatsappWebhookController(
 
       const data = request.body.data;
       const status = statusMap[data.status] ?? 'unknown';
+      const messageId = data.id._serialized;
 
       fastify.log.info(
-        { messageId: data.id._serialized, accountId, status },
+        { messageId, accountId, status },
         'WhatsApp status update received',
+      );
+
+      await deps.webhookForwarder.forwardRaw(
+        account.id,
+        {
+          id: `status-${messageId}-${Date.now()}`,
+          accountId: account.id,
+          channel: account.channel,
+          messageId,
+          status,
+          timestamp: new Date(data.timestamp * 1000),
+          error: data.error,
+          channelPayload: request.body,
+        },
+        'message.status',
+        account.channel,
       );
 
       return {
         received: true,
-        messageId: data.id._serialized,
+        messageId,
         status,
       };
     },
