@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { ChannelAccount } from '../../domain/accounts/channel-account.js';
@@ -9,7 +9,7 @@ import { accountsConfigSchema } from './accounts.schema.js';
 export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
   const resolvedPath = filePath ?? resolve(process.cwd(), 'src/infrastructure/config/accounts.yaml');
 
-  if (!existsSync(resolvedPath)) {
+  if (!existsSync(resolvedPath) || !statSync(resolvedPath).isFile()) {
     console.warn(`Accounts config not found at ${resolvedPath}, starting with 0 accounts`);
     return [];
   }
