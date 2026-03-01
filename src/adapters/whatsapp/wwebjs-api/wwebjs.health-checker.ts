@@ -10,12 +10,18 @@ export class WwebjsHealthChecker implements ProviderHealthChecker {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing API key' };
     }
 
+    // Extract actual API key (strip sessionId: prefix if present)
+    const rawApiKey = parsed.apiKey;
+    const colonIdx = rawApiKey.indexOf(':');
+    const apiKey = colonIdx !== -1 ? rawApiKey.substring(colonIdx + 1) : rawApiKey;
+
     const configBaseUrl = (account.providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
     const baseUrl = parsed.baseUrl ?? configBaseUrl;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (parsed.apiKey) headers['Authorization'] = `Bearer ${parsed.apiKey}`;
 
-    const response = await fetchWithTimeout(`${baseUrl}/api/status`, { method: 'GET', headers });
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['x-api-key'] = apiKey;
+
+    const response = await fetchWithTimeout(`${baseUrl}/ping`, { method: 'GET', headers });
 
     if (response.ok) {
       return { status: 'active', credentialsConfigured: true };

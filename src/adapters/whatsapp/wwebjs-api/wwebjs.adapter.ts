@@ -3,125 +3,188 @@ import type { OutboundMessage } from '../../../domain/messaging/outbound-message
 import type { MediaContent, MessageResult, MessageStatus } from '../../../domain/messaging/message-result.js';
 import { ProviderError } from '../../../domain/errors.js';
 import { resolveProviderCredentialParsed } from '../../../infrastructure/config/env.config.js';
-import type { WwebjsSendResponse, WwebjsMessageStatusResponse } from './wwebjs.types.js';
+import type {
+  WwebjsSendMessageRequest,
+  WwebjsSendResponse,
+  WwebjsDownloadMediaResponse,
+  WwebjsMessageInfoResponse,
+} from './wwebjs.types.js';
 
 export class WwebjsApiAdapter implements MessagingPort {
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly sessionId: string;
 
   constructor(
     providerConfig: Record<string, unknown>,
     credentialsRef: string,
   ) {
     const configBaseUrl = (providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
+    const configSessionId = providerConfig['sessionId'] as string | undefined;
     const parsed = resolveProviderCredentialParsed(credentialsRef, 'wwebjs-api');
-    this.apiKey = parsed?.apiKey ?? '';
+
+    const rawApiKey = parsed?.apiKey ?? '';
+
+    // Support sessionId:apiKey format in credential
+    const colonIdx = rawApiKey.indexOf(':');
+    if (colonIdx !== -1) {
+      this.sessionId = rawApiKey.substring(0, colonIdx);
+      this.apiKey = rawApiKey.substring(colonIdx + 1);
+    } else {
+      this.sessionId = configSessionId ?? 'default';
+      this.apiKey = rawApiKey;
+    }
+
     this.baseUrl = parsed?.baseUrl ?? configBaseUrl;
   }
 
   async sendMessage(msg: OutboundMessage): Promise<MessageResult> {
     const chatId = this.formatChatId(msg.to);
 
-    let endpoint: string;
-    let body: Record<string, unknown>;
+    const body: WwebjsSendMessageRequest = this.buildSendBody(chatId, msg);
 
-    switch (msg.content.type) {
-      case 'text':
-        endpoint = '/api/sendText';
-        body = {
-          chatId,
-          text: msg.content.body ?? '',
-          ...(msg.replyToMessageId && { quotedMessageId: msg.replyToMessageId }),
-        };
-        break;
-
-      case 'image':
-      case 'audio':
-      case 'video':
-      case 'document':
-        endpoint = '/api/sendMedia';
-        body = {
-          chatId,
-          mediaUrl: msg.content.mediaUrl,
-          mimeType: msg.content.mimeType ?? 'application/octet-stream',
-          fileName: msg.content.fileName,
-          caption: msg.content.caption,
-          ...(msg.replyToMessageId && { quotedMessageId: msg.replyToMessageId }),
-        };
-        break;
-
-      case 'location':
-        endpoint = '/api/sendLocation';
-        body = {
-          chatId,
-          latitude: msg.content.latitude,
-          longitude: msg.content.longitude,
-        };
-        break;
-
-      default:
-        endpoint = '/api/sendText';
-        body = { chatId, text: msg.content.body ?? '' };
-    }
-
-    const response = await this.request<WwebjsSendResponse>(endpoint, 'POST', body);
+    const response = await this.request<WwebjsSendResponse>(
+      `/client/sendMessage/${this.sessionId}`,
+      'POST',
+      body as unknown as Record<string, unknown>,
+    );
 
     if (!response.success) {
       throw new ProviderError('wwebjs-api', response.error ?? 'Send failed');
     }
 
+    const messageId = response.message?.id?._serialized ?? '';
+
     return {
-      messageId: response.messageId ?? '',
+      messageId,
       status: 'sent',
       timestamp: new Date(),
-      providerMessageId: response.messageId,
+      providerMessageId: messageId,
     };
   }
 
   async getMessageStatus(messageId: string): Promise<MessageStatus> {
-    const response = await this.request<WwebjsMessageStatusResponse>(
-      `/api/message/${encodeURIComponent(messageId)}/status`,
-      'GET',
+    // wwebjs-api requires chatId + messageId; extract from composite "chatId|messageId" format
+    const { chatId, msgId } = this.parseCompositeId(messageId);
+
+    const response = await this.request<WwebjsMessageInfoResponse>(
+      `/message/getInfo/${this.sessionId}`,
+      'POST',
+      { messageId: msgId, chatId },
     );
 
-    const statusMap: Record<string, MessageStatus['status']> = {
-      pending: 'queued',
-      sent: 'sent',
-      delivered: 'delivered',
-      read: 'read',
-      played: 'played',
-      error: 'failed',
-    };
+    if (!response.success || !response.info) {
+      return { messageId: msgId, status: 'unknown', timestamp: new Date() };
+    }
+
+    const info = response.info;
+    let status: MessageStatus['status'] = 'sent';
+    if (info.played && info.played.length > 0) status = 'played';
+    else if (info.read && info.read.length > 0) status = 'read';
+    else if (info.delivery && info.delivery.length > 0) status = 'delivered';
 
     return {
-      messageId,
-      status: statusMap[response.status] ?? 'unknown',
-      timestamp: response.timestamp ? new Date(response.timestamp) : new Date(),
-      providerMessageId: response.messageId,
+      messageId: msgId,
+      status,
+      timestamp: new Date(),
+      providerMessageId: msgId,
     };
   }
 
   async downloadMedia(mediaId: string): Promise<MediaContent> {
-    const response = await fetch(`${this.baseUrl}/api/media/${encodeURIComponent(mediaId)}`, {
-      headers: this.buildHeaders(),
-    });
+    // wwebjs-api requires chatId + messageId; extract from composite "chatId|messageId" format
+    const { chatId, msgId } = this.parseCompositeId(mediaId);
 
-    if (!response.ok) {
-      throw new ProviderError('wwebjs-api', `Media download failed: ${response.status}`);
+    const response = await this.request<WwebjsDownloadMediaResponse>(
+      `/message/downloadMedia/${this.sessionId}`,
+      'POST',
+      { messageId: msgId, chatId },
+    );
+
+    if (!response.success || !response.messageMedia) {
+      throw new ProviderError('wwebjs-api', response.error ?? 'Media download failed');
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
+    const media = response.messageMedia;
+    const buffer = Buffer.from(media.data, 'base64');
 
     return {
       data: buffer,
-      mimeType: contentType,
-      size: buffer.length,
+      mimeType: media.mimetype,
+      fileName: media.filename,
+      size: media.filesize ?? buffer.length,
     };
   }
 
   async markAsRead(messageId: string): Promise<void> {
-    await this.request(`/api/message/${encodeURIComponent(messageId)}/read`, 'POST', {});
+    // wwebjs-api sendSeen works at chat level
+    const { chatId } = this.parseCompositeId(messageId);
+
+    await this.request(
+      `/client/sendSeen/${this.sessionId}`,
+      'POST',
+      { chatId },
+    );
+  }
+
+  private buildSendBody(chatId: string, msg: OutboundMessage): WwebjsSendMessageRequest {
+    const options: Record<string, unknown> = {};
+    if (msg.replyToMessageId) {
+      options['quotedMessageId'] = msg.replyToMessageId;
+    }
+
+    switch (msg.content.type) {
+      case 'text':
+        return {
+          chatId,
+          content: msg.content.body ?? '',
+          contentType: 'string',
+          ...(Object.keys(options).length > 0 && { options }),
+        };
+
+      case 'image':
+      case 'audio':
+      case 'video':
+      case 'document':
+        if (msg.content.caption) {
+          options['caption'] = msg.content.caption;
+        }
+        return {
+          chatId,
+          content: { url: msg.content.mediaUrl ?? '' },
+          contentType: 'MessageMediaFromURL',
+          ...(Object.keys(options).length > 0 && { options }),
+        };
+
+      case 'location':
+        return {
+          chatId,
+          content: {
+            latitude: msg.content.latitude ?? 0,
+            longitude: msg.content.longitude ?? 0,
+          },
+          contentType: 'Location',
+        };
+
+      default:
+        return {
+          chatId,
+          content: msg.content.body ?? '',
+          contentType: 'string',
+          ...(Object.keys(options).length > 0 && { options }),
+        };
+    }
+  }
+
+  private parseCompositeId(compositeId: string): { chatId: string; msgId: string } {
+    const separatorIdx = compositeId.indexOf('|');
+    if (separatorIdx === -1) {
+      return { chatId: compositeId, msgId: compositeId };
+    }
+    return {
+      chatId: compositeId.substring(0, separatorIdx),
+      msgId: compositeId.substring(separatorIdx + 1),
+    };
   }
 
   private formatChatId(to: string): string {
@@ -134,7 +197,7 @@ export class WwebjsApiAdapter implements MessagingPort {
       'Content-Type': 'application/json',
     };
     if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
+      headers['x-api-key'] = this.apiKey;
     }
     return headers;
   }
