@@ -418,3 +418,152 @@ describe('GET /openapi.json', () => {
     expect(spec.paths['/api/v1/messages/send']).toBeDefined();
   });
 });
+
+describe('POST /api/v1/accounts', () => {
+  it('should create a new account', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts',
+      payload: {
+        id: 'wa-test-new',
+        alias: 'Test WhatsApp',
+        channel: 'whatsapp',
+        provider: 'wwebjs-api',
+        identity: { phoneNumber: '+34600099999' },
+        credentialsRef: 'WWEBJS_TEST',
+        metadata: {
+          owner: 'test-org',
+          tags: ['test'],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+
+    const account = response.json();
+    expect(account.id).toBe('wa-test-new');
+    expect(account.alias).toBe('Test WhatsApp');
+    expect(account.channel).toBe('whatsapp');
+    expect(account.provider).toBe('wwebjs-api');
+    expect(account.status).toBe('unchecked');
+    expect(account.metadata.owner).toBe('test-org');
+    expect(account.metadata.tags).toEqual(['test']);
+    // No credentials exposed
+    expect(account.credentialsRef).toBeUndefined();
+    expect(account.providerConfig).toBeUndefined();
+  });
+
+  it('should return 409 for duplicate account ID', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts',
+      payload: {
+        id: 'wa-samur',
+        alias: 'Duplicate',
+        channel: 'whatsapp',
+        provider: 'wwebjs-api',
+        identity: { phoneNumber: '+34600000000' },
+        credentialsRef: 'WWEBJS_DUP',
+        metadata: { owner: 'test' },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe('ACCOUNT_ALREADY_EXISTS');
+  });
+
+  it('should return 400 for invalid payload', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts',
+      payload: {
+        id: '',
+        alias: 'Missing fields',
+        channel: 'invalid-channel',
+        provider: 'wwebjs-api',
+        identity: {},
+        credentialsRef: 'REF',
+        metadata: { owner: 'test' },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('should be retrievable after creation', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/accounts/wa-test-new',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().id).toBe('wa-test-new');
+  });
+});
+
+describe('PUT /api/v1/accounts/:id', () => {
+  it('should update an existing account', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/wa-test-new',
+      payload: {
+        alias: 'Updated WhatsApp',
+        metadata: {
+          tags: ['test', 'updated'],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    const account = response.json();
+    expect(account.id).toBe('wa-test-new');
+    expect(account.alias).toBe('Updated WhatsApp');
+    expect(account.metadata.tags).toEqual(['test', 'updated']);
+    // Owner should be preserved from original
+    expect(account.metadata.owner).toBe('test-org');
+  });
+
+  it('should return 404 for unknown account', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/nonexistent',
+      payload: { alias: 'Nope' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('ACCOUNT_NOT_FOUND');
+  });
+});
+
+describe('DELETE /api/v1/accounts/:id', () => {
+  it('should delete an existing account', async () => {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/accounts/wa-test-new',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().deleted).toBe(true);
+    expect(response.json().accountId).toBe('wa-test-new');
+  });
+
+  it('should return 404 after deletion', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/accounts/wa-test-new',
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('should return 404 for unknown account', async () => {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/accounts/nonexistent',
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('ACCOUNT_NOT_FOUND');
+  });
+});

@@ -1,8 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
 import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
+import type { ChannelType, ProviderType } from '../../../domain/messaging/channel.types.js';
+import type { AccountIdentity } from '../../../domain/accounts/account-identity.js';
 import type { CredentialValidator } from '../../credential-validator.js';
-import { accountResponseSchema, errorResponseSchema } from '../schemas.js';
+import { accountSchema } from '../../config/accounts.schema.js';
+import {
+  accountResponseSchema,
+  errorResponseSchema,
+  createAccountBodySchema,
+  updateAccountBodySchema,
+} from '../schemas.js';
 
 interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
@@ -138,5 +146,141 @@ export async function accountsController(
       detail: result.detail,
       lastChecked: new Date().toISOString(),
     };
+  });
+
+  // POST /api/v1/accounts — create a new account
+  fastify.post('/api/v1/accounts', {
+    schema: {
+      description: 'Create a new messaging account',
+      tags: ['Accounts'],
+      body: createAccountBodySchema,
+      response: {
+        201: accountResponseSchema,
+        400: errorResponseSchema,
+        409: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+
+    const parsed = accountSchema.safeParse(body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'INVALID_PAYLOAD',
+        message: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      });
+    }
+
+    const data = parsed.data;
+    const channel = data.channel as ChannelType;
+
+    const account: ChannelAccount = {
+      id: data.id,
+      alias: data.alias,
+      channel,
+      provider: data.provider as ProviderType,
+      status: data.status,
+      identity: { channel, ...data.identity } as AccountIdentity,
+      credentialsRef: data.credentialsRef,
+      providerConfig: data.providerConfig,
+      metadata: {
+        owner: data.metadata.owner,
+        environment: data.metadata.environment,
+        webhookPath: data.metadata.webhookPath ?? `/webhooks/${channel}/${data.id}`,
+        rateLimit: data.metadata.rateLimit,
+        tags: data.metadata.tags,
+      },
+    };
+
+    try {
+      const saved = await deps.accountRepository.save(account);
+      fastify.log.info(`Account created: ${saved.id}`);
+      return reply.status(201).send(sanitizeAccount(saved));
+    } catch (err) {
+      return reply.status(409).send({
+        error: 'Conflict',
+        code: 'ACCOUNT_ALREADY_EXISTS',
+        message: (err as Error).message,
+      });
+    }
+  });
+
+  // PUT /api/v1/accounts/:id — update an existing account
+  fastify.put<{ Params: { id: string } }>('/api/v1/accounts/:id', {
+    schema: {
+      description: 'Update an existing messaging account',
+      tags: ['Accounts'],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      body: updateAccountBodySchema,
+      response: {
+        200: accountResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params;
+    const body = request.body as Partial<Omit<ChannelAccount, 'id'>>;
+
+    const existing = await deps.accountRepository.findById(id);
+    if (!existing) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${id}' not found`,
+      });
+    }
+
+    // If identity is provided, ensure channel discriminator is set
+    if (body.identity) {
+      const channel = (body as Record<string, unknown>)['channel'] ?? existing.channel;
+      (body.identity as unknown as Record<string, unknown>)['channel'] = channel;
+    }
+
+    const updated = await deps.accountRepository.update(id, body);
+    fastify.log.info(`Account updated: ${id}`);
+    return sanitizeAccount(updated!);
+  });
+
+  // DELETE /api/v1/accounts/:id — delete an account
+  fastify.delete<{ Params: { id: string } }>('/api/v1/accounts/:id', {
+    schema: {
+      description: 'Delete a messaging account',
+      tags: ['Accounts'],
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            deleted: { type: 'boolean' },
+            accountId: { type: 'string' },
+          },
+          required: ['deleted', 'accountId'],
+        },
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params;
+    const deleted = await deps.accountRepository.remove(id);
+
+    if (!deleted) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${id}' not found`,
+      });
+    }
+
+    fastify.log.info(`Account deleted: ${id}`);
+    return { deleted: true, accountId: id };
   });
 }

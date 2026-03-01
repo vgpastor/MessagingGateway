@@ -176,3 +176,68 @@ export const errorResponseSchema = {
   },
   required: ['error', 'message'] as const,
 };
+
+export const createAccountBodySchema = {
+  type: 'object' as const,
+  properties: {
+    id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-samur")' },
+    alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
+    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
+    provider: {
+      type: 'string' as const,
+      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
+    },
+    identity: { type: 'object' as const, additionalProperties: true, description: 'Channel-specific identity (e.g. phoneNumber for WhatsApp)' },
+    credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars' },
+    providerConfig: { type: 'object' as const, additionalProperties: true },
+    metadata: {
+      type: 'object' as const,
+      properties: {
+        owner: { type: 'string' as const, minLength: 1 },
+        environment: { type: 'string' as const, enum: ['production', 'staging'] },
+        webhookPath: { type: 'string' as const },
+        rateLimit: {
+          type: 'object' as const,
+          properties: {
+            maxPerMinute: { type: 'number' as const },
+            maxPerDay: { type: 'number' as const },
+          },
+        },
+        tags: { type: 'array' as const, items: { type: 'string' as const } },
+      },
+      required: ['owner'] as const,
+    },
+  },
+  required: ['id', 'alias', 'channel', 'provider', 'identity', 'credentialsRef', 'metadata'] as const,
+};
+
+export const updateAccountBodySchema = {
+  type: 'object' as const,
+  properties: {
+    alias: { type: 'string' as const, minLength: 1 },
+    provider: {
+      type: 'string' as const,
+      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
+    },
+    identity: { type: 'object' as const, additionalProperties: true },
+    credentialsRef: { type: 'string' as const, minLength: 1 },
+    providerConfig: { type: 'object' as const, additionalProperties: true },
+    status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
+    metadata: {
+      type: 'object' as const,
+      properties: {
+        owner: { type: 'string' as const },
+        environment: { type: 'string' as const, enum: ['production', 'staging'] },
+        webhookPath: { type: 'string' as const },
+        rateLimit: {
+          type: 'object' as const,
+          properties: {
+            maxPerMinute: { type: 'number' as const },
+            maxPerDay: { type: 'number' as const },
+          },
+        },
+        tags: { type: 'array' as const, items: { type: 'string' as const } },
+      },
+    },
+  },
+};
