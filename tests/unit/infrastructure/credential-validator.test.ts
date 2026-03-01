@@ -83,6 +83,24 @@ describe('CredentialValidator', () => {
     expect(result.credentialsConfigured).toBe(true);
   });
 
+  it('should use baseUrl from connection string when present', async () => {
+    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'samur:real-key@external-host:4000');
+    vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
+
+    const result = await validator.validate(makeAccount());
+
+    expect(result.status).toBe('active');
+    expect(fetch).toHaveBeenCalledWith(
+      'http://external-host:4000/api/status',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer samur:real-key',
+        }),
+      }),
+    );
+  });
+
   it('should return error when wwebjs API responds 500', async () => {
     vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'some-key');
     vi.mocked(fetch).mockResolvedValue(new Response('Server Error', { status: 500 }));

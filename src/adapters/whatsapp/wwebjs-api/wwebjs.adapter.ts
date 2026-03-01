@@ -2,7 +2,7 @@ import type { MessagingPort } from '../../../domain/messaging/messaging.port.js'
 import type { OutboundMessage } from '../../../domain/messaging/outbound-message.js';
 import type { MediaContent, MessageResult, MessageStatus } from '../../../domain/messaging/message-result.js';
 import { ProviderError } from '../../../domain/errors.js';
-import { resolveProviderCredential } from '../../../infrastructure/config/env.config.js';
+import { resolveProviderCredentialParsed } from '../../../infrastructure/config/env.config.js';
 import type { WwebjsSendResponse, WwebjsMessageStatusResponse } from './wwebjs.types.js';
 
 export class WwebjsApiAdapter implements MessagingPort {
@@ -13,8 +13,10 @@ export class WwebjsApiAdapter implements MessagingPort {
     providerConfig: Record<string, unknown>,
     credentialsRef: string,
   ) {
-    this.baseUrl = (providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
-    this.apiKey = resolveProviderCredential(credentialsRef, 'wwebjs-api') ?? '';
+    const configBaseUrl = (providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
+    const parsed = resolveProviderCredentialParsed(credentialsRef, 'wwebjs-api');
+    this.apiKey = parsed?.apiKey ?? '';
+    this.baseUrl = parsed?.baseUrl ?? configBaseUrl;
   }
 
   async sendMessage(msg: OutboundMessage): Promise<MessageResult> {
