@@ -3,15 +3,15 @@ import { parseCredentialString } from '../../../src/infrastructure/config/env.co
 
 describe('parseCredentialString', () => {
   it('should return plain API key when no @ is present', () => {
-    const result = parseCredentialString('Pg4k2oSYUQaQZK4m8gTHMlvNrLXatE4D');
-    expect(result).toEqual({ apiKey: 'Pg4k2oSYUQaQZK4m8gTHMlvNrLXatE4D' });
+    const result = parseCredentialString('sk_test_abc123def456');
+    expect(result).toEqual({ apiKey: 'sk_test_abc123def456' });
   });
 
   it('should parse user:key@host:port format', () => {
-    const result = parseCredentialString('patroltech:Pg4k2oSYUQaQZK4m8gTHMlvNrLXatE4D@srv07.ingenierosweb.co:3011');
+    const result = parseCredentialString('myuser:sk_test_abc123def456@api.example.com:3011');
     expect(result).toEqual({
-      apiKey: 'patroltech:Pg4k2oSYUQaQZK4m8gTHMlvNrLXatE4D',
-      baseUrl: 'http://srv07.ingenierosweb.co:3011',
+      apiKey: 'myuser:sk_test_abc123def456',
+      baseUrl: 'http://api.example.com:3011',
     });
   });
 
