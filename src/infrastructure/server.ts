@@ -8,6 +8,7 @@ import type { MessageRouterService } from '../domain/routing/message-router.serv
 import type { AdapterFactory } from '../adapters/adapter.factory.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
 import type { CredentialValidator } from './credential-validator.js';
+import type { HealthCheckScheduler } from './health-check-scheduler.js';
 import { healthController } from './api/health/health.controller.js';
 import { accountsController } from './api/accounts/accounts.controller.js';
 import { sendController } from './api/messaging/send.controller.js';
@@ -24,6 +25,7 @@ export interface ServerDeps {
   messageRouter: MessageRouterService;
   adapterFactory: AdapterFactory;
   credentialValidator: CredentialValidator;
+  healthCheckScheduler?: HealthCheckScheduler;
   webhookForwarder: WebhookForwarder;
   port: number;
   logLevel: string;
@@ -99,6 +101,7 @@ export async function createServer(deps: ServerDeps) {
     async (instance) => accountsController(instance, {
       accountRepository: deps.accountRepository,
       credentialValidator: deps.credentialValidator,
+      healthCheckScheduler: deps.healthCheckScheduler,
     }),
   );
 

@@ -4,6 +4,7 @@ import type { ChannelAccount } from '../../../domain/accounts/channel-account.js
 import type { ChannelType, ProviderType } from '../../../domain/messaging/channel.types.js';
 import type { AccountIdentity } from '../../../domain/accounts/account-identity.js';
 import type { CredentialValidator } from '../../credential-validator.js';
+import type { HealthCheckScheduler } from '../../health-check-scheduler.js';
 import { accountSchema } from '../../config/accounts.schema.js';
 import { buildDefaultIdentity } from '../../config/accounts.loader.js';
 import {
@@ -16,6 +17,7 @@ import {
 interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
   credentialValidator: CredentialValidator;
+  healthCheckScheduler?: HealthCheckScheduler;
 }
 
 function sanitizeAccount(account: ChannelAccount) {
@@ -211,6 +213,14 @@ export async function accountsController(
     try {
       const saved = await deps.accountRepository.save(account);
       fastify.log.info(`Account created: ${saved.id}`);
+
+      // Fire-and-forget health check if credentials are available
+      if (saved.credentials || saved.credentialsRef) {
+        deps.healthCheckScheduler?.checkAccount(saved.id).catch((err) => {
+          fastify.log.warn(`Auto health check failed for ${saved.id}: ${(err as Error).message}`);
+        });
+      }
+
       return reply.status(201).send(sanitizeAccount(saved));
     } catch (err) {
       const message = (err as Error).message;
@@ -266,6 +276,14 @@ export async function accountsController(
 
     const updated = await deps.accountRepository.update(id, body);
     fastify.log.info(`Account updated: ${id}`);
+
+    // Auto health check when credentials change
+    if (body.credentials || body.credentialsRef) {
+      deps.healthCheckScheduler?.checkAccount(id).catch((err) => {
+        fastify.log.warn(`Auto health check failed for ${id}: ${(err as Error).message}`);
+      });
+    }
+
     return sanitizeAccount(updated!);
   });
 
