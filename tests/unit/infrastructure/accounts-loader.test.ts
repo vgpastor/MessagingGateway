@@ -98,4 +98,9 @@ describe('loadAccountsFromYaml', () => {
       expect(account.status).toBe('unchecked');
     }
   });
+
+  it('should return empty array when file does not exist', () => {
+    const accounts = loadAccountsFromYaml('/nonexistent/path/accounts.yaml');
+    expect(accounts).toEqual([]);
+  });
 });
