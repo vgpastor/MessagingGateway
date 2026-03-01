@@ -9,6 +9,26 @@ import { MessageRouterService } from '../../src/domain/routing/message-router.se
 import { WebhookForwarder } from '../../src/infrastructure/webhook-forwarder.js';
 import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
 import { createServer } from '../../src/infrastructure/server.js';
+import type { WebhookConfig, WebhookConfigInput } from '../../src/domain/webhooks/webhook-config.js';
+import type { WebhookConfigRepository } from '../../src/domain/webhooks/webhook-config.repository.js';
+
+class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
+  private configs = new Map<string, WebhookConfig>();
+  async findByAccountId(accountId: string) { return this.configs.get(accountId); }
+  async findAll() { return [...this.configs.values()]; }
+  async upsert(accountId: string, input: WebhookConfigInput) {
+    const now = new Date().toISOString();
+    const existing = this.configs.get(accountId);
+    const config: WebhookConfig = {
+      accountId, url: input.url, secret: input.secret,
+      events: input.events ?? ['*'], enabled: input.enabled ?? true,
+      createdAt: existing?.createdAt ?? now, updatedAt: now,
+    };
+    this.configs.set(accountId, config);
+    return config;
+  }
+  async remove(accountId: string) { return this.configs.delete(accountId); }
+}
 
 let app: FastifyInstance;
 
@@ -21,10 +41,12 @@ beforeAll(async () => {
   const healthCheckerRegistry = new HealthCheckerRegistry();
   const credentialValidator = new CredentialValidator(healthCheckerRegistry);
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
-  const webhookForwarder = new WebhookForwarder(undefined, undefined);
+  const webhookConfigRepo = new InMemoryWebhookConfigRepo();
+  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
 
   app = await createServer({
     accountRepository,
+    webhookConfigRepo,
     messageRouter,
     adapterFactory,
     credentialValidator,
@@ -277,6 +299,109 @@ describe('Swagger UI', () => {
     expect(spec.paths['/api/v1/accounts']).toBeDefined();
     expect(spec.paths['/api/v1/messages/send']).toBeDefined();
     expect(spec.paths['/webhooks/whatsapp/{accountId}/inbound']).toBeDefined();
+  });
+});
+
+describe('Webhook Config API', () => {
+  it('should return 404 when no webhook configured for account', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/accounts/wa-samur/webhook',
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('WEBHOOK_NOT_CONFIGURED');
+  });
+
+  it('should create webhook config via PUT', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/wa-samur/webhook',
+      payload: {
+        url: 'https://n8n.example.com/webhook/samur',
+        secret: 'test-secret',
+        events: ['message.inbound'],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const config = response.json();
+    expect(config.accountId).toBe('wa-samur');
+    expect(config.url).toBe('https://n8n.example.com/webhook/samur');
+    expect(config.secret).toBe('test-secret');
+    expect(config.events).toEqual(['message.inbound']);
+    expect(config.enabled).toBe(true);
+    expect(config.createdAt).toBeDefined();
+    expect(config.updatedAt).toBeDefined();
+  });
+
+  it('should return existing webhook config via GET', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/accounts/wa-samur/webhook',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().url).toBe('https://n8n.example.com/webhook/samur');
+  });
+
+  it('should update webhook config via PUT', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/wa-samur/webhook',
+      payload: {
+        url: 'https://new-url.example.com/webhook',
+        enabled: false,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const config = response.json();
+    expect(config.url).toBe('https://new-url.example.com/webhook');
+    expect(config.enabled).toBe(false);
+    expect(config.events).toEqual(['*']); // default when not specified
+  });
+
+  it('should list all webhook configs', async () => {
+    // Add a second webhook
+    await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/wa-patroltech/webhook',
+      payload: { url: 'https://patroltech.example.com/hook' },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks',
+    });
+    expect(response.statusCode).toBe(200);
+
+    const configs = response.json();
+    expect(configs.length).toBe(2);
+  });
+
+  it('should delete webhook config', async () => {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/accounts/wa-samur/webhook',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().deleted).toBe(true);
+
+    // Verify it's gone
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/accounts/wa-samur/webhook',
+    });
+    expect(getResponse.statusCode).toBe(404);
+  });
+
+  it('should return 404 for unknown account on PUT', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/accounts/nonexistent/webhook',
+      payload: { url: 'https://example.com' },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('ACCOUNT_NOT_FOUND');
   });
 });
 
