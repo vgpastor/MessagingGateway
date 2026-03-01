@@ -46,3 +46,41 @@ export function resolveProviderCredential(
   const suffix = PROVIDER_CREDENTIAL_SUFFIXES[provider] ?? 'API_KEY';
   return resolveCredential(credentialsRef, suffix);
 }
+
+export interface ParsedCredential {
+  apiKey: string;
+  baseUrl?: string;
+}
+
+/**
+ * Parses a credential string that may contain connection info.
+ * Supported formats:
+ *   - "apiKey"                        → { apiKey }
+ *   - "user:apiKey@host:port"         → { apiKey: "user:apiKey", baseUrl: "http://host:port" }
+ *   - "apiKey@host:port"              → { apiKey, baseUrl: "http://host:port" }
+ */
+export function parseCredentialString(raw: string): ParsedCredential {
+  const atIndex = raw.lastIndexOf('@');
+  if (atIndex === -1) {
+    return { apiKey: raw };
+  }
+
+  const apiKey = raw.substring(0, atIndex);
+  const hostPort = raw.substring(atIndex + 1);
+
+  if (!apiKey || !hostPort) {
+    return { apiKey: raw };
+  }
+
+  const baseUrl = hostPort.startsWith('http') ? hostPort : `http://${hostPort}`;
+  return { apiKey, baseUrl };
+}
+
+export function resolveProviderCredentialParsed(
+  credentialsRef: string,
+  provider: string,
+): ParsedCredential | undefined {
+  const raw = resolveProviderCredential(credentialsRef, provider);
+  if (!raw) return undefined;
+  return parseCredentialString(raw);
+}
