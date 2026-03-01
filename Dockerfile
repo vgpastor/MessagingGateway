@@ -42,6 +42,10 @@ COPY package.json ./
 # Copy default accounts config (can be overridden via volume mount)
 COPY src/infrastructure/config/accounts.yaml ./config/accounts.yaml
 
+# Create writable data directory for runtime state (webhook configs, etc.)
+RUN mkdir -p /app/data && chown umg:umg /app/data
+VOLUME /app/data
+
 ENV NODE_ENV=production \
     PORT=3000 \
     LOG_LEVEL=info \

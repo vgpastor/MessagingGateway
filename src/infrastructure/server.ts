@@ -3,6 +3,7 @@ import fastifyCors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { ChannelAccountRepository } from '../domain/accounts/channel-account.repository.js';
+import type { WebhookConfigRepository } from '../domain/webhooks/webhook-config.repository.js';
 import type { MessageRouterService } from '../domain/routing/message-router.service.js';
 import type { AdapterFactory } from '../adapters/adapter.factory.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
@@ -15,9 +16,11 @@ import { whatsappWebhookController } from './api/webhooks/whatsapp-webhook.contr
 import { telegramWebhookController } from './api/webhooks/telegram-webhook.controller.js';
 import { emailWebhookController } from './api/webhooks/email-webhook.controller.js';
 import { smsWebhookController } from './api/webhooks/sms-webhook.controller.js';
+import { webhookConfigController } from './api/webhooks/webhook-config.controller.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
+  webhookConfigRepo: WebhookConfigRepository;
   messageRouter: MessageRouterService;
   adapterFactory: AdapterFactory;
   credentialValidator: CredentialValidator;
@@ -65,6 +68,7 @@ export async function createServer(deps: ServerDeps) {
         { name: 'Accounts', description: 'Account management and status' },
         { name: 'Messaging', description: 'Unified message sending API' },
         { name: 'Webhooks', description: 'Inbound message webhooks from providers' },
+        { name: 'Webhooks Config', description: 'Per-account webhook configuration management' },
       ],
     },
   });
@@ -138,6 +142,14 @@ export async function createServer(deps: ServerDeps) {
     async (instance) => smsWebhookController(instance, {
       accountRepository: deps.accountRepository,
       webhookForwarder: deps.webhookForwarder,
+    }),
+  );
+
+  // Webhook config management
+  await fastify.register(
+    async (instance) => webhookConfigController(instance, {
+      accountRepository: deps.accountRepository,
+      webhookConfigRepo: deps.webhookConfigRepo,
     }),
   );
 

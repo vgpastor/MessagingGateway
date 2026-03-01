@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { loadEnvConfig } from './infrastructure/config/env.config.js';
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
@@ -11,6 +12,7 @@ import { TwilioHealthChecker } from './adapters/sms/twilio/twilio.health-checker
 import { MessageBirdHealthChecker } from './adapters/sms/messagebird/messagebird.health-checker.js';
 import { MessageRouterService } from './domain/routing/message-router.service.js';
 import { WebhookForwarder } from './infrastructure/webhook-forwarder.js';
+import { FileWebhookConfigStore } from './infrastructure/webhooks/file-webhook-config.store.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { createServer } from './infrastructure/server.js';
 
@@ -47,14 +49,22 @@ async function main() {
 
   // 6. Create services
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
+  const webhookConfigRepo = new FileWebhookConfigStore(
+    resolve(process.cwd(), 'data/webhooks.json'),
+  );
   const webhookForwarder = new WebhookForwarder(
+    webhookConfigRepo,
     envConfig.webhookCallbackUrl,
     envConfig.webhookCallbackSecret,
   );
 
+  const webhookConfigs = await webhookConfigRepo.findAll();
+  console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
+
   // 7. Create and start server
   const server = await createServer({
     accountRepository,
+    webhookConfigRepo,
     messageRouter,
     adapterFactory,
     credentialValidator,
