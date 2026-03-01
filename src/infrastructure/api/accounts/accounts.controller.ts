@@ -169,6 +169,7 @@ export async function accountsController(
         201: accountResponseSchema,
         400: errorResponseSchema,
         409: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
