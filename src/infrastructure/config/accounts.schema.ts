@@ -65,5 +65,7 @@ export const accountsConfigSchema = z.object({
   accounts: z.array(accountSchema).min(1),
 });
 
+export { accountSchema };
+
 export type AccountsConfigInput = z.input<typeof accountsConfigSchema>;
 export type AccountsConfigOutput = z.output<typeof accountsConfigSchema>;

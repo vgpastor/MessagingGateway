@@ -12,4 +12,7 @@ export interface ChannelAccountRepository {
     owner?: string;
     tags?: string[];
   }): Promise<ChannelAccount | undefined>;
+  save(account: ChannelAccount): Promise<ChannelAccount>;
+  update(id: string, account: Partial<Omit<ChannelAccount, 'id'>>): Promise<ChannelAccount | undefined>;
+  remove(id: string): Promise<boolean>;
 }

@@ -40,8 +40,9 @@ async function main() {
   const errored = accounts.filter((a) => a.status === 'error').length;
   console.log(`Validation complete: ${active} active, ${authExpired} auth_expired, ${unchecked} unchecked, ${errored} error`);
 
-  // 4. Create repository
-  const accountRepository = new InMemoryAccountRepository(accounts);
+  // 4. Create repository (with persistence back to YAML)
+  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'config/accounts.yaml');
+  const accountRepository = new InMemoryAccountRepository(accounts, accountsYamlPath);
 
   // 5. Create adapter factory and register adapters
   const adapterFactory = new AdapterFactory();
