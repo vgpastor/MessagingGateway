@@ -1,4 +1,4 @@
-# CLAUDE.md — Project Rules for Unified Messaging Gateway
+# AGENTS.md — Project Rules for Unified Messaging Gateway
 
 ## Build & Quality Commands
 
@@ -40,6 +40,8 @@ Never commit code that fails any of these steps.
 - Test framework: Vitest with `globals: true`
 - Never use real credentials in tests — use dummy/mock values
 - When adding a new feature, add corresponding tests
+- **No timing-dependent assertions**: never assert that two sequential timestamps differ without using `vi.useFakeTimers()`. CI machines can execute operations within the same millisecond, causing flaky failures
+- Use `vi.useFakeTimers()` + `vi.setSystemTime()` when tests depend on time advancing between operations
 
 ## Webhook Forwarding
 

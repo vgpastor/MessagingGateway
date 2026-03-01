@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FileWebhookConfigStore } from '../../../src/infrastructure/webhooks/file-webhook-config.store.js';
@@ -55,14 +55,22 @@ describe('FileWebhookConfigStore', () => {
   });
 
   it('should update existing config preserving createdAt', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    vi.useFakeTimers();
+    try {
+      const store = new FileWebhookConfigStore(TEST_FILE);
 
-    const created = await store.upsert('wa-samur', { url: 'https://first.com' });
-    const updated = await store.upsert('wa-samur', { url: 'https://second.com' });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const created = await store.upsert('wa-samur', { url: 'https://first.com' });
 
-    expect(updated.url).toBe('https://second.com');
-    expect(updated.createdAt).toBe(created.createdAt);
-    expect(updated.updatedAt).not.toBe(created.updatedAt);
+      vi.setSystemTime(new Date('2026-01-01T00:00:01Z'));
+      const updated = await store.upsert('wa-samur', { url: 'https://second.com' });
+
+      expect(updated.url).toBe('https://second.com');
+      expect(updated.createdAt).toBe(created.createdAt);
+      expect(updated.updatedAt).not.toBe(created.updatedAt);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('should default events to ["*"] and enabled to true', async () => {
