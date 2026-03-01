@@ -29,7 +29,7 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
       accountId,
       url: input.url,
       secret: input.secret,
-      events: input.events ?? ['*'],
+      events: input.events && input.events.length > 0 ? input.events : ['*'],
       enabled: input.enabled ?? true,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
