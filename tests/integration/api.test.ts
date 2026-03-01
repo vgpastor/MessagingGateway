@@ -34,7 +34,7 @@ let app: FastifyInstance;
 
 beforeAll(async () => {
   const accounts = loadAccountsFromYaml(
-    resolve(process.cwd(), 'src/infrastructure/config/accounts.yaml'),
+    resolve(process.cwd(), 'config/accounts.yaml'),
   );
   const accountRepository = new InMemoryAccountRepository(accounts);
   const adapterFactory = new AdapterFactory();
