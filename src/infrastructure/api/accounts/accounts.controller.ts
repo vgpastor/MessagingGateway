@@ -5,6 +5,7 @@ import type { ChannelType, ProviderType } from '../../../domain/messaging/channe
 import type { AccountIdentity } from '../../../domain/accounts/account-identity.js';
 import type { CredentialValidator } from '../../credential-validator.js';
 import { accountSchema } from '../../config/accounts.schema.js';
+import { buildDefaultIdentity } from '../../config/accounts.loader.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
@@ -139,6 +140,16 @@ export async function accountsController(
 
     const result = await deps.credentialValidator.validate(account);
 
+    // Auto-update identity and status if discovered from provider
+    if (result.discoveredIdentity || result.status !== account.status) {
+      await deps.accountRepository.update(account.id, {
+        status: result.status,
+        ...(result.discoveredIdentity
+          ? { identity: { ...account.identity, ...result.discoveredIdentity } as AccountIdentity }
+          : {}),
+      });
+    }
+
     return {
       accountId: account.id,
       status: result.status,
@@ -181,7 +192,9 @@ export async function accountsController(
       channel,
       provider: data.provider as ProviderType,
       status: data.status,
-      identity: { channel, ...data.identity } as AccountIdentity,
+      identity: data.identity
+        ? ({ channel, ...data.identity } as AccountIdentity)
+        : buildDefaultIdentity(channel),
       credentialsRef: data.credentialsRef,
       providerConfig: data.providerConfig,
       metadata: {

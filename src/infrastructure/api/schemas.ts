@@ -208,7 +208,7 @@ export const createAccountBodySchema = {
       required: ['owner'] as const,
     },
   },
-  required: ['id', 'alias', 'channel', 'provider', 'identity', 'credentialsRef', 'metadata'] as const,
+  required: ['id', 'alias', 'channel', 'provider', 'credentialsRef', 'metadata'] as const,
 };
 
 export const updateAccountBodySchema = {

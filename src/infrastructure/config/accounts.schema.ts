@@ -49,7 +49,7 @@ const accountSchema = z.object({
     telegramIdentitySchema,
     emailIdentitySchema,
     smsIdentitySchema,
-  ]),
+  ]).optional(),
   credentialsRef: z.string().min(1),
   providerConfig: z.record(z.string(), z.unknown()).default({}),
   metadata: z.object({

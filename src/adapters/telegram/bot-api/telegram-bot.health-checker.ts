@@ -16,6 +16,23 @@ export class TelegramBotHealthChecker implements ProviderHealthChecker {
     );
 
     if (response.ok) {
+      // Extract bot identity from getMe response
+      try {
+        const body = await response.json() as { ok: boolean; result?: { id: number; username: string } };
+        if (body.ok && body.result) {
+          return {
+            status: 'active',
+            credentialsConfigured: true,
+            discoveredIdentity: {
+              channel: 'telegram',
+              botId: String(body.result.id),
+              botUsername: body.result.username,
+            },
+          };
+        }
+      } catch {
+        // Identity discovery is best-effort
+      }
       return { status: 'active', credentialsConfigured: true };
     }
     if (response.status === 401) {
