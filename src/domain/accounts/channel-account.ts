@@ -24,6 +24,7 @@ export interface ChannelAccount {
   status: AccountStatus;
   identity: AccountIdentity;
   credentialsRef: string;
+  credentials?: string;
   providerConfig: Record<string, unknown>;
   metadata: AccountMetadata;
 }

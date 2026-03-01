@@ -5,7 +5,7 @@ import { fetchWithTimeout } from '../../shared/http.js';
 
 export class WwebjsHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const parsed = resolveProviderCredentialParsed(account.credentialsRef, account.provider);
+    const parsed = resolveProviderCredentialParsed(account.credentialsRef, account.provider, account.credentials);
     if (!parsed) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing API key' };
     }

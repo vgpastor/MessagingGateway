@@ -5,7 +5,7 @@ import { fetchWithTimeout } from '../../shared/http.js';
 
 export class TwilioHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const authToken = resolveProviderCredential(account.credentialsRef, account.provider);
+    const authToken = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
     const accountSid = resolveCredential(account.credentialsRef, 'ACCOUNT_SID');
     if (!authToken || !accountSid) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing account SID or auth token' };

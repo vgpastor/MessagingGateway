@@ -40,9 +40,13 @@ const PROVIDER_CREDENTIAL_SUFFIXES: Record<string, string> = {
 };
 
 export function resolveProviderCredential(
-  credentialsRef: string,
+  credentialsRef: string | undefined,
   provider: string,
+  inlineCredential?: string,
 ): string | undefined {
+  // Inline credentials take priority over env vars
+  if (inlineCredential) return inlineCredential;
+  if (!credentialsRef) return undefined;
   const suffix = PROVIDER_CREDENTIAL_SUFFIXES[provider] ?? 'API_KEY';
   return resolveCredential(credentialsRef, suffix);
 }
@@ -77,10 +81,11 @@ export function parseCredentialString(raw: string): ParsedCredential {
 }
 
 export function resolveProviderCredentialParsed(
-  credentialsRef: string,
+  credentialsRef: string | undefined,
   provider: string,
+  inlineCredential?: string,
 ): ParsedCredential | undefined {
-  const raw = resolveProviderCredential(credentialsRef, provider);
+  const raw = resolveProviderCredential(credentialsRef, provider, inlineCredential);
   if (!raw) return undefined;
   return parseCredentialString(raw);
 }

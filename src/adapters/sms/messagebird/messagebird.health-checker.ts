@@ -5,7 +5,7 @@ import { fetchWithTimeout } from '../../shared/http.js';
 
 export class MessageBirdHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const apiKey = resolveProviderCredential(account.credentialsRef, account.provider);
+    const apiKey = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
     if (!apiKey) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing API key' };
     }

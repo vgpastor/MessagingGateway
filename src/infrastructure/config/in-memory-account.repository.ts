@@ -104,7 +104,8 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
         provider: a.provider,
         ...(a.status !== 'unchecked' ? { status: a.status } : {}),
         identity: this.serializeIdentity(a),
-        credentialsRef: a.credentialsRef,
+        ...(a.credentialsRef ? { credentialsRef: a.credentialsRef } : {}),
+        ...(a.credentials ? { credentials: a.credentials } : {}),
         ...(Object.keys(a.providerConfig).length > 0
           ? { providerConfig: a.providerConfig }
           : {}),
