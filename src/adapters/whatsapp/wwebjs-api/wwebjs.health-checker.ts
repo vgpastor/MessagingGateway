@@ -24,11 +24,37 @@ export class WwebjsHealthChecker implements ProviderHealthChecker {
     const response = await fetchWithTimeout(`${baseUrl}/ping`, { method: 'GET', headers });
 
     if (response.ok) {
-      return { status: 'active', credentialsConfigured: true };
+      // Try to discover phone number from session info
+      const discovered = await this.discoverIdentity(baseUrl, headers, account);
+      return { status: 'active', credentialsConfigured: true, ...discovered };
     }
     if (response.status === 401 || response.status === 403) {
       return { status: 'auth_expired', credentialsConfigured: true, detail: `HTTP ${response.status}` };
     }
     return { status: 'error', credentialsConfigured: true, detail: `HTTP ${response.status}` };
+  }
+
+  private async discoverIdentity(
+    baseUrl: string,
+    headers: Record<string, string>,
+    account: ChannelAccount,
+  ): Promise<Pick<ValidationResult, 'discoveredIdentity'>> {
+    try {
+      const sessionId = (account.providerConfig['sessionId'] as string) ?? 'default';
+      const res = await fetchWithTimeout(`${baseUrl}/session/info/${sessionId}`, { method: 'GET', headers });
+      if (!res.ok) return {};
+
+      const info = await res.json() as Record<string, unknown>;
+      const me = info['me'] as Record<string, string> | undefined;
+      const phoneNumber = me?.['user'] ? `+${me['user']}` : undefined;
+      if (phoneNumber) {
+        return {
+          discoveredIdentity: { channel: 'whatsapp', phoneNumber, wid: me?.['_serialized'] },
+        };
+      }
+    } catch {
+      // Identity discovery is best-effort
+    }
+    return {};
   }
 }

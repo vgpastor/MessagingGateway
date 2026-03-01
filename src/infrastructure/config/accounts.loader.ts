@@ -38,7 +38,7 @@ function mapToChannelAccount(
     channel,
     provider: raw.provider as ProviderType,
     status: raw.status,
-    identity: buildIdentity(channel, raw.identity),
+    identity: raw.identity ? buildIdentity(channel, raw.identity) : buildDefaultIdentity(channel),
     credentialsRef: raw.credentialsRef,
     providerConfig: raw.providerConfig,
     metadata: {
@@ -49,6 +49,15 @@ function mapToChannelAccount(
       tags: raw.metadata.tags,
     },
   };
+}
+
+export function buildDefaultIdentity(channel: ChannelType): AccountIdentity {
+  switch (channel) {
+    case 'whatsapp': return { channel: 'whatsapp', phoneNumber: '' };
+    case 'telegram': return { channel: 'telegram', botUsername: '' };
+    case 'email': return { channel: 'email', address: '' };
+    case 'sms': return { channel: 'sms', phoneNumber: '' };
+  }
 }
 
 function buildIdentity(

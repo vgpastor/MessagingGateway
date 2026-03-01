@@ -297,6 +297,7 @@ describe('CredentialValidator.validateAll', () => {
 
     expect(results[0].status).toBe('active');
     expect(results[1].status).toBe('active');
-    expect(fetch).toHaveBeenCalledTimes(2);
+    // wwebjs: /ping + /session/info (identity discovery), telegram: /getMe
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });

@@ -24,7 +24,14 @@ export class CredentialValidator {
       accounts.map(async (account) => {
         if (account.status !== 'unchecked') return account;
         const result = await this.validate(account);
-        return { ...account, status: result.status };
+        const updated = { ...account, status: result.status };
+
+        // Auto-populate identity from provider if discovered
+        if (result.discoveredIdentity) {
+          updated.identity = { ...updated.identity, ...result.discoveredIdentity } as typeof updated.identity;
+        }
+
+        return updated;
       }),
     );
 
