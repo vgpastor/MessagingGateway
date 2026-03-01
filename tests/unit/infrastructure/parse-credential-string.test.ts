@@ -3,15 +3,15 @@ import { parseCredentialString } from '../../../src/infrastructure/config/env.co
 
 describe('parseCredentialString', () => {
   it('should return plain API key when no @ is present', () => {
-    const result = parseCredentialString('REDACTED_API_KEY');
-    expect(result).toEqual({ apiKey: 'REDACTED_API_KEY' });
+    const result = parseCredentialString('sk_test_abc123def456');
+    expect(result).toEqual({ apiKey: 'sk_test_abc123def456' });
   });
 
   it('should parse user:key@host:port format', () => {
-    const result = parseCredentialString('patroltech:REDACTED_API_KEY@localhost:3001');
+    const result = parseCredentialString('myuser:sk_test_abc123def456@api.example.com:3011');
     expect(result).toEqual({
-      apiKey: 'patroltech:REDACTED_API_KEY',
-      baseUrl: 'http://localhost:3001',
+      apiKey: 'myuser:sk_test_abc123def456',
+      baseUrl: 'http://api.example.com:3011',
     });
   });
 
