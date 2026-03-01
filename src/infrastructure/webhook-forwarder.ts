@@ -11,35 +11,48 @@ export class WebhookForwarder {
   ) {}
 
   async forward(envelope: UnifiedEnvelope, eventType: WebhookEventType = 'message.inbound'): Promise<void> {
-    const accountConfig = await this.webhookConfigRepo.findByAccountId(envelope.accountId);
+    await this.forwardRaw(envelope.accountId, envelope, eventType, envelope.channel);
+  }
+
+  async forwardRaw(
+    accountId: string,
+    payload: unknown,
+    eventType: WebhookEventType,
+    channel?: string,
+  ): Promise<void> {
+    const accountConfig = await this.webhookConfigRepo.findByAccountId(accountId);
 
     if (accountConfig?.enabled) {
       const matchesEvent = accountConfig.events.includes('*') || accountConfig.events.includes(eventType);
       if (matchesEvent) {
-        await this.send(accountConfig.url, accountConfig.secret, envelope, eventType);
+        await this.send(accountConfig.url, accountConfig.secret, accountId, payload, eventType, channel);
         return;
       }
     }
 
     // Global fallback
     if (this.globalCallbackUrl) {
-      await this.send(this.globalCallbackUrl, this.globalSecret, envelope, eventType);
+      await this.send(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
     }
   }
 
   private async send(
     url: string,
     secret: string | undefined,
-    envelope: UnifiedEnvelope,
+    accountId: string,
+    data: unknown,
     eventType: WebhookEventType,
+    channel?: string,
   ): Promise<void> {
-    const payload = JSON.stringify(envelope);
+    const payload = JSON.stringify(data);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-UMG-Event': eventType,
-      'X-UMG-Channel': envelope.channel,
-      'X-UMG-Account': envelope.accountId,
+      'X-UMG-Account': accountId,
     };
+    if (channel) {
+      headers['X-UMG-Channel'] = channel;
+    }
 
     if (secret) {
       const signature = createHmac('sha256', secret)
@@ -58,12 +71,12 @@ export class WebhookForwarder {
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         console.error(
-          `Webhook forwarding failed for ${envelope.accountId}: HTTP ${response.status} - ${text}`,
+          `Webhook forwarding failed for ${accountId}: HTTP ${response.status} - ${text}`,
         );
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`Webhook forwarding error for ${envelope.accountId}: ${message}`);
+      console.error(`Webhook forwarding error for ${accountId}: ${message}`);
     }
   }
 }
