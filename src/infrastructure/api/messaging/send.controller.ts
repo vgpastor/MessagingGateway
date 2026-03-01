@@ -21,7 +21,9 @@ export async function sendController(
         200: messageResultSchema,
         400: errorResponseSchema,
         404: errorResponseSchema,
+        422: errorResponseSchema,
         500: errorResponseSchema,
+        501: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -65,10 +67,15 @@ export async function sendController(
       return result;
     } catch (error) {
       if (error instanceof DomainError) {
-        const statusCode = error.code === 'ACCOUNT_NOT_FOUND' ? 404 : 400;
+        const code = error.code;
+        const statusCode =
+          code === 'ACCOUNT_NOT_FOUND' ? 404
+          : code === 'ACCOUNT_UNAVAILABLE' ? 422
+          : code === 'ADAPTER_NOT_FOUND' ? 501
+          : 400;
         return reply.status(statusCode).send({
-          error: error.code,
-          code: error.code,
+          error: code,
+          code,
           message: error.message,
         });
       }

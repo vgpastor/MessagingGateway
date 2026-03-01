@@ -13,7 +13,7 @@ services:
     volumes:
       # Mount the config directory (not a single file) to avoid Docker
       # creating accounts.yaml as a directory when the host file is absent.
-      - ./config:/app/config:ro
+      - ./config:/app/config
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
