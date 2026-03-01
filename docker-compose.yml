@@ -11,8 +11,9 @@ services:
       PORT: 3000
       ACCOUNTS_CONFIG_PATH: /app/config/accounts.yaml
     volumes:
-      # Mount custom accounts config (optional override)
-      - ./src/infrastructure/config/accounts.yaml:/app/config/accounts.yaml:ro
+      # Mount the config directory (not a single file) to avoid Docker
+      # creating accounts.yaml as a directory when the host file is absent.
+      - ./config:/app/config:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../../src/infrastructure/config/accounts.loader.js';
 
 describe('loadAccountsFromYaml', () => {
-  const yamlPath = resolve(process.cwd(), 'src/infrastructure/config/accounts.yaml');
+  const yamlPath = resolve(process.cwd(), 'config/accounts.yaml');
 
   it('should load accounts from YAML file', () => {
     const accounts = loadAccountsFromYaml(yamlPath);
