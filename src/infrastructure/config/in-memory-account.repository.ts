@@ -91,35 +91,39 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
   private persist(): void {
     if (!this.persistPath) return;
 
-    const dir = dirname(this.persistPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    try {
+      const dir = dirname(this.persistPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      const data = {
+        accounts: this.accounts.map((a) => ({
+          id: a.id,
+          alias: a.alias,
+          channel: a.channel,
+          provider: a.provider,
+          ...(a.status !== 'unchecked' ? { status: a.status } : {}),
+          identity: this.serializeIdentity(a),
+          ...(a.credentialsRef ? { credentialsRef: a.credentialsRef } : {}),
+          ...(a.credentials ? { credentials: a.credentials } : {}),
+          ...(Object.keys(a.providerConfig).length > 0
+            ? { providerConfig: a.providerConfig }
+            : {}),
+          metadata: {
+            owner: a.metadata.owner,
+            environment: a.metadata.environment,
+            ...(a.metadata.webhookPath ? { webhookPath: a.metadata.webhookPath } : {}),
+            ...(a.metadata.rateLimit ? { rateLimit: a.metadata.rateLimit } : {}),
+            tags: a.metadata.tags,
+          },
+        })),
+      };
+
+      writeFileSync(this.persistPath, stringifyYaml(data), 'utf-8');
+    } catch (err) {
+      console.warn(`Failed to persist accounts to ${this.persistPath}: ${(err as Error).message}`);
     }
-
-    const data = {
-      accounts: this.accounts.map((a) => ({
-        id: a.id,
-        alias: a.alias,
-        channel: a.channel,
-        provider: a.provider,
-        ...(a.status !== 'unchecked' ? { status: a.status } : {}),
-        identity: this.serializeIdentity(a),
-        ...(a.credentialsRef ? { credentialsRef: a.credentialsRef } : {}),
-        ...(a.credentials ? { credentials: a.credentials } : {}),
-        ...(Object.keys(a.providerConfig).length > 0
-          ? { providerConfig: a.providerConfig }
-          : {}),
-        metadata: {
-          owner: a.metadata.owner,
-          environment: a.metadata.environment,
-          ...(a.metadata.webhookPath ? { webhookPath: a.metadata.webhookPath } : {}),
-          ...(a.metadata.rateLimit ? { rateLimit: a.metadata.rateLimit } : {}),
-          tags: a.metadata.tags,
-        },
-      })),
-    };
-
-    writeFileSync(this.persistPath, stringifyYaml(data), 'utf-8');
   }
 
   private serializeIdentity(account: ChannelAccount): Record<string, unknown> {
