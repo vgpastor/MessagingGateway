@@ -39,9 +39,11 @@ COPY --from=build /app/dist ./dist
 # Copy package.json (needed for version info)
 COPY package.json ./
 
-# Copy default accounts config if it exists (can be overridden via volume mount)
+# Copy default accounts config from build stage (if present).
+# The shell conditional avoids failure when the file doesn't exist.
 RUN mkdir -p /app/config
-COPY --from=build /app/src/infrastructure/config/accounts.yam[l] ./config/
+RUN --mount=from=build,source=/app/src/infrastructure/config,target=/tmp/acfg \
+    if [ -f /tmp/acfg/accounts.yaml ]; then cp /tmp/acfg/accounts.yaml /app/config/; fi
 
 # Create writable data directory for runtime state (webhook configs, etc.)
 RUN mkdir -p /app/data && chown umg:umg /app/data
