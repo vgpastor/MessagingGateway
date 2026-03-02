@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
 import { WwebjsWebhookAdapter } from '../../../adapters/whatsapp/wwebjs-api/wwebjs-webhook.adapter.js';
-import { BaileysWebhookAdapter } from '../../../adapters/whatsapp/baileys/baileys-webhook.adapter.js';
 import type { WwebjsInboundPayload, WwebjsStatusPayload } from '../../../adapters/whatsapp/wwebjs-api/wwebjs.types.js';
 import type { WebhookForwarder } from '../../webhook-forwarder.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
@@ -15,14 +14,13 @@ export async function whatsappWebhookController(
   fastify: FastifyInstance,
   deps: WhatsAppWebhookDeps,
 ): Promise<void> {
-  const wwebjsWebhookAdapter = new WwebjsWebhookAdapter();
-  const baileysWebhookAdapter = new BaileysWebhookAdapter();
+  const webhookAdapter = new WwebjsWebhookAdapter();
 
   fastify.post<{ Params: { accountId: string }; Body: WwebjsInboundPayload }>(
     '/webhooks/whatsapp/:accountId/inbound',
     {
       schema: {
-        description: 'Receive inbound WhatsApp messages from wwebjs-api or Baileys',
+        description: 'Receive inbound WhatsApp messages from external HTTP providers (wwebjs-api, evolution-api, etc.)',
         tags: ['Webhooks'],
         params: {
           type: 'object',
@@ -60,11 +58,19 @@ export async function whatsappWebhookController(
         });
       }
 
+      // Baileys accounts receive messages internally via the socket,
+      // not through external HTTP webhooks.
+      if (account.provider === 'baileys') {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          code: 'INTERNAL_PROVIDER',
+          message: `Account '${accountId}' uses Baileys which receives messages internally. External webhook not supported.`,
+        });
+      }
+
       try {
-        const event = account.provider === 'baileys'
-          ? baileysWebhookAdapter.parseIncoming(request.body as unknown as Parameters<typeof baileysWebhookAdapter.parseIncoming>[0])
-          : wwebjsWebhookAdapter.parseIncoming(request.body);
-        const envelope = wwebjsWebhookAdapter.toEnvelope(event, account);
+        const event = webhookAdapter.parseIncoming(request.body);
+        const envelope = webhookAdapter.toEnvelope(event, account);
 
         fastify.log.info(
           { messageId: envelope.id, accountId, type: envelope.contentSummary.type },
