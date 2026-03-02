@@ -62,7 +62,12 @@ const accountSchema = z.object({
     tags: z.array(z.string()).default([]),
   }),
 }).refine(
-  (data) => data.credentialsRef || data.credentials,
+  (data) => {
+    // Providers that handle auth internally (e.g. QR/pairing code) don't need credentials
+    const selfAuthProviders = ['baileys'];
+    if (selfAuthProviders.includes(data.provider)) return true;
+    return data.credentialsRef || data.credentials;
+  },
   { message: 'Either credentialsRef or credentials must be provided' },
 );
 
