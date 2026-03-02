@@ -8,6 +8,7 @@ import { WwebjsApiAdapter } from './adapters/whatsapp/wwebjs-api/wwebjs.adapter.
 import { WwebjsHealthChecker } from './adapters/whatsapp/wwebjs-api/wwebjs.health-checker.js';
 import { BaileysAdapter } from './adapters/whatsapp/baileys/baileys.adapter.js';
 import { BaileysHealthChecker } from './adapters/whatsapp/baileys/baileys.health-checker.js';
+import { BaileysConnectionManager } from './adapters/whatsapp/baileys/baileys.connection-manager.js';
 import { baileysSocketManager } from './adapters/whatsapp/baileys/baileys-socket.manager.js';
 import { BaileysWebhookAdapter } from './adapters/whatsapp/baileys/baileys-webhook.adapter.js';
 import { mapBaileysToWhatsAppEvent } from './adapters/whatsapp/baileys/baileys.mapper.js';
@@ -21,6 +22,7 @@ import { WebhookForwarder } from './infrastructure/webhook-forwarder.js';
 import { FileWebhookConfigStore } from './infrastructure/webhooks/file-webhook-config.store.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
+import { ConnectionManagerRegistry } from './infrastructure/connection-manager.registry.js';
 import { createServer } from './infrastructure/server.js';
 
 async function main() {
@@ -71,7 +73,11 @@ async function main() {
   const webhookConfigs = await webhookConfigRepo.findAll();
   console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
 
-  // 7. Create health check scheduler
+  // 7. Create connection manager registry
+  const connectionManagerRegistry = new ConnectionManagerRegistry();
+  connectionManagerRegistry.register(new BaileysConnectionManager());
+
+  // 8. Create health check scheduler
   const healthCheckIntervalMs = parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10);
   const healthCheckScheduler = new HealthCheckScheduler(
     accountRepository,
@@ -79,7 +85,7 @@ async function main() {
     { intervalMs: healthCheckIntervalMs },
   );
 
-  // 8. Create and start server
+  // 9. Create and start server
   const server = await createServer({
     accountRepository,
     webhookConfigRepo,
@@ -87,6 +93,7 @@ async function main() {
     adapterFactory,
     credentialValidator,
     healthCheckScheduler,
+    connectionManagerRegistry,
     webhookForwarder,
     port: envConfig.port,
     logLevel: envConfig.logLevel,
