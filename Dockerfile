@@ -39,18 +39,14 @@ COPY --from=build /app/dist ./dist
 # Copy package.json (needed for version info)
 COPY package.json ./
 
-# Copy default accounts config
-RUN mkdir -p /app/config
-COPY config/accounts.yaml /app/config/
-
-# Create writable data directory for runtime state (webhook configs, etc.)
+# Create writable data directory for runtime state (accounts config, webhook configs, etc.)
 RUN mkdir -p /app/data && chown umg:umg /app/data
 VOLUME /app/data
 
 ENV NODE_ENV=production \
     PORT=3000 \
     LOG_LEVEL=info \
-    ACCOUNTS_CONFIG_PATH=/app/config/accounts.yaml
+    ACCOUNTS_CONFIG_PATH=/app/data/accounts.yaml
 
 EXPOSE 3000
 

@@ -49,7 +49,7 @@ async function main() {
   console.log(`Validation complete: ${active} active, ${authExpired} auth_expired, ${unchecked} unchecked, ${errored} error`);
 
   // 4. Create repository (with persistence back to YAML)
-  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'config/accounts.yaml');
+  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
   const accountRepository = new InMemoryAccountRepository(accounts, accountsYamlPath);
 
   // 5. Create adapter factory and register adapters
