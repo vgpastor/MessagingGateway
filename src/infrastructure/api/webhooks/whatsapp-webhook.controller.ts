@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
 import { WwebjsWebhookAdapter } from '../../../adapters/whatsapp/wwebjs-api/wwebjs-webhook.adapter.js';
+import { BaileysWebhookAdapter } from '../../../adapters/whatsapp/baileys/baileys-webhook.adapter.js';
 import type { WwebjsInboundPayload, WwebjsStatusPayload } from '../../../adapters/whatsapp/wwebjs-api/wwebjs.types.js';
 import type { WebhookForwarder } from '../../webhook-forwarder.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
@@ -14,13 +15,14 @@ export async function whatsappWebhookController(
   fastify: FastifyInstance,
   deps: WhatsAppWebhookDeps,
 ): Promise<void> {
-  const webhookAdapter = new WwebjsWebhookAdapter();
+  const wwebjsWebhookAdapter = new WwebjsWebhookAdapter();
+  const baileysWebhookAdapter = new BaileysWebhookAdapter();
 
   fastify.post<{ Params: { accountId: string }; Body: WwebjsInboundPayload }>(
     '/webhooks/whatsapp/:accountId/inbound',
     {
       schema: {
-        description: 'Receive inbound WhatsApp messages from wwebjs-api',
+        description: 'Receive inbound WhatsApp messages from wwebjs-api or Baileys',
         tags: ['Webhooks'],
         params: {
           type: 'object',
@@ -59,8 +61,10 @@ export async function whatsappWebhookController(
       }
 
       try {
-        const event = webhookAdapter.parseIncoming(request.body);
-        const envelope = webhookAdapter.toEnvelope(event, account);
+        const event = account.provider === 'baileys'
+          ? baileysWebhookAdapter.parseIncoming(request.body as unknown as Parameters<typeof baileysWebhookAdapter.parseIncoming>[0])
+          : wwebjsWebhookAdapter.parseIncoming(request.body);
+        const envelope = wwebjsWebhookAdapter.toEnvelope(event, account);
 
         fastify.log.info(
           { messageId: envelope.id, accountId, type: envelope.contentSummary.type },
