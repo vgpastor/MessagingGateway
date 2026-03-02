@@ -7,7 +7,7 @@ import type { ChannelType, ProviderType } from '../../domain/messaging/channel.t
 import { accountsConfigSchema } from './accounts.schema.js';
 
 export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
-  const resolvedPath = filePath ?? resolve(process.cwd(), 'config/accounts.yaml');
+  const resolvedPath = filePath ?? resolve(process.cwd(), 'data/accounts.yaml');
 
   if (!existsSync(resolvedPath) || !statSync(resolvedPath).isFile()) {
     console.warn(`Accounts config not found at ${resolvedPath}, starting with 0 accounts`);
