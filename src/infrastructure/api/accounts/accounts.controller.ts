@@ -110,6 +110,14 @@ export async function accountsController(
       });
     }
 
+    // Auto-reconnect managed providers that are disconnected
+    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    if (manager && !manager.hasConnection(account.id)) {
+      manager.connect(account.id, account.providerConfig).catch((err) => {
+        fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
+      });
+    }
+
     return sanitizeAccount(account, deps.connectionManagerRegistry);
   });
 
