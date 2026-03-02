@@ -45,6 +45,20 @@ accounts:
       environment: production
       tags: [emergency, global]
 
+  - id: wa-vgpastor
+    alias: "VGPastor WhatsApp"
+    channel: whatsapp
+    provider: baileys
+    identity:
+      phoneNumber: "+34722248965"
+    credentialsRef: BAILEYS_VGPASTOR
+    providerConfig:
+      printQRInTerminal: true
+    metadata:
+      owner: vgpastor
+      environment: production
+      tags: [vgpastor, whatsapp]
+
   # === TELEGRAM ===
   - id: tg-deamap-bot
     alias: "DeaMap Alerts Bot"

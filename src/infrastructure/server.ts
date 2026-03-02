@@ -18,6 +18,7 @@ import { telegramWebhookController } from './api/webhooks/telegram-webhook.contr
 import { emailWebhookController } from './api/webhooks/email-webhook.controller.js';
 import { smsWebhookController } from './api/webhooks/sms-webhook.controller.js';
 import { webhookConfigController } from './api/webhooks/webhook-config.controller.js';
+import { baileysController } from './api/accounts/baileys.controller.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
@@ -102,6 +103,13 @@ export async function createServer(deps: ServerDeps) {
       accountRepository: deps.accountRepository,
       credentialValidator: deps.credentialValidator,
       healthCheckScheduler: deps.healthCheckScheduler,
+    }),
+  );
+
+  // Baileys management (QR, pairing code, logout)
+  await fastify.register(
+    async (instance) => baileysController(instance, {
+      accountRepository: deps.accountRepository,
     }),
   );
 
