@@ -14,7 +14,7 @@ describe('loadAccountsFromYaml', () => {
     const accounts = loadAccountsFromYaml(yamlPath);
     const waAccounts = accounts.filter((a) => a.channel === 'whatsapp');
 
-    expect(waAccounts).toHaveLength(3);
+    expect(waAccounts).toHaveLength(4);
 
     const samur = waAccounts.find((a) => a.id === 'wa-samur');
     expect(samur).toBeDefined();

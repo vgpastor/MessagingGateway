@@ -103,7 +103,7 @@ describe('GET /api/v1/accounts', () => {
     expect(response.statusCode).toBe(200);
 
     const accounts = response.json();
-    expect(accounts.length).toBe(3);
+    expect(accounts.length).toBe(4);
     for (const account of accounts) {
       expect(account.channel).toBe('whatsapp');
     }

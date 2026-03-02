@@ -12,10 +12,14 @@ import type { BaileysProviderConfig } from './baileys.types.js';
 type MessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
 type ConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
 
+type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+
 interface SocketEntry {
   socket: WASocket;
   config: BaileysProviderConfig;
   retryCount: number;
+  connectionStatus: ConnectionStatus;
+  lastQr: string | undefined;
   messageHandlers: MessageHandler[];
   connectionHandlers: ConnectionHandler[];
 }
@@ -46,6 +50,8 @@ export class BaileysSocketManager {
       socket,
       config,
       retryCount: 0,
+      connectionStatus: 'connecting',
+      lastQr: undefined,
       messageHandlers: [],
       connectionHandlers: [],
     };
@@ -59,9 +65,16 @@ export class BaileysSocketManager {
         handler(update);
       }
 
+      if (update.qr) {
+        entry.lastQr = update.qr;
+        entry.connectionStatus = 'connecting';
+      }
+
       const { connection, lastDisconnect } = update;
 
       if (connection === 'close') {
+        entry.connectionStatus = 'disconnected';
+        entry.lastQr = undefined;
         const error = lastDisconnect?.error as Boom | undefined;
         const statusCode = error?.output?.statusCode;
         const shouldReconnect =
@@ -86,6 +99,8 @@ export class BaileysSocketManager {
         }
       } else if (connection === 'open') {
         entry.retryCount = 0;
+        entry.connectionStatus = 'connected';
+        entry.lastQr = undefined;
         console.log(`[baileys:${accountId}] Connection established`);
       }
     });
@@ -126,7 +141,36 @@ export class BaileysSocketManager {
   }
 
   isConnected(accountId: string): boolean {
+    const entry = this.sockets.get(accountId);
+    return entry?.connectionStatus === 'connected';
+  }
+
+  hasSocket(accountId: string): boolean {
     return this.sockets.has(accountId);
+  }
+
+  getConnectionStatus(accountId: string): ConnectionStatus {
+    return this.sockets.get(accountId)?.connectionStatus ?? 'disconnected';
+  }
+
+  getLastQr(accountId: string): string | undefined {
+    return this.sockets.get(accountId)?.lastQr;
+  }
+
+  async requestPairingCode(accountId: string, phoneNumber: string): Promise<string> {
+    const entry = this.sockets.get(accountId);
+    if (!entry) {
+      throw new Error(`No socket for account '${accountId}'. Connect first.`);
+    }
+
+    if (entry.connectionStatus === 'connected') {
+      throw new Error(`Account '${accountId}' is already connected.`);
+    }
+
+    // Clean phone number: remove +, spaces, dashes
+    const cleaned = phoneNumber.replace(/[^0-9]/g, '');
+    const code = await entry.socket.requestPairingCode(cleaned);
+    return code;
   }
 
   resolveAuthDir(accountId: string, config: BaileysProviderConfig): string {
