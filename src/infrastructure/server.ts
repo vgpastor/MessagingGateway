@@ -50,6 +50,16 @@ export async function createServer(deps: ServerDeps) {
         },
   });
 
+  // Accept empty JSON body as {} (POST endpoints with optional body)
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    try {
+      done(null, (body as string).length > 0 ? JSON.parse(body as string) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   // CORS — allow external tools to consume the API and OpenAPI spec
   await fastify.register(fastifyCors, {
     origin: true,
