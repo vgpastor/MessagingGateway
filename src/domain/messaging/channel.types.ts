@@ -4,6 +4,7 @@ export type ProviderType =
   | 'wwebjs-api'
   | 'evolution-api'
   | 'meta-cloud-api'
+  | 'baileys'
   | 'telegram-bot-api'
   | 'brevo'
   | 'ses'

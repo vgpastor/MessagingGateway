@@ -6,6 +6,7 @@ const providerTypes = [
   'wwebjs-api',
   'evolution-api',
   'meta-cloud-api',
+  'baileys',
   'telegram-bot-api',
   'brevo',
   'ses',
