@@ -40,7 +40,6 @@ export class BaileysSocketManager {
 
     const socket = makeWASocket({
       auth: state,
-      printQRInTerminal: config.printQRInTerminal ?? true,
       browser: config.browser ?? ['MessagingGateway', 'Chrome', '1.0.0'],
       connectTimeoutMs: config.connectTimeoutMs ?? 60_000,
       markOnlineOnConnect: config.markOnlineOnConnect ?? true,
@@ -68,13 +67,14 @@ export class BaileysSocketManager {
       if (update.qr) {
         entry.lastQr = update.qr;
         entry.connectionStatus = 'connecting';
+        console.log(`[baileys:${accountId}] QR code received (poll GET /api/v1/accounts/${accountId} to retrieve it)`);
       }
 
       const { connection, lastDisconnect } = update;
 
       if (connection === 'close') {
         entry.connectionStatus = 'disconnected';
-        entry.lastQr = undefined;
+        // Keep lastQr across reconnections so the API can still serve it
         const error = lastDisconnect?.error as Boom | undefined;
         const statusCode = error?.output?.statusCode;
         const shouldReconnect =
@@ -87,8 +87,25 @@ export class BaileysSocketManager {
           console.log(
             `[baileys:${accountId}] Connection closed (status=${statusCode}), reconnecting (attempt ${entry.retryCount}/${maxRetries})...`,
           );
+          // Remove the old socket but preserve handlers and QR for the new entry
+          const prevHandlers = entry.messageHandlers;
+          const prevConnectionHandlers = entry.connectionHandlers;
+          const prevQr = entry.lastQr;
+          const prevRetryCount = entry.retryCount;
           this.sockets.delete(accountId);
-          void this.connect(accountId, config).catch((err) => {
+
+          void this.connect(accountId, config).then(() => {
+            const newEntry = this.sockets.get(accountId);
+            if (newEntry) {
+              newEntry.messageHandlers = prevHandlers;
+              newEntry.connectionHandlers = prevConnectionHandlers;
+              newEntry.retryCount = prevRetryCount;
+              // Preserve QR until a new one is received
+              if (!newEntry.lastQr && prevQr) {
+                newEntry.lastQr = prevQr;
+              }
+            }
+          }).catch((err) => {
             console.error(`[baileys:${accountId}] Reconnection failed:`, err);
           });
         } else {
