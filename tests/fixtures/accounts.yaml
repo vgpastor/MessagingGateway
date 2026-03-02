@@ -52,8 +52,6 @@ accounts:
     identity:
       phoneNumber: "+14155550004"
     credentialsRef: BAILEYS_VGPASTOR
-    providerConfig:
-      printQRInTerminal: true
     metadata:
       owner: vgpastor
       environment: production

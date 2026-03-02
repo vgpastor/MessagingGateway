@@ -421,9 +421,9 @@ export async function accountsController(
       });
     }
 
-    // Ensure connection is started (with QR disabled since we use pairing code)
+    // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
-      await manager.connect(account.id, { ...account.providerConfig, printQRInTerminal: false });
+      await manager.connect(account.id, account.providerConfig);
     }
 
     try {
