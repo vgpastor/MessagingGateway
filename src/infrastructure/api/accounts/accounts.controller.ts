@@ -5,6 +5,7 @@ import type { ChannelType, ProviderType } from '../../../domain/messaging/channe
 import type { AccountIdentity } from '../../../domain/accounts/account-identity.js';
 import type { CredentialValidator } from '../../credential-validator.js';
 import type { HealthCheckScheduler } from '../../health-check-scheduler.js';
+import type { ConnectionManagerRegistry } from '../../connection-manager.registry.js';
 import { accountSchema } from '../../config/accounts.schema.js';
 import { buildDefaultIdentity } from '../../config/accounts.loader.js';
 import {
@@ -14,13 +15,16 @@ import {
   updateAccountBodySchema,
 } from '../schemas.js';
 
-interface AccountsControllerDeps {
+export interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
+  connectionManagerRegistry: ConnectionManagerRegistry;
 }
 
-function sanitizeAccount(account: ChannelAccount) {
+function sanitizeAccount(account: ChannelAccount, connectionManagerRegistry: ConnectionManagerRegistry) {
+  const connectionInfo = connectionManagerRegistry.getConnectionInfo(account.provider, account.id);
+
   return {
     id: account.id,
     alias: account.alias,
@@ -28,6 +32,9 @@ function sanitizeAccount(account: ChannelAccount) {
     provider: account.provider,
     status: account.status,
     identity: account.identity,
+    connection: connectionInfo.managed
+      ? { managed: true, status: connectionInfo.status, qr: connectionInfo.qr }
+      : undefined,
     metadata: {
       owner: account.metadata.owner,
       environment: account.metadata.environment,
@@ -41,6 +48,13 @@ export async function accountsController(
   fastify: FastifyInstance,
   deps: AccountsControllerDeps,
 ): Promise<void> {
+
+  const idParamsSchema = {
+    type: 'object' as const,
+    properties: { id: { type: 'string' as const } },
+    required: ['id'] as const,
+  };
+
   fastify.get('/api/v1/accounts', {
     schema: {
       description: 'List all configured messaging accounts',
@@ -72,20 +86,14 @@ export async function accountsController(
       accounts = await deps.accountRepository.findAll();
     }
 
-    return accounts.map(sanitizeAccount);
+    return accounts.map((a) => sanitizeAccount(a, deps.connectionManagerRegistry));
   });
 
   fastify.get<{ Params: { id: string } }>('/api/v1/accounts/:id', {
     schema: {
-      description: 'Get details of a specific account',
+      description: 'Get details of a specific account, including live connection status and QR code for self-auth providers',
       tags: ['Accounts'],
-      params: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-        },
-        required: ['id'],
-      },
+      params: idParamsSchema,
       response: {
         200: accountResponseSchema,
         404: errorResponseSchema,
@@ -102,18 +110,14 @@ export async function accountsController(
       });
     }
 
-    return sanitizeAccount(account);
+    return sanitizeAccount(account, deps.connectionManagerRegistry);
   });
 
   fastify.get<{ Params: { id: string } }>('/api/v1/accounts/:id/health', {
     schema: {
       description: 'Check the connection status of a specific account',
       tags: ['Accounts'],
-      params: {
-        type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
-      },
+      params: idParamsSchema,
       response: {
         200: {
           type: 'object',
@@ -221,7 +225,7 @@ export async function accountsController(
         });
       }
 
-      return reply.status(201).send(sanitizeAccount(saved));
+      return reply.status(201).send(sanitizeAccount(saved, deps.connectionManagerRegistry));
     } catch (err) {
       const message = (err as Error).message;
       if (message.includes('already exists')) {
@@ -244,11 +248,7 @@ export async function accountsController(
     schema: {
       description: 'Update an existing messaging account',
       tags: ['Accounts'],
-      params: {
-        type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
-      },
+      params: idParamsSchema,
       body: updateAccountBodySchema,
       response: {
         200: accountResponseSchema,
@@ -284,7 +284,7 @@ export async function accountsController(
       });
     }
 
-    return sanitizeAccount(updated!);
+    return sanitizeAccount(updated!, deps.connectionManagerRegistry);
   });
 
   // DELETE /api/v1/accounts/:id — delete an account
@@ -292,11 +292,7 @@ export async function accountsController(
     schema: {
       description: 'Delete a messaging account',
       tags: ['Accounts'],
-      params: {
-        type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
-      },
+      params: idParamsSchema,
       response: {
         200: {
           type: 'object',
@@ -323,5 +319,172 @@ export async function accountsController(
 
     fastify.log.info(`Account deleted: ${id}`);
     return { deleted: true, accountId: id };
+  });
+
+  // ── Connection management (generic for all self-auth providers) ──
+
+  // POST /api/v1/accounts/:id/connect — start connection (QR generation, etc.)
+  fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/connect', {
+    schema: {
+      description:
+        'Start the connection process for a self-auth provider (e.g. Baileys). ' +
+        'After calling this, poll GET /api/v1/accounts/:id to retrieve the QR code.',
+      tags: ['Accounts'],
+      params: idParamsSchema,
+      response: {
+        200: accountResponseSchema,
+        400: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const account = await deps.accountRepository.findById(request.params.id);
+    if (!account) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${request.params.id}' not found`,
+      });
+    }
+
+    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    if (!manager) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'NOT_SELF_AUTH',
+        message: `Provider '${account.provider}' does not support managed connections. Use credentials instead.`,
+      });
+    }
+
+    await manager.connect(account.id, account.providerConfig);
+
+    return sanitizeAccount(account, deps.connectionManagerRegistry);
+  });
+
+  // POST /api/v1/accounts/:id/pair — request pairing code
+  fastify.post<{ Params: { id: string }; Body: { phoneNumber?: string } }>('/api/v1/accounts/:id/pair', {
+    schema: {
+      description:
+        'Request a pairing code for authentication. ' +
+        'Enter this code in WhatsApp > Linked Devices > Link with phone number.',
+      tags: ['Accounts'],
+      params: idParamsSchema,
+      body: {
+        type: 'object',
+        properties: {
+          phoneNumber: {
+            type: 'string',
+            description: 'Phone number with country code (e.g. "+14155550004"). If omitted, uses the number from account identity.',
+          },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            accountId: { type: 'string' },
+            pairingCode: { type: 'string', description: 'Enter this code in the messaging app to link' },
+          },
+          required: ['accountId', 'pairingCode'],
+        },
+        400: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const account = await deps.accountRepository.findById(request.params.id);
+    if (!account) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${request.params.id}' not found`,
+      });
+    }
+
+    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    if (!manager) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'NOT_SELF_AUTH',
+        message: `Provider '${account.provider}' does not support pairing codes.`,
+      });
+    }
+
+    const phoneNumber = request.body?.phoneNumber
+      ?? (account.identity?.channel === 'whatsapp' ? account.identity.phoneNumber : undefined);
+
+    if (!phoneNumber) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'MISSING_PHONE',
+        message: 'Phone number is required. Provide it in the request body or configure it in the account identity.',
+      });
+    }
+
+    // Ensure connection is started (with QR disabled since we use pairing code)
+    if (!manager.hasConnection(account.id)) {
+      await manager.connect(account.id, { ...account.providerConfig, printQRInTerminal: false });
+    }
+
+    try {
+      const pairingCode = await manager.requestPairingCode(account.id, phoneNumber);
+
+      fastify.log.info(
+        { accountId: account.id, phoneNumber },
+        'Pairing code requested',
+      );
+
+      return { accountId: account.id, pairingCode };
+    } catch (error) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'PAIRING_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to request pairing code',
+      });
+    }
+  });
+
+  // POST /api/v1/accounts/:id/disconnect — disconnect and clear session
+  fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/disconnect', {
+    schema: {
+      description: 'Disconnect a self-auth provider account and clear its session',
+      tags: ['Accounts'],
+      params: idParamsSchema,
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            accountId: { type: 'string' },
+            status: { type: 'string' },
+          },
+          required: ['accountId', 'status'],
+        },
+        400: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const account = await deps.accountRepository.findById(request.params.id);
+    if (!account) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${request.params.id}' not found`,
+      });
+    }
+
+    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    if (!manager) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'NOT_SELF_AUTH',
+        message: `Provider '${account.provider}' does not support managed connections.`,
+      });
+    }
+
+    await manager.disconnect(account.id);
+    fastify.log.info({ accountId: account.id }, 'Account disconnected');
+
+    return { accountId: account.id, status: 'disconnected' };
   });
 }

@@ -9,6 +9,7 @@ import type { AdapterFactory } from '../adapters/adapter.factory.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
 import type { CredentialValidator } from './credential-validator.js';
 import type { HealthCheckScheduler } from './health-check-scheduler.js';
+import type { ConnectionManagerRegistry } from './connection-manager.registry.js';
 import { healthController } from './api/health/health.controller.js';
 import { accountsController } from './api/accounts/accounts.controller.js';
 import { sendController } from './api/messaging/send.controller.js';
@@ -18,7 +19,6 @@ import { telegramWebhookController } from './api/webhooks/telegram-webhook.contr
 import { emailWebhookController } from './api/webhooks/email-webhook.controller.js';
 import { smsWebhookController } from './api/webhooks/sms-webhook.controller.js';
 import { webhookConfigController } from './api/webhooks/webhook-config.controller.js';
-import { baileysController } from './api/accounts/baileys.controller.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
@@ -27,6 +27,7 @@ export interface ServerDeps {
   adapterFactory: AdapterFactory;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
+  connectionManagerRegistry: ConnectionManagerRegistry;
   webhookForwarder: WebhookForwarder;
   port: number;
   logLevel: string;
@@ -97,19 +98,13 @@ export async function createServer(deps: ServerDeps) {
   // Health
   await fastify.register(healthController);
 
-  // Accounts
+  // Accounts (includes connection management: connect, pair, disconnect)
   await fastify.register(
     async (instance) => accountsController(instance, {
       accountRepository: deps.accountRepository,
       credentialValidator: deps.credentialValidator,
       healthCheckScheduler: deps.healthCheckScheduler,
-    }),
-  );
-
-  // Baileys management (QR, pairing code, logout)
-  await fastify.register(
-    async (instance) => baileysController(instance, {
-      accountRepository: deps.accountRepository,
+      connectionManagerRegistry: deps.connectionManagerRegistry,
     }),
   );
 

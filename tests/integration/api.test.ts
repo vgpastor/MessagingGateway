@@ -8,6 +8,7 @@ import { HealthCheckerRegistry } from '../../src/adapters/health-checker.registr
 import { MessageRouterService } from '../../src/domain/routing/message-router.service.js';
 import { WebhookForwarder } from '../../src/infrastructure/webhook-forwarder.js';
 import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
+import { ConnectionManagerRegistry } from '../../src/infrastructure/connection-manager.registry.js';
 import { createServer } from '../../src/infrastructure/server.js';
 import type { WebhookConfig, WebhookConfigInput } from '../../src/domain/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../src/domain/webhooks/webhook-config.repository.js';
@@ -43,6 +44,7 @@ beforeAll(async () => {
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
+  const connectionManagerRegistry = new ConnectionManagerRegistry();
 
   app = await createServer({
     accountRepository,
@@ -50,6 +52,7 @@ beforeAll(async () => {
     messageRouter,
     adapterFactory,
     credentialValidator,
+    connectionManagerRegistry,
     webhookForwarder,
     port: 0,
     logLevel: 'silent',

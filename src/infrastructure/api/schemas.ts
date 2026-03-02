@@ -154,6 +154,16 @@ export const accountResponseSchema = {
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
+    connection: {
+      type: 'object' as const,
+      description: 'Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.',
+      properties: {
+        managed: { type: 'boolean' as const, description: 'Whether this provider uses managed connections' },
+        status: { type: 'string' as const, enum: ['disconnected', 'connecting', 'connected'] },
+        qr: { type: 'string' as const, description: 'QR code data string (render with a QR library to scan)' },
+      },
+      required: ['managed', 'status'] as const,
+    },
     metadata: {
       type: 'object' as const,
       properties: {
