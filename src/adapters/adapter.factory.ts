@@ -21,7 +21,8 @@ export class AdapterFactory {
     if (!AdapterClass) {
       throw new AdapterNotFoundError(account.provider);
     }
-    return new AdapterClass(account.providerConfig, account.credentialsRef, account.credentials);
+    const providerConfig = { ...account.providerConfig, accountId: account.id };
+    return new AdapterClass(providerConfig, account.credentialsRef, account.credentials);
   }
 
   hasAdapter(provider: ProviderType): boolean {

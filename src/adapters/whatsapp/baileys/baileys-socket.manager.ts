@@ -41,6 +41,7 @@ export class BaileysSocketManager {
     const socket = makeWASocket({
       auth: state,
       browser: config.browser ?? ['MessagingGateway', 'Chrome', '1.0.0'],
+      version: config.waVersion ?? [2, 3000, 1034074495],
       connectTimeoutMs: config.connectTimeoutMs ?? 60_000,
       markOnlineOnConnect: config.markOnlineOnConnect ?? true,
     });

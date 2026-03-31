@@ -41,7 +41,7 @@ export class BaileysAdapter implements MessagingPort {
         quotedOptions as Parameters<WASocket['sendMessage']>[2],
       );
 
-      const messageId = response?.key?.id ?? '';
+      const messageId = response?.key?.id ?? `baileys-${Date.now()}`;
 
       return {
         messageId,

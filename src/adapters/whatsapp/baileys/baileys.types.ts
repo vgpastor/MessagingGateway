@@ -1,6 +1,7 @@
 export interface BaileysProviderConfig {
   authDir?: string;
   browser?: [string, string, string];
+  waVersion?: [number, number, number];
   connectTimeoutMs?: number;
   retryOnDisconnect?: boolean;
   maxRetries?: number;

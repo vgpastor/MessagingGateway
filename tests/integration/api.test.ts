@@ -115,14 +115,14 @@ describe('GET /api/v1/accounts', () => {
   it('should filter by owner', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts?owner=patroltech',
+      url: '/api/v1/accounts?owner=test-org',
     });
     expect(response.statusCode).toBe(200);
 
     const accounts = response.json();
     expect(accounts.length).toBeGreaterThan(0);
     for (const account of accounts) {
-      expect(account.metadata.owner).toBe('patroltech');
+      expect(account.metadata.owner).toBe('test-org');
     }
   });
 });
@@ -131,13 +131,13 @@ describe('GET /api/v1/accounts/:id', () => {
   it('should return specific account', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts/wa-samur',
+      url: '/api/v1/accounts/wa-acme',
     });
     expect(response.statusCode).toBe(200);
 
     const account = response.json();
-    expect(account.id).toBe('wa-samur');
-    expect(account.alias).toBe('SAMUR WhatsApp');
+    expect(account.id).toBe('wa-acme');
+    expect(account.alias).toBe('Acme WhatsApp');
   });
 
   it('should return 404 for unknown account', async () => {
@@ -153,12 +153,12 @@ describe('GET /api/v1/accounts/:id/health', () => {
   it('should return account health status', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts/wa-samur/health',
+      url: '/api/v1/accounts/wa-acme/health',
     });
     expect(response.statusCode).toBe(200);
 
     const body = response.json();
-    expect(body.accountId).toBe('wa-samur');
+    expect(body.accountId).toBe('wa-acme');
     expect(body.status).toBe('unchecked');
     expect(body.credentialsConfigured).toBe(false);
     expect(body.lastChecked).toBeDefined();
@@ -196,7 +196,7 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
   it('should process valid WhatsApp inbound webhook', async () => {
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/whatsapp/wa-samur/inbound',
+      url: '/webhooks/whatsapp/wa-acme/inbound',
       payload: {
         event: 'message',
         data: {
@@ -225,7 +225,7 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
 
     const envelope = response.json();
     expect(envelope.id).toMatch(/^msg_/);
-    expect(envelope.accountId).toBe('wa-samur');
+    expect(envelope.accountId).toBe('wa-acme');
     expect(envelope.channel).toBe('whatsapp');
     expect(envelope.direction).toBe('inbound');
     expect(envelope.sender.id).toBe('34699000001@c.us');
@@ -237,8 +237,8 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
     expect(envelope.channelPayload.message.type).toBe('text');
     expect(envelope.channelPayload.message.body).toBe('He encontrado un DEA en la calle Mayor');
     expect(envelope.gateway.adapterId).toBe('wwebjs-api');
-    expect(envelope.gateway.account.id).toBe('wa-samur');
-    expect(envelope.gateway.account.owner).toBe('global-emergency');
+    expect(envelope.gateway.account.id).toBe('wa-acme');
+    expect(envelope.gateway.account.owner).toBe('acme-corp');
   });
 
   it('should return 404 for unknown account', async () => {
@@ -253,7 +253,7 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
   it('should return 400 for non-WhatsApp account', async () => {
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/whatsapp/tg-deamap-bot/inbound',
+      url: '/webhooks/whatsapp/tg-alerts-bot/inbound',
       payload: { event: 'message', data: { id: { _serialized: 'x' } } },
     });
     expect(response.statusCode).toBe(400);
@@ -264,7 +264,7 @@ describe('POST /webhooks/whatsapp/:accountId/status', () => {
   it('should process status update', async () => {
     const response = await app.inject({
       method: 'POST',
-      url: '/webhooks/whatsapp/wa-samur/status',
+      url: '/webhooks/whatsapp/wa-acme/status',
       payload: {
         event: 'message_ack',
         data: {
@@ -309,7 +309,7 @@ describe('Webhook Config API', () => {
   it('should return 404 when no webhook configured for account', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe('WEBHOOK_NOT_CONFIGURED');
@@ -318,9 +318,9 @@ describe('Webhook Config API', () => {
   it('should create webhook config via PUT', async () => {
     const response = await app.inject({
       method: 'PUT',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
       payload: {
-        url: 'https://n8n.example.com/webhook/samur',
+        url: 'https://n8n.example.com/webhook/acme',
         secret: 'test-secret',
         events: ['message.inbound'],
       },
@@ -328,8 +328,8 @@ describe('Webhook Config API', () => {
     expect(response.statusCode).toBe(200);
 
     const config = response.json();
-    expect(config.accountId).toBe('wa-samur');
-    expect(config.url).toBe('https://n8n.example.com/webhook/samur');
+    expect(config.accountId).toBe('wa-acme');
+    expect(config.url).toBe('https://n8n.example.com/webhook/acme');
     expect(config.secret).toBe('test-secret');
     expect(config.events).toEqual(['message.inbound']);
     expect(config.enabled).toBe(true);
@@ -340,16 +340,16 @@ describe('Webhook Config API', () => {
   it('should return existing webhook config via GET', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().url).toBe('https://n8n.example.com/webhook/samur');
+    expect(response.json().url).toBe('https://n8n.example.com/webhook/acme');
   });
 
   it('should update webhook config via PUT', async () => {
     const response = await app.inject({
       method: 'PUT',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
       payload: {
         url: 'https://new-url.example.com/webhook',
         enabled: false,
@@ -367,8 +367,8 @@ describe('Webhook Config API', () => {
     // Add a second webhook
     await app.inject({
       method: 'PUT',
-      url: '/api/v1/accounts/wa-patroltech/webhook',
-      payload: { url: 'https://patroltech.example.com/hook' },
+      url: '/api/v1/accounts/wa-test/webhook',
+      payload: { url: 'https://test-org.example.com/hook' },
     });
 
     const response = await app.inject({
@@ -384,7 +384,7 @@ describe('Webhook Config API', () => {
   it('should delete webhook config', async () => {
     const response = await app.inject({
       method: 'DELETE',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().deleted).toBe(true);
@@ -392,7 +392,7 @@ describe('Webhook Config API', () => {
     // Verify it's gone
     const getResponse = await app.inject({
       method: 'GET',
-      url: '/api/v1/accounts/wa-samur/webhook',
+      url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(getResponse.statusCode).toBe(404);
   });
@@ -461,7 +461,7 @@ describe('POST /api/v1/accounts', () => {
       method: 'POST',
       url: '/api/v1/accounts',
       payload: {
-        id: 'wa-samur',
+        id: 'wa-acme',
         alias: 'Duplicate',
         channel: 'whatsapp',
         provider: 'wwebjs-api',

@@ -4,18 +4,18 @@ import type { ChannelAccount } from '../../../src/domain/accounts/channel-accoun
 
 function makeAccount(overrides: Partial<ChannelAccount> = {}): ChannelAccount {
   return {
-    id: 'wa-samur',
-    alias: 'SAMUR WhatsApp',
+    id: 'wa-acme',
+    alias: 'Acme WhatsApp',
     channel: 'whatsapp',
     provider: 'wwebjs-api',
     status: 'active',
     identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
-    credentialsRef: 'WWEBJS_SAMUR',
+    credentialsRef: 'WWEBJS_ACME',
     providerConfig: {},
     metadata: {
-      owner: 'global-emergency',
+      owner: 'acme-corp',
       environment: 'production',
-      tags: ['emergency', 'samur', 'madrid'],
+      tags: ['support', 'acme'],
     },
     ...overrides,
   };
@@ -35,14 +35,14 @@ describe('matchesRoutingCriteria', () => {
 
   it('should match by owner', () => {
     const account = makeAccount();
-    expect(matchesRoutingCriteria(account, { owner: 'global-emergency' })).toBe(true);
-    expect(matchesRoutingCriteria(account, { owner: 'patroltech' })).toBe(false);
+    expect(matchesRoutingCriteria(account, { owner: 'acme-corp' })).toBe(true);
+    expect(matchesRoutingCriteria(account, { owner: 'test-org' })).toBe(false);
   });
 
   it('should match by tags', () => {
     const account = makeAccount();
-    expect(matchesRoutingCriteria(account, { tags: ['emergency'] })).toBe(true);
-    expect(matchesRoutingCriteria(account, { tags: ['emergency', 'samur'] })).toBe(true);
+    expect(matchesRoutingCriteria(account, { tags: ['support'] })).toBe(true);
+    expect(matchesRoutingCriteria(account, { tags: ['support', 'acme'] })).toBe(true);
     expect(matchesRoutingCriteria(account, { tags: ['nonexistent'] })).toBe(false);
   });
 
@@ -51,8 +51,8 @@ describe('matchesRoutingCriteria', () => {
     expect(
       matchesRoutingCriteria(account, {
         channel: 'whatsapp',
-        owner: 'global-emergency',
-        tags: ['samur'],
+        owner: 'acme-corp',
+        tags: ['acme'],
       }),
     ).toBe(true);
 

@@ -71,7 +71,7 @@ export const sendMessageBodySchema = {
   properties: {
     from: {
       type: 'string' as const,
-      description: 'Account ID to send from (e.g. "wa-samur")',
+      description: 'Account ID to send from (e.g. "wa-acme")',
     },
     routing: {
       type: 'object' as const,
@@ -116,14 +116,14 @@ export const sendMessageBodySchema = {
   required: ['to', 'content'] as const,
   examples: [
     {
-      from: 'wa-samur',
+      from: 'wa-acme',
       to: '+34612345678',
       content: {
         type: 'text',
         body: 'Alerta: nuevo DEA registrado en tu zona',
       },
       metadata: {
-        source: 'deamap',
+        source: 'alerts',
         correlationId: 'abc-123',
       },
     },
@@ -190,7 +190,7 @@ export const errorResponseSchema = {
 export const createAccountBodySchema = {
   type: 'object' as const,
   properties: {
-    id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-samur")' },
+    id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-acme")' },
     alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: {

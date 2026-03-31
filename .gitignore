@@ -3,6 +3,7 @@ dist/
 data/
 /config/
 .env.local
+qr-*.png
 *.log
 .DS_Store
 coverage/

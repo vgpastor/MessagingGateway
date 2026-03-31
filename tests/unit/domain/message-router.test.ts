@@ -7,18 +7,18 @@ import type { MessagingPort } from '../../../src/domain/messaging/messaging.port
 import { AccountNotFoundError, AccountUnavailableError } from '../../../src/domain/errors.js';
 
 const activeAccount: ChannelAccount = {
-  id: 'wa-samur',
-  alias: 'SAMUR WhatsApp',
+  id: 'wa-acme',
+  alias: 'Acme WhatsApp',
   channel: 'whatsapp',
   provider: 'wwebjs-api',
   status: 'active',
   identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
-  credentialsRef: 'WWEBJS_SAMUR',
+  credentialsRef: 'WWEBJS_ACME',
   providerConfig: { baseUrl: 'http://localhost:3001' },
   metadata: {
-    owner: 'global-emergency',
+    owner: 'acme-corp',
     environment: 'production',
-    tags: ['emergency', 'samur'],
+    tags: ['support', 'acme'],
   },
 };
 
@@ -69,19 +69,19 @@ describe('MessageRouterService', () => {
     vi.mocked(mockRepository.findById).mockResolvedValue(activeAccount);
 
     const result = await router.send({
-      fromAccountId: 'wa-samur',
+      fromAccountId: 'wa-acme',
       to: '+34612345678',
       content: { type: 'text', body: 'Hello' },
     });
 
     expect(result.status).toBe('sent');
     expect(result.messageId).toBe('msg-123');
-    expect(mockRepository.findById).toHaveBeenCalledWith('wa-samur');
+    expect(mockRepository.findById).toHaveBeenCalledWith('wa-acme');
     expect(mockAdapterFactory.create).toHaveBeenCalledWith(activeAccount);
     expect(mockAdapter.sendMessage).toHaveBeenCalledWith({
       to: '+34612345678',
       content: { type: 'text', body: 'Hello' },
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       replyToMessageId: undefined,
       metadata: undefined,
     });
@@ -91,7 +91,7 @@ describe('MessageRouterService', () => {
     vi.mocked(mockRepository.findByRoutingRules).mockResolvedValue(activeAccount);
 
     const result = await router.send({
-      routing: { channel: 'whatsapp', owner: 'global-emergency' },
+      routing: { channel: 'whatsapp', owner: 'acme-corp' },
       to: '+34612345678',
       content: { type: 'text', body: 'Hello' },
     });
@@ -99,7 +99,7 @@ describe('MessageRouterService', () => {
     expect(result.status).toBe('sent');
     expect(mockRepository.findByRoutingRules).toHaveBeenCalledWith({
       channel: 'whatsapp',
-      owner: 'global-emergency',
+      owner: 'acme-corp',
     });
   });
 

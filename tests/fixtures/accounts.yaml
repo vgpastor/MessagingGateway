@@ -1,101 +1,101 @@
 accounts:
   # === WHATSAPP ===
-  - id: wa-samur
-    alias: "SAMUR WhatsApp"
+  - id: wa-acme
+    alias: "Acme WhatsApp"
     channel: whatsapp
     provider: wwebjs-api
     identity:
-      phoneNumber: "+34600000001"
-    credentialsRef: WWEBJS_SAMUR
+      phoneNumber: "+14155550001"
+    credentialsRef: WWEBJS_ACME
     providerConfig:
-      baseUrl: http://wwebjs-samur:3001
-      sessionId: samur
+      baseUrl: http://wwebjs-acme:3001
+      sessionId: acme
     metadata:
-      owner: global-emergency
+      owner: acme-corp
       environment: production
-      tags: [emergency, samur, madrid]
+      tags: [acme, support]
 
-  - id: wa-patroltech
-    alias: "PatrolTech WhatsApp"
+  - id: wa-test
+    alias: "Test WhatsApp"
     channel: whatsapp
     provider: wwebjs-api
     identity:
-      phoneNumber: "+34600000002"
-    credentialsRef: WWEBJS_PATROLTECH
+      phoneNumber: "+14155550002"
+    credentialsRef: WWEBJS_TEST
     providerConfig:
-      baseUrl: http://wwebjs-patroltech:3002
-      sessionId: patroltech
+      baseUrl: http://wwebjs-test:3002
+      sessionId: test
     metadata:
-      owner: patroltech
+      owner: test-org
       environment: production
-      tags: [patroltech, security]
+      tags: [test, security]
 
-  - id: wa-globalemerg
-    alias: "Global Emergency WhatsApp"
+  - id: wa-demo
+    alias: "Demo WhatsApp"
     channel: whatsapp
     provider: wwebjs-api
     identity:
-      phoneNumber: "+34600000003"
-    credentialsRef: WWEBJS_GLOBALEMERG
+      phoneNumber: "+14155550003"
+    credentialsRef: WWEBJS_DEMO
     providerConfig:
-      baseUrl: http://wwebjs-globalemerg:3003
-      sessionId: globalemerg
+      baseUrl: http://wwebjs-demo:3003
+      sessionId: demo
     metadata:
-      owner: global-emergency
+      owner: demo-org
       environment: production
-      tags: [emergency, global]
+      tags: [demo, global]
 
-  - id: wa-vgpastor
-    alias: "VGPastor WhatsApp"
+  - id: wa-baileys
+    alias: "Baileys WhatsApp"
     channel: whatsapp
     provider: baileys
     identity:
       phoneNumber: "+14155550004"
-    credentialsRef: BAILEYS_VGPASTOR
+    credentialsRef: BAILEYS_TEST
     metadata:
-      owner: vgpastor
+      owner: test-org
       environment: production
-      tags: [vgpastor, whatsapp]
+      tags: [baileys, whatsapp]
 
   # === TELEGRAM ===
-  - id: tg-deamap-bot
-    alias: "DeaMap Alerts Bot"
+  - id: tg-alerts-bot
+    alias: "Alerts Bot"
     channel: telegram
     provider: telegram-bot-api
     identity:
       botUsername: test_alerts_bot
-    credentialsRef: TG_DEAMAP_ALERTS
+    credentialsRef: TG_ALERTS
     metadata:
-      owner: global-emergency
+      owner: test-org
       environment: production
-      tags: [deamap, alerts]
+      tags: [alerts, bot]
 
-  - id: tg-patroltech-bot
-    alias: "PatrolTech Bot"
+  - id: tg-support-bot
+    alias: "Support Bot"
     channel: telegram
     provider: telegram-bot-api
     identity:
       botUsername: test_support_bot
-    credentialsRef: TG_PATROLTECH_BOT
+    credentialsRef: TG_SUPPORT_BOT
     metadata:
-      owner: patroltech
+      owner: test-org
       environment: production
-      tags: [patroltech, bot]
+      tags: [support, bot]
 
   # === EMAIL ===
-  - id: email-patroltech-soporte
-    alias: "PatrolTech Soporte"
+  - id: email-support
+    alias: "Support Email"
     channel: email
     provider: brevo
     identity:
       address: support@example.com
     credentialsRef: BREVO_MAIN
     providerConfig:
-      senderName: "PatrolTech Soporte"
+      senderName: "Acme Support"
     metadata:
-      owner: patroltech
+      owner: acme-corp
       environment: production
-      tags: [patroltech, soporte]
+      tags: [support, email]
 
   - id: email-noreply
     alias: "No Reply"
@@ -105,9 +105,9 @@ accounts:
       address: noreply@example.com
     credentialsRef: BREVO_MAIN
     providerConfig:
-      senderName: "Global Emergency"
+      senderName: "Acme Corp"
     metadata:
-      owner: global-emergency
+      owner: acme-corp
       environment: production
       tags: [noreply, system]
 
@@ -117,23 +117,23 @@ accounts:
     channel: sms
     provider: twilio
     identity:
-      phoneNumber: "+34900000001"
+      phoneNumber: "+14155550010"
     credentialsRef: TWILIO_ALERTS
     providerConfig:
       accountSid: "${TWILIO_ALERTS_ACCOUNT_SID}"
     metadata:
-      owner: global-emergency
+      owner: acme-corp
       environment: production
       tags: [alerts, twilio]
 
-  - id: sms-patrol
-    alias: "SMS Patrol (MessageBird)"
+  - id: sms-support
+    alias: "SMS Support (MessageBird)"
     channel: sms
     provider: messagebird
     identity:
-      phoneNumber: "+34900000002"
-    credentialsRef: MESSAGEBIRD_PATROL
+      phoneNumber: "+14155550011"
+    credentialsRef: MESSAGEBIRD_SUPPORT
     metadata:
-      owner: patroltech
+      owner: acme-corp
       environment: production
-      tags: [patroltech, messagebird]
+      tags: [support, messagebird]

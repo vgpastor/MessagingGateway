@@ -8,18 +8,18 @@ import type { WwebjsInboundPayload } from '../../../src/adapters/whatsapp/wwebjs
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {
-  id: 'wa-samur',
-  alias: 'SAMUR WhatsApp',
+  id: 'wa-acme',
+  alias: 'Acme WhatsApp',
   channel: 'whatsapp',
   provider: 'wwebjs-api',
   status: 'active',
   identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
-  credentialsRef: 'WWEBJS_SAMUR',
+  credentialsRef: 'WWEBJS_ACME',
   providerConfig: { baseUrl: 'http://localhost:3001' },
   metadata: {
-    owner: 'global-emergency',
+    owner: 'acme-corp',
     environment: 'production',
-    tags: ['emergency', 'samur', 'madrid'],
+    tags: ['support', 'acme'],
   },
 };
 
@@ -249,7 +249,7 @@ describe('buildWhatsAppEnvelope', () => {
     const envelope = buildWhatsAppEnvelope(event, testAccount);
 
     expect(envelope.id).toMatch(/^msg_/);
-    expect(envelope.accountId).toBe('wa-samur');
+    expect(envelope.accountId).toBe('wa-acme');
     expect(envelope.channel).toBe('whatsapp');
     expect(envelope.direction).toBe('inbound');
     expect(envelope.conversationId).toBe('34699000001@c.us');
@@ -261,9 +261,9 @@ describe('buildWhatsAppEnvelope', () => {
     expect(envelope.contentSummary.hasMedia).toBe(false);
     expect(envelope.channelPayload).toBe(event);
     expect(envelope.gateway.adapterId).toBe('wwebjs-api');
-    expect(envelope.gateway.account.id).toBe('wa-samur');
-    expect(envelope.gateway.account.alias).toBe('SAMUR WhatsApp');
-    expect(envelope.gateway.account.owner).toBe('global-emergency');
-    expect(envelope.gateway.account.tags).toEqual(['emergency', 'samur', 'madrid']);
+    expect(envelope.gateway.account.id).toBe('wa-acme');
+    expect(envelope.gateway.account.alias).toBe('Acme WhatsApp');
+    expect(envelope.gateway.account.owner).toBe('acme-corp');
+    expect(envelope.gateway.account.tags).toEqual(['support', 'acme']);
   });
 });

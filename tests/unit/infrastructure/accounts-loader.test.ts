@@ -16,20 +16,20 @@ describe('loadAccountsFromYaml', () => {
 
     expect(waAccounts).toHaveLength(4);
 
-    const samur = waAccounts.find((a) => a.id === 'wa-samur');
-    expect(samur).toBeDefined();
-    expect(samur!.alias).toBe('SAMUR WhatsApp');
-    expect(samur!.provider).toBe('wwebjs-api');
-    expect(samur!.status).toBe('unchecked');
-    expect(samur!.identity).toEqual({
+    const acme = waAccounts.find((a) => a.id === 'wa-acme');
+    expect(acme).toBeDefined();
+    expect(acme!.alias).toBe('Acme WhatsApp');
+    expect(acme!.provider).toBe('wwebjs-api');
+    expect(acme!.status).toBe('unchecked');
+    expect(acme!.identity).toEqual({
       channel: 'whatsapp',
-      phoneNumber: '+34600000001',
+      phoneNumber: '+14155550001',
       wid: undefined,
     });
-    expect(samur!.credentialsRef).toBe('WWEBJS_SAMUR');
-    expect(samur!.providerConfig['baseUrl']).toBe('http://wwebjs-samur:3001');
-    expect(samur!.metadata.owner).toBe('global-emergency');
-    expect(samur!.metadata.tags).toContain('emergency');
+    expect(acme!.credentialsRef).toBe('WWEBJS_ACME');
+    expect(acme!.providerConfig['baseUrl']).toBe('http://wwebjs-acme:3001');
+    expect(acme!.metadata.owner).toBe('acme-corp');
+    expect(acme!.metadata.tags).toContain('acme');
   });
 
   it('should load Telegram accounts correctly', () => {
@@ -38,9 +38,9 @@ describe('loadAccountsFromYaml', () => {
 
     expect(tgAccounts.length).toBeGreaterThanOrEqual(2);
 
-    const deamap = tgAccounts.find((a) => a.id === 'tg-deamap-bot');
-    expect(deamap).toBeDefined();
-    expect(deamap!.identity).toEqual({
+    const alertsBot = tgAccounts.find((a) => a.id === 'tg-alerts-bot');
+    expect(alertsBot).toBeDefined();
+    expect(alertsBot!.identity).toEqual({
       channel: 'telegram',
       botId: undefined,
       botUsername: 'test_alerts_bot',
@@ -53,7 +53,7 @@ describe('loadAccountsFromYaml', () => {
 
     expect(emailAccounts.length).toBeGreaterThanOrEqual(2);
 
-    const soporte = emailAccounts.find((a) => a.id === 'email-patroltech-soporte');
+    const soporte = emailAccounts.find((a) => a.id === 'email-support');
     expect(soporte).toBeDefined();
     expect(soporte!.identity).toEqual({
       channel: 'email',
@@ -78,8 +78,8 @@ describe('loadAccountsFromYaml', () => {
 
   it('should set default webhook paths', () => {
     const accounts = loadAccountsFromYaml(yamlPath);
-    const samur = accounts.find((a) => a.id === 'wa-samur');
-    expect(samur!.metadata.webhookPath).toBe('/webhooks/whatsapp/wa-samur');
+    const acme = accounts.find((a) => a.id === 'wa-acme');
+    expect(acme!.metadata.webhookPath).toBe('/webhooks/whatsapp/wa-acme');
   });
 
   it('should not include credential values in accounts', () => {

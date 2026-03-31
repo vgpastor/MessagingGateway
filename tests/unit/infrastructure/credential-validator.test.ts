@@ -20,18 +20,18 @@ function makeRegistry(): HealthCheckerRegistry {
 
 function makeAccount(overrides: Partial<ChannelAccount> = {}): ChannelAccount {
   return {
-    id: 'wa-samur',
-    alias: 'SAMUR WhatsApp',
+    id: 'wa-acme',
+    alias: 'Acme WhatsApp',
     channel: 'whatsapp',
     provider: 'wwebjs-api',
     status: 'unchecked',
     identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
-    credentialsRef: 'WWEBJS_SAMUR',
-    providerConfig: { baseUrl: 'http://wwebjs-samur:3001' },
+    credentialsRef: 'WWEBJS_ACME',
+    providerConfig: { baseUrl: 'http://wwebjs-acme:3001' },
     metadata: {
-      owner: 'global-emergency',
+      owner: 'acme-corp',
       environment: 'production',
-      tags: ['emergency', 'samur'],
+      tags: ['support', 'acme'],
     },
     ...overrides,
   };
@@ -61,7 +61,7 @@ describe('CredentialValidator', () => {
   });
 
   it('should return active when wwebjs /ping responds 200', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'real-key');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'real-key');
     vi.mocked(fetch).mockResolvedValue(new Response('{"success":true,"message":"pong"}', { status: 200 }));
 
     const result = await validator.validate(makeAccount());
@@ -69,7 +69,7 @@ describe('CredentialValidator', () => {
     expect(result.status).toBe('active');
     expect(result.credentialsConfigured).toBe(true);
     expect(fetch).toHaveBeenCalledWith(
-      'http://wwebjs-samur:3001/ping',
+      'http://wwebjs-acme:3001/ping',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -80,7 +80,7 @@ describe('CredentialValidator', () => {
   });
 
   it('should return auth_expired when wwebjs API responds 401', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'bad-key');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'bad-key');
     vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }));
 
     const result = await validator.validate(makeAccount());
@@ -89,7 +89,7 @@ describe('CredentialValidator', () => {
   });
 
   it('should use baseUrl from connection string and extract apiKey from sessionId:key format', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'samur:real-key@external-host:4000');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'user:real-key@external-host:4000');
     vi.mocked(fetch).mockResolvedValue(new Response('{"success":true,"message":"pong"}', { status: 200 }));
 
     const result = await validator.validate(makeAccount());
@@ -107,7 +107,7 @@ describe('CredentialValidator', () => {
   });
 
   it('should return error when wwebjs API responds 500', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'some-key');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'some-key');
     vi.mocked(fetch).mockResolvedValue(new Response('Server Error', { status: 500 }));
 
     const result = await validator.validate(makeAccount());
@@ -116,7 +116,7 @@ describe('CredentialValidator', () => {
   });
 
   it('should return error when fetch throws (network error)', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'some-key');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'some-key');
     vi.mocked(fetch).mockRejectedValue(new Error('ECONNREFUSED'));
 
     const result = await validator.validate(makeAccount());
@@ -127,14 +127,14 @@ describe('CredentialValidator', () => {
   // --- telegram-bot-api ---
 
   it('should return active when Telegram getMe responds 200', async () => {
-    vi.stubEnv('TG_DEAMAP_ALERTS_TOKEN', '123456:AAF-realtoken');
+    vi.stubEnv('TG_ALERTS_TOKEN', '123456:AAF-realtoken');
     vi.mocked(fetch).mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
 
     const result = await validator.validate(makeAccount({
-      id: 'tg-deamap-bot',
+      id: 'tg-alerts-bot',
       channel: 'telegram',
       provider: 'telegram-bot-api',
-      credentialsRef: 'TG_DEAMAP_ALERTS',
+      credentialsRef: 'TG_ALERTS',
       identity: { channel: 'telegram', botUsername: 'test_alerts_bot' },
       providerConfig: {},
     }));
@@ -147,12 +147,12 @@ describe('CredentialValidator', () => {
   });
 
   it('should return auth_expired when Telegram responds 401', async () => {
-    vi.stubEnv('TG_DEAMAP_ALERTS_TOKEN', 'bad-token');
+    vi.stubEnv('TG_ALERTS_TOKEN', 'bad-token');
     vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }));
 
     const result = await validator.validate(makeAccount({
       provider: 'telegram-bot-api',
-      credentialsRef: 'TG_DEAMAP_ALERTS',
+      credentialsRef: 'TG_ALERTS',
       identity: { channel: 'telegram', botUsername: 'test_alerts_bot' },
       providerConfig: {},
     }));
@@ -162,7 +162,7 @@ describe('CredentialValidator', () => {
   it('should return unchecked when Telegram token is missing', async () => {
     const result = await validator.validate(makeAccount({
       provider: 'telegram-bot-api',
-      credentialsRef: 'TG_DEAMAP_ALERTS',
+      credentialsRef: 'TG_ALERTS',
       identity: { channel: 'telegram', botUsername: 'test_alerts_bot' },
       providerConfig: {},
     }));
@@ -193,13 +193,13 @@ describe('CredentialValidator', () => {
   // --- twilio ---
 
   it('should return active when Twilio responds 200', async () => {
-    vi.stubEnv('TWILIO_ALERTS_AUTH_TOKEN', 'real-auth-token');
-    vi.stubEnv('TWILIO_ALERTS_ACCOUNT_SID', 'AC1234567890');
+    vi.stubEnv('TWILIO_DEFAULT_AUTH_TOKEN', 'real-auth-token');
+    vi.stubEnv('TWILIO_DEFAULT_ACCOUNT_SID', 'AC1234567890');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
     const result = await validator.validate(makeAccount({
       provider: 'twilio',
-      credentialsRef: 'TWILIO_ALERTS',
+      credentialsRef: 'TWILIO_DEFAULT',
       identity: { channel: 'sms', phoneNumber: '+34900000001' },
       providerConfig: {},
     }));
@@ -212,11 +212,11 @@ describe('CredentialValidator', () => {
   });
 
   it('should return unchecked when Twilio account SID is missing', async () => {
-    vi.stubEnv('TWILIO_ALERTS_AUTH_TOKEN', 'real-auth-token');
+    vi.stubEnv('TWILIO_DEFAULT_AUTH_TOKEN', 'real-auth-token');
 
     const result = await validator.validate(makeAccount({
       provider: 'twilio',
-      credentialsRef: 'TWILIO_ALERTS',
+      credentialsRef: 'TWILIO_DEFAULT',
       identity: { channel: 'sms', phoneNumber: '+34900000001' },
       providerConfig: {},
     }));
@@ -227,12 +227,12 @@ describe('CredentialValidator', () => {
   // --- messagebird ---
 
   it('should return active when MessageBird responds 200', async () => {
-    vi.stubEnv('MESSAGEBIRD_PATROL_API_KEY', 'real-api-key');
+    vi.stubEnv('MESSAGEBIRD_DEFAULT_API_KEY', 'real-api-key');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
     const result = await validator.validate(makeAccount({
       provider: 'messagebird',
-      credentialsRef: 'MESSAGEBIRD_PATROL',
+      credentialsRef: 'MESSAGEBIRD_DEFAULT',
       identity: { channel: 'sms', phoneNumber: '+34900000002' },
       providerConfig: {},
     }));
@@ -277,17 +277,17 @@ describe('CredentialValidator.validateAll', () => {
   });
 
   it('should validate all unchecked accounts in parallel', async () => {
-    vi.stubEnv('WWEBJS_SAMUR_API_KEY', 'key1');
-    vi.stubEnv('TG_DEAMAP_ALERTS_TOKEN', 'token1');
+    vi.stubEnv('WWEBJS_ACME_API_KEY', 'key1');
+    vi.stubEnv('TG_ALERTS_TOKEN', 'token1');
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 200 }));
 
     const accounts = [
       makeAccount(),
       makeAccount({
-        id: 'tg-deamap-bot',
+        id: 'tg-alerts-bot',
         channel: 'telegram',
         provider: 'telegram-bot-api',
-        credentialsRef: 'TG_DEAMAP_ALERTS',
+        credentialsRef: 'TG_ALERTS',
         identity: { channel: 'telegram', botUsername: 'test_alerts_bot' },
         providerConfig: {},
       }),

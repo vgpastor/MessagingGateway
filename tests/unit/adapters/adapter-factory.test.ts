@@ -38,7 +38,7 @@ describe('AdapterFactory', () => {
 
     const adapter = factory.create(testAccount);
     expect(adapter).toBeInstanceOf(MockAdapter);
-    expect((adapter as MockAdapter).providerConfig).toEqual({ baseUrl: 'http://localhost:3001' });
+    expect((adapter as MockAdapter).providerConfig).toEqual({ baseUrl: 'http://localhost:3001', accountId: 'wa-test' });
     expect((adapter as MockAdapter).credentialsRef).toBe('TEST_CRED');
   });
 

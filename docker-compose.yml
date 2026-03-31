@@ -2,8 +2,10 @@ services:
   gateway:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "${HOST_PORT:-3123}:3000"
     env_file:
+      - path: .env
+        required: true
       - path: .env.local
         required: false
     environment:

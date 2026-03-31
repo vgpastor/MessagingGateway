@@ -382,7 +382,7 @@ export async function accountsController(
         properties: {
           phoneNumber: {
             type: 'string',
-            description: 'Phone number with country code (e.g. "+14155550004"). If omitted, uses the number from account identity.',
+            description: 'Phone number with country code (e.g. "+34600000001"). If omitted, uses the number from account identity.',
           },
         },
       },

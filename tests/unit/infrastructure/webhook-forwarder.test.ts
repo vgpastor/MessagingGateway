@@ -13,7 +13,7 @@ function makeRepo(config?: WebhookConfig): WebhookConfigRepository {
   };
 }
 
-function makeEnvelope(accountId = 'wa-samur'): UnifiedEnvelope {
+function makeEnvelope(accountId = 'wa-acme'): UnifiedEnvelope {
   return {
     id: 'msg_123',
     accountId,
@@ -44,7 +44,7 @@ describe('WebhookForwarder', () => {
 
   it('should forward to per-account webhook when configured', async () => {
     const repo = makeRepo({
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       url: 'https://account-hook.example.com',
       secret: 'acc-secret',
       events: ['*'],
@@ -83,7 +83,7 @@ describe('WebhookForwarder', () => {
 
   it('should fall back to global when per-account is disabled', async () => {
     const repo = makeRepo({
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       url: 'https://disabled-hook.example.com',
       events: ['*'],
       enabled: false,
@@ -102,7 +102,7 @@ describe('WebhookForwarder', () => {
 
   it('should not forward when event type does not match', async () => {
     const repo = makeRepo({
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['message.status'], // only status events
       enabled: true,
@@ -131,7 +131,7 @@ describe('WebhookForwarder', () => {
 
   it('should include correct headers', async () => {
     const repo = makeRepo({
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['*'],
       enabled: true,
@@ -149,7 +149,7 @@ describe('WebhookForwarder', () => {
           'Content-Type': 'application/json',
           'X-UMG-Event': 'message.inbound',
           'X-UMG-Channel': 'whatsapp',
-          'X-UMG-Account': 'wa-samur',
+          'X-UMG-Account': 'wa-acme',
         }),
       }),
     );
@@ -158,7 +158,7 @@ describe('WebhookForwarder', () => {
   it('should not throw when fetch fails', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('Network error'));
     const repo = makeRepo({
-      accountId: 'wa-samur',
+      accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['*'],
       enabled: true,
