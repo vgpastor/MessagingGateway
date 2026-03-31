@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../../src/infrastructure/config/accounts.loader.js';
 
 describe('loadAccountsFromYaml', () => {
-  const yamlPath = resolve(process.cwd(), 'config/accounts.yaml');
+  const yamlPath = resolve(process.cwd(), 'tests/fixtures/accounts.yaml');
 
   it('should load accounts from YAML file', () => {
     const accounts = loadAccountsFromYaml(yamlPath);
@@ -14,7 +14,7 @@ describe('loadAccountsFromYaml', () => {
     const accounts = loadAccountsFromYaml(yamlPath);
     const waAccounts = accounts.filter((a) => a.channel === 'whatsapp');
 
-    expect(waAccounts).toHaveLength(3);
+    expect(waAccounts).toHaveLength(4);
 
     const samur = waAccounts.find((a) => a.id === 'wa-samur');
     expect(samur).toBeDefined();

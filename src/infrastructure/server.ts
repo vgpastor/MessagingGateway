@@ -9,6 +9,7 @@ import type { AdapterFactory } from '../adapters/adapter.factory.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
 import type { CredentialValidator } from './credential-validator.js';
 import type { HealthCheckScheduler } from './health-check-scheduler.js';
+import type { ConnectionManagerRegistry } from './connection-manager.registry.js';
 import { healthController } from './api/health/health.controller.js';
 import { accountsController } from './api/accounts/accounts.controller.js';
 import { sendController } from './api/messaging/send.controller.js';
@@ -26,6 +27,7 @@ export interface ServerDeps {
   adapterFactory: AdapterFactory;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
+  connectionManagerRegistry: ConnectionManagerRegistry;
   webhookForwarder: WebhookForwarder;
   port: number;
   logLevel: string;
@@ -46,6 +48,16 @@ export async function createServer(deps: ServerDeps) {
       : {
           level: deps.logLevel,
         },
+  });
+
+  // Accept empty JSON body as {} (POST endpoints with optional body)
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    try {
+      done(null, (body as string).length > 0 ? JSON.parse(body as string) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
   });
 
   // CORS — allow external tools to consume the API and OpenAPI spec
@@ -96,12 +108,13 @@ export async function createServer(deps: ServerDeps) {
   // Health
   await fastify.register(healthController);
 
-  // Accounts
+  // Accounts (includes connection management: connect, pair, disconnect)
   await fastify.register(
     async (instance) => accountsController(instance, {
       accountRepository: deps.accountRepository,
       credentialValidator: deps.credentialValidator,
       healthCheckScheduler: deps.healthCheckScheduler,
+      connectionManagerRegistry: deps.connectionManagerRegistry,
     }),
   );
 

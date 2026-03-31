@@ -6,6 +6,13 @@ import { AdapterFactory } from './adapters/adapter.factory.js';
 import { HealthCheckerRegistry } from './adapters/health-checker.registry.js';
 import { WwebjsApiAdapter } from './adapters/whatsapp/wwebjs-api/wwebjs.adapter.js';
 import { WwebjsHealthChecker } from './adapters/whatsapp/wwebjs-api/wwebjs.health-checker.js';
+import { BaileysAdapter } from './adapters/whatsapp/baileys/baileys.adapter.js';
+import { BaileysHealthChecker } from './adapters/whatsapp/baileys/baileys.health-checker.js';
+import { BaileysConnectionManager } from './adapters/whatsapp/baileys/baileys.connection-manager.js';
+import { baileysSocketManager } from './adapters/whatsapp/baileys/baileys-socket.manager.js';
+import { BaileysWebhookAdapter } from './adapters/whatsapp/baileys/baileys-webhook.adapter.js';
+import { mapBaileysToWhatsAppEvent } from './adapters/whatsapp/baileys/baileys.mapper.js';
+import { parseBaileysConfig } from './adapters/whatsapp/baileys/baileys.types.js';
 import { TelegramBotHealthChecker } from './adapters/telegram/bot-api/telegram-bot.health-checker.js';
 import { BrevoHealthChecker } from './adapters/email/brevo/brevo.health-checker.js';
 import { TwilioHealthChecker } from './adapters/sms/twilio/twilio.health-checker.js';
@@ -15,6 +22,7 @@ import { WebhookForwarder } from './infrastructure/webhook-forwarder.js';
 import { FileWebhookConfigStore } from './infrastructure/webhooks/file-webhook-config.store.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
+import { ConnectionManagerRegistry } from './infrastructure/connection-manager.registry.js';
 import { createServer } from './infrastructure/server.js';
 
 async function main() {
@@ -29,6 +37,7 @@ async function main() {
   healthCheckerRegistry.register('brevo', new BrevoHealthChecker());
   healthCheckerRegistry.register('twilio', new TwilioHealthChecker());
   healthCheckerRegistry.register('messagebird', new MessageBirdHealthChecker());
+  healthCheckerRegistry.register('baileys', new BaileysHealthChecker());
 
   // 3. Validate credentials against real provider APIs
   const credentialValidator = new CredentialValidator(healthCheckerRegistry);
@@ -42,12 +51,13 @@ async function main() {
   console.log(`Validation complete: ${active} active, ${authExpired} auth_expired, ${unchecked} unchecked, ${errored} error`);
 
   // 4. Create repository (with persistence back to YAML)
-  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'config/accounts.yaml');
+  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
   const accountRepository = new InMemoryAccountRepository(accounts, accountsYamlPath);
 
   // 5. Create adapter factory and register adapters
   const adapterFactory = new AdapterFactory();
   adapterFactory.register('wwebjs-api', WwebjsApiAdapter);
+  adapterFactory.register('baileys', BaileysAdapter);
 
   // 6. Create services
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
@@ -63,7 +73,11 @@ async function main() {
   const webhookConfigs = await webhookConfigRepo.findAll();
   console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
 
-  // 7. Create health check scheduler
+  // 7. Create connection manager registry
+  const connectionManagerRegistry = new ConnectionManagerRegistry();
+  connectionManagerRegistry.register(new BaileysConnectionManager());
+
+  // 8. Create health check scheduler
   const healthCheckIntervalMs = parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10);
   const healthCheckScheduler = new HealthCheckScheduler(
     accountRepository,
@@ -71,7 +85,7 @@ async function main() {
     { intervalMs: healthCheckIntervalMs },
   );
 
-  // 8. Create and start server
+  // 9. Create and start server
   const server = await createServer({
     accountRepository,
     webhookConfigRepo,
@@ -79,6 +93,7 @@ async function main() {
     adapterFactory,
     credentialValidator,
     healthCheckScheduler,
+    connectionManagerRegistry,
     webhookForwarder,
     port: envConfig.port,
     logLevel: envConfig.logLevel,
@@ -88,6 +103,36 @@ async function main() {
     await server.listen({ port: envConfig.port, host: '0.0.0.0' });
     console.log(`Unified Messaging Gateway listening on port ${envConfig.port}`);
     console.log(`Swagger UI available at http://localhost:${envConfig.port}/docs`);
+
+    // Connect Baileys accounts and register inbound message handlers
+    const baileysAccounts = accounts.filter(
+      (a) => a.provider === 'baileys' && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
+    );
+
+    for (const account of baileysAccounts) {
+      const config = parseBaileysConfig(account.providerConfig);
+      try {
+        await baileysSocketManager.connect(account.id, config);
+        const baileysWebhookAdapter = new BaileysWebhookAdapter();
+
+        baileysSocketManager.onMessage(account.id, async (event) => {
+          for (const msg of event.messages) {
+            if (msg.key?.fromMe) continue;
+            try {
+              const waEvent = mapBaileysToWhatsAppEvent(msg);
+              const envelope = baileysWebhookAdapter.toEnvelope(waEvent, account);
+              await webhookForwarder.forward(envelope);
+            } catch (err) {
+              console.error(`[baileys:${account.id}] Failed to process inbound message:`, err);
+            }
+          }
+        });
+
+        console.log(`[baileys:${account.id}] Connected and listening for messages`);
+      } catch (err) {
+        console.error(`[baileys:${account.id}] Failed to connect:`, err);
+      }
+    }
 
     // Start periodic health checks after server is ready
     healthCheckScheduler.start();

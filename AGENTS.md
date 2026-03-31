@@ -53,12 +53,13 @@ Never commit code that fails any of these steps.
 ## Docker
 
 - Multi-stage Dockerfile: deps → build → production
-- `config/accounts.yaml` is COPY'd into the image — it must exist
 - `.dockerignore` excludes tests, .github, docs — keep it updated
-- `data/` directory is the writable volume for runtime state (webhook configs)
+- `data/` directory is the writable volume for runtime state (accounts config, webhook configs, Baileys auth)
+- Accounts are managed via the API and persisted to `data/accounts.yaml`
 
 ## File Conventions
 
-- Config files: `config/` directory
 - Environment: `.env.local` (gitignored), `.env.example` (committed)
+- `config/` directory is gitignored — no config files are committed
+- `data/` directory is gitignored — runtime state only (Docker volume)
 - Never commit `.env.local` or files containing real secrets/credentials
