@@ -35,6 +35,7 @@ const PROVIDER_CREDENTIAL_SUFFIXES: Record<string, string> = {
   'telegram-bot-api': 'TOKEN',
   'brevo': 'API_KEY',
   'ses': 'ACCESS_KEY_ID',
+  'baileys': 'AUTH_DIR',
   'twilio': 'AUTH_TOKEN',
   'messagebird': 'API_KEY',
 };

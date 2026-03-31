@@ -9,11 +9,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      ACCOUNTS_CONFIG_PATH: /app/config/accounts.yaml
+      ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
     volumes:
-      # Mount the config directory (not a single file) to avoid Docker
-      # creating accounts.yaml as a directory when the host file is absent.
-      - ./config:/app/config
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s

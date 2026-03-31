@@ -154,6 +154,16 @@ export const accountResponseSchema = {
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
+    connection: {
+      type: 'object' as const,
+      description: 'Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.',
+      properties: {
+        managed: { type: 'boolean' as const, description: 'Whether this provider uses managed connections' },
+        status: { type: 'string' as const, enum: ['disconnected', 'connecting', 'connected'] },
+        qr: { type: 'string' as const, description: 'QR code data string (render with a QR library to scan)' },
+      },
+      required: ['managed', 'status'] as const,
+    },
     metadata: {
       type: 'object' as const,
       properties: {
@@ -185,7 +195,7 @@ export const createAccountBodySchema = {
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: {
       type: 'string' as const,
-      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
+      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'baileys', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
     },
     identity: { type: 'object' as const, additionalProperties: true, description: 'Channel-specific identity (e.g. phoneNumber for WhatsApp)' },
     credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
@@ -218,7 +228,7 @@ export const updateAccountBodySchema = {
     alias: { type: 'string' as const, minLength: 1 },
     provider: {
       type: 'string' as const,
-      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
+      enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'baileys', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],
     },
     identity: { type: 'object' as const, additionalProperties: true },
     credentialsRef: { type: 'string' as const, minLength: 1 },

@@ -8,6 +8,7 @@ import { HealthCheckerRegistry } from '../../src/adapters/health-checker.registr
 import { MessageRouterService } from '../../src/domain/routing/message-router.service.js';
 import { WebhookForwarder } from '../../src/infrastructure/webhook-forwarder.js';
 import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
+import { ConnectionManagerRegistry } from '../../src/infrastructure/connection-manager.registry.js';
 import { createServer } from '../../src/infrastructure/server.js';
 import type { WebhookConfig, WebhookConfigInput } from '../../src/domain/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../src/domain/webhooks/webhook-config.repository.js';
@@ -34,7 +35,7 @@ let app: FastifyInstance;
 
 beforeAll(async () => {
   const accounts = loadAccountsFromYaml(
-    resolve(process.cwd(), 'config/accounts.yaml'),
+    resolve(process.cwd(), 'tests/fixtures/accounts.yaml'),
   );
   const accountRepository = new InMemoryAccountRepository(accounts);
   const adapterFactory = new AdapterFactory();
@@ -43,6 +44,7 @@ beforeAll(async () => {
   const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
+  const connectionManagerRegistry = new ConnectionManagerRegistry();
 
   app = await createServer({
     accountRepository,
@@ -50,6 +52,7 @@ beforeAll(async () => {
     messageRouter,
     adapterFactory,
     credentialValidator,
+    connectionManagerRegistry,
     webhookForwarder,
     port: 0,
     logLevel: 'silent',
@@ -103,7 +106,7 @@ describe('GET /api/v1/accounts', () => {
     expect(response.statusCode).toBe(200);
 
     const accounts = response.json();
-    expect(accounts.length).toBe(3);
+    expect(accounts.length).toBe(4);
     for (const account of accounts) {
       expect(account.channel).toBe('whatsapp');
     }

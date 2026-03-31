@@ -20,7 +20,7 @@ export async function whatsappWebhookController(
     '/webhooks/whatsapp/:accountId/inbound',
     {
       schema: {
-        description: 'Receive inbound WhatsApp messages from wwebjs-api',
+        description: 'Receive inbound WhatsApp messages from external HTTP providers (wwebjs-api, evolution-api, etc.)',
         tags: ['Webhooks'],
         params: {
           type: 'object',
@@ -55,6 +55,16 @@ export async function whatsappWebhookController(
           error: 'Bad Request',
           code: 'CHANNEL_MISMATCH',
           message: `Account '${accountId}' is not a WhatsApp account`,
+        });
+      }
+
+      // Baileys accounts receive messages internally via the socket,
+      // not through external HTTP webhooks.
+      if (account.provider === 'baileys') {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          code: 'INTERNAL_PROVIDER',
+          message: `Account '${accountId}' uses Baileys which receives messages internally. External webhook not supported.`,
         });
       }
 
