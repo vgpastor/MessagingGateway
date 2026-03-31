@@ -1,19 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { ChannelType, ProviderType } from '../../../domain/messaging/channel.types.js';
-import type { AccountIdentity } from '../../../domain/accounts/account-identity.js';
-import type { CredentialValidator } from '../../credential-validator.js';
-import type { HealthCheckScheduler } from '../../health-check-scheduler.js';
-import type { ConnectionManagerRegistry } from '../../connection-manager.registry.js';
-import { accountSchema } from '../../config/accounts.schema.js';
-import { buildDefaultIdentity } from '../../config/accounts.loader.js';
+import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
+import type { ChannelAccount } from '../../core/accounts/channel-account.js';
+import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
+import type { AccountIdentity } from '../../core/accounts/account-identity.js';
+import type { CredentialValidator } from '../../infrastructure/credential-validator.js';
+import type { HealthCheckScheduler } from '../../infrastructure/health-check-scheduler.js';
+import type { ConnectionManagerRegistry } from '../../infrastructure/connection-manager.registry.js';
+import { accountSchema } from '../../infrastructure/config/accounts.schema.js';
+import { buildDefaultIdentity } from '../../infrastructure/config/accounts.loader.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
   createAccountBodySchema,
   updateAccountBodySchema,
-} from '../schemas.js';
+} from './schemas.js';
 
 export interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;

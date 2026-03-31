@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
-import { WwebjsWebhookAdapter } from '../../../adapters/whatsapp/wwebjs-api/wwebjs-webhook.adapter.js';
-import type { WwebjsInboundPayload, WwebjsStatusPayload } from '../../../adapters/whatsapp/wwebjs-api/wwebjs.types.js';
-import type { WebhookForwarder } from '../../webhook-forwarder.js';
+import type { ChannelAccountRepository } from '../../../core/accounts/channel-account.repository.js';
+import { WwebjsWebhookAdapter } from '../../../integrations/whatsapp/wwebjs-api/wwebjs-webhook.adapter.js';
+import type { WwebjsInboundPayload, WwebjsStatusPayload } from '../../../integrations/whatsapp/wwebjs-api/wwebjs.types.js';
+import type { WebhookForwarder } from '../../webhooks/webhook-forwarder.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
 
 interface WhatsAppWebhookDeps {

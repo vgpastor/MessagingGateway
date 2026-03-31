@@ -1,31 +1,7 @@
-export type MessageStatusType =
-  | 'queued'
-  | 'sent'
-  | 'delivered'
-  | 'read'
-  | 'played'
-  | 'failed'
-  | 'unknown';
-
-export interface MessageResult {
-  messageId: string;
-  status: MessageStatusType;
-  timestamp: Date;
-  providerMessageId?: string;
-  error?: string;
-}
-
-export interface MessageStatus {
-  messageId: string;
-  status: MessageStatusType;
-  timestamp: Date;
-  providerMessageId?: string;
-  failureReason?: string;
-}
-
-export interface MediaContent {
-  data: Buffer;
-  mimeType: string;
-  fileName?: string;
-  size: number;
-}
+// Re-export from core — this file exists for backwards compatibility
+export type {
+  MessageStatusType,
+  MessageResult,
+  MessageStatus,
+  MediaContent,
+} from '../../core/messaging/message-result.js';

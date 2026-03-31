@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { WebhookConfig, WebhookConfigInput } from '../../domain/webhooks/webhook-config.js';
-import type { WebhookConfigRepository } from '../../domain/webhooks/webhook-config.repository.js';
+import type { WebhookConfig, WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
+import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 
 export class FileWebhookConfigStore implements WebhookConfigRepository {
   private configs: Map<string, WebhookConfig>;

@@ -7,3 +7,5 @@ qr-*.png
 *.log
 .DS_Store
 coverage/
+.idea/
+.claude/

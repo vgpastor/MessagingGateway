@@ -1,6 +1,6 @@
 import type { ChannelAccount } from '../domain/accounts/channel-account.js';
 import type { ValidationResult } from '../domain/messaging/provider-health.port.js';
-import type { HealthCheckerRegistry } from '../adapters/health-checker.registry.js';
+import type { HealthCheckerRegistry } from '../integrations/health-checker.registry.js';
 
 export class CredentialValidator {
   constructor(private readonly registry: HealthCheckerRegistry) {}

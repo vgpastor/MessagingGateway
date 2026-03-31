@@ -124,6 +124,7 @@ export class BaileysSocketManager {
     });
 
     socket.ev.on('messages.upsert', (event) => {
+      console.log(`[baileys:${accountId}] messages.upsert: ${event.messages.length} message(s), type=${event.type}, handlers=${entry.messageHandlers.length}`);
       for (const handler of entry.messageHandlers) {
         handler(event);
       }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageRouterService } from '../../../src/domain/routing/message-router.service.js';
 import type { ChannelAccountRepository } from '../../../src/domain/accounts/channel-account.repository.js';
-import type { AdapterFactory } from '../../../src/adapters/adapter.factory.js';
+import type { AdapterFactory } from '../../../src/integrations/adapter.factory.js';
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
 import type { MessagingPort } from '../../../src/domain/messaging/messaging.port.js';
 import { AccountNotFoundError, AccountUnavailableError } from '../../../src/domain/errors.js';

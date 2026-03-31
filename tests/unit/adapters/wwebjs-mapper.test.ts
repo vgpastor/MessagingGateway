@@ -3,8 +3,8 @@ import {
   mapWwebjsToWhatsAppEvent,
   mapWhatsAppEventToContentSummary,
   buildWhatsAppEnvelope,
-} from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.mapper.js';
-import type { WwebjsInboundPayload } from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.types.js';
+} from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.mapper.js';
+import type { WwebjsInboundPayload } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.types.js';
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {

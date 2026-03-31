@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { FileWebhookConfigStore } from '../../../src/infrastructure/webhooks/file-webhook-config.store.js';
+import { FileWebhookConfigStore } from '../../../src/connections/webhooks/file-webhook-config.store.js';
 
 const TEST_DIR = resolve(process.cwd(), 'tmp-test-webhooks');
 const TEST_FILE = resolve(TEST_DIR, 'webhooks.json');

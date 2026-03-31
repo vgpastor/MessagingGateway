@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CredentialValidator } from '../../../src/infrastructure/credential-validator.js';
-import { HealthCheckerRegistry } from '../../../src/adapters/health-checker.registry.js';
-import { WwebjsHealthChecker } from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.health-checker.js';
-import { TelegramBotHealthChecker } from '../../../src/adapters/telegram/bot-api/telegram-bot.health-checker.js';
-import { BrevoHealthChecker } from '../../../src/adapters/email/brevo/brevo.health-checker.js';
-import { TwilioHealthChecker } from '../../../src/adapters/sms/twilio/twilio.health-checker.js';
-import { MessageBirdHealthChecker } from '../../../src/adapters/sms/messagebird/messagebird.health-checker.js';
+import { HealthCheckerRegistry } from '../../../src/integrations/health-checker.registry.js';
+import { WwebjsHealthChecker } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.health-checker.js';
+import { TelegramBotHealthChecker } from '../../../src/integrations/telegram/bot-api/telegram-bot.health-checker.js';
+import { BrevoHealthChecker } from '../../../src/integrations/email/brevo/brevo.health-checker.js';
+import { TwilioHealthChecker } from '../../../src/integrations/sms/twilio/twilio.health-checker.js';
+import { MessageBirdHealthChecker } from '../../../src/integrations/sms/messagebird/messagebird.health-checker.js';
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
 
 function makeRegistry(): HealthCheckerRegistry {

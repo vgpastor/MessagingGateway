@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
-import type { AdapterFactory } from '../../../adapters/adapter.factory.js';
-import { messageResultSchema, errorResponseSchema } from '../schemas.js';
+import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
+import type { AdapterFactory } from '../../integrations/adapter.factory.js';
+import { messageResultSchema, errorResponseSchema } from './schemas.js';
 
 interface StatusControllerDeps {
   accountRepository: ChannelAccountRepository;

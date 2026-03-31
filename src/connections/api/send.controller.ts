@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import type { MessageRouterService } from '../../../domain/routing/message-router.service.js';
-import type { SendMessageCommand } from '../../../domain/messaging/outbound-message.js';
-import { DomainError } from '../../../domain/errors.js';
-import { sendMessageBodySchema, messageResultSchema, errorResponseSchema } from '../schemas.js';
+import type { MessageRouterService } from '../../core/routing/message-router.service.js';
+import type { SendMessageCommand } from '../../core/messaging/outbound-message.js';
+import { DomainError } from '../../core/errors.js';
+import { sendMessageBodySchema, messageResultSchema, errorResponseSchema } from './schemas.js';
 
 interface SendControllerDeps {
   messageRouter: MessageRouterService;

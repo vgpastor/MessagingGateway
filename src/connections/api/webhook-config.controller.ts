@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import type { ChannelAccountRepository } from '../../../domain/accounts/channel-account.repository.js';
-import type { WebhookConfigRepository } from '../../../domain/webhooks/webhook-config.repository.js';
-import type { WebhookConfigInput } from '../../../domain/webhooks/webhook-config.js';
-import { errorResponseSchema } from '../schemas.js';
+import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
+import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
+import type { WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
+import { errorResponseSchema } from './schemas.js';
 
 interface WebhookConfigDeps {
   accountRepository: ChannelAccountRepository;

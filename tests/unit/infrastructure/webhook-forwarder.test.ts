@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { WebhookForwarder } from '../../../src/infrastructure/webhook-forwarder.js';
+import { WebhookForwarder } from '../../../src/connections/webhooks/webhook-forwarder.js';
 import type { WebhookConfig, WebhookConfigInput } from '../../../src/domain/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../../src/domain/webhooks/webhook-config.repository.js';
 import type { UnifiedEnvelope } from '../../../src/domain/messaging/unified-envelope.js';

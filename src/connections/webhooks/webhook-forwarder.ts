@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
-import type { UnifiedEnvelope } from '../domain/messaging/unified-envelope.js';
-import type { WebhookConfigRepository } from '../domain/webhooks/webhook-config.repository.js';
-import type { WebhookEventType } from '../domain/webhooks/webhook-config.js';
+import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
+import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
+import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
 
 export class WebhookForwarder {
   constructor(

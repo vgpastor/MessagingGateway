@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AdapterFactory } from '../../../src/adapters/adapter.factory.js';
+import { AdapterFactory } from '../../../src/integrations/adapter.factory.js';
 import { AdapterNotFoundError } from '../../../src/domain/errors.js';
 import type { MessagingPort } from '../../../src/domain/messaging/messaging.port.js';
 import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
