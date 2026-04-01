@@ -1,6 +1,18 @@
 # Unified Messaging Gateway
 
-A single API to send and receive messages across WhatsApp, Telegram, Email, and SMS. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](Dockerfile)
+[![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=node.js)](https://nodejs.org/)
+
+A single API to send and receive messages across **WhatsApp**, **Telegram**, **Email**, and **SMS**. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
+
+**Key highlights:**
+- One API to rule all messaging channels
+- Real-time events via WebSocket
+- Webhook forwarding to n8n, Make, or any HTTP endpoint
+- TypeScript SDK included (`@messaging-gateway/sdk`)
+- Docker-first, zero config to start
 
 ## Quickstart
 
@@ -217,15 +229,42 @@ src/
 └── infrastructure/ # Framework config (Fastify, env, persistence)
 ```
 
+## SDK
+
+The TypeScript SDK provides typed clients for REST and WebSocket:
+
+```bash
+npm install @messaging-gateway/sdk
+```
+
+```typescript
+import { MessagingGatewayClient, MessagingGatewayEvents } from '@messaging-gateway/sdk';
+
+// REST
+const client = new MessagingGatewayClient({ baseUrl: 'http://localhost:3123', apiKey: 'key' });
+await client.send({ from: 'wa-1', to: '+34...', content: { type: 'text', body: 'Hi' } });
+
+// WebSocket (real-time events)
+const events = new MessagingGatewayEvents({ baseUrl: 'http://localhost:3123', apiKey: 'key' });
+events.on('message.inbound', (envelope) => console.log(envelope.content));
+events.connect();
+```
+
+See [packages/sdk/README.md](packages/sdk/README.md) for full documentation.
+
 ## Development
 
 ```bash
 npm install
-npm run build      # TypeScript → dist/
+npm run build      # TypeScript -> dist/
 npm test           # Run all tests (vitest)
 npm run lint       # Type check (tsc --noEmit)
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, and how to add new providers.
+
 ## License
 
-MIT
+[MIT](LICENSE)
