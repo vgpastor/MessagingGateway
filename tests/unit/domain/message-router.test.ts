@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageRouterService } from '../../../src/core/routing/message-router.service.js';
 import type { ChannelAccountRepository } from '../../../src/core/accounts/channel-account.repository.js';
-import type { AdapterFactory } from '../../../src/integrations/adapter.factory.js';
+import type { MessagingAdapterFactory } from '../../../src/core/messaging/ports/messaging-adapter.port.js';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 import type { MessagingPort } from '../../../src/core/messaging/messaging.port.js';
 import { AccountNotFoundError, AccountUnavailableError } from '../../../src/core/errors.js';
@@ -12,14 +12,10 @@ const activeAccount: ChannelAccount = {
   channel: 'whatsapp',
   provider: 'wwebjs-api',
   status: 'active',
-  identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
+  identity: { channel: 'whatsapp', phoneNumber: '+14155550001' },
   credentialsRef: 'WWEBJS_ACME',
   providerConfig: { baseUrl: 'http://localhost:3001' },
-  metadata: {
-    owner: 'acme-corp',
-    environment: 'production',
-    tags: ['support', 'acme'],
-  },
+  metadata: { owner: 'acme-corp', environment: 'production', tags: ['support', 'acme'] },
 };
 
 const suspendedAccount: ChannelAccount = {
@@ -30,7 +26,7 @@ const suspendedAccount: ChannelAccount = {
 
 describe('MessageRouterService', () => {
   let mockRepository: ChannelAccountRepository;
-  let mockAdapterFactory: AdapterFactory;
+  let mockAdapterFactory: MessagingAdapterFactory;
   let mockAdapter: MessagingPort;
   let router: MessageRouterService;
 
@@ -58,9 +54,8 @@ describe('MessageRouterService', () => {
 
     mockAdapterFactory = {
       create: vi.fn().mockReturnValue(mockAdapter),
-      register: vi.fn(),
-      hasAdapter: vi.fn(),
-    } as unknown as AdapterFactory;
+      has: vi.fn().mockReturnValue(true),
+    };
 
     router = new MessageRouterService(mockRepository, mockAdapterFactory);
   });
@@ -70,7 +65,7 @@ describe('MessageRouterService', () => {
 
     const result = await router.send({
       fromAccountId: 'wa-acme',
-      to: '+34612345678',
+      to: '+14155559999',
       content: { type: 'text', body: 'Hello' },
     });
 
@@ -79,7 +74,7 @@ describe('MessageRouterService', () => {
     expect(mockRepository.findById).toHaveBeenCalledWith('wa-acme');
     expect(mockAdapterFactory.create).toHaveBeenCalledWith(activeAccount);
     expect(mockAdapter.sendMessage).toHaveBeenCalledWith({
-      to: '+34612345678',
+      to: '+14155559999',
       content: { type: 'text', body: 'Hello' },
       accountId: 'wa-acme',
       replyToMessageId: undefined,
@@ -92,7 +87,7 @@ describe('MessageRouterService', () => {
 
     const result = await router.send({
       routing: { channel: 'whatsapp', owner: 'acme-corp' },
-      to: '+34612345678',
+      to: '+14155559999',
       content: { type: 'text', body: 'Hello' },
     });
 
@@ -109,7 +104,7 @@ describe('MessageRouterService', () => {
     await expect(
       router.send({
         fromAccountId: 'nonexistent',
-        to: '+34612345678',
+        to: '+14155559999',
         content: { type: 'text', body: 'Hello' },
       }),
     ).rejects.toThrow(AccountNotFoundError);
@@ -121,7 +116,7 @@ describe('MessageRouterService', () => {
     await expect(
       router.send({
         fromAccountId: 'wa-suspended',
-        to: '+34612345678',
+        to: '+14155559999',
         content: { type: 'text', body: 'Hello' },
       }),
     ).rejects.toThrow(AccountUnavailableError);

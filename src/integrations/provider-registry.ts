@@ -5,6 +5,7 @@ import type { MessagingAdapterFactory } from '../core/messaging/ports/messaging-
 import type { ProviderHealthChecker } from '../core/messaging/provider-health.port.js';
 import type { InboundWebhookPort } from '../core/messaging/inbound-webhook.port.js';
 import type { ConnectionManagerPort } from '../core/accounts/connection-manager.port.js';
+import type { EventBus } from '../core/event-bus.js';
 import { AdapterNotFoundError } from '../core/errors.js';
 
 // ── Factory function types for ProviderBundle ───────────────────
@@ -31,6 +32,8 @@ export interface ProviderBundle {
   inbound?: InboundAdapterFactory;
   health?: HealthAdapterFactory;
   connection?: ConnectionAdapterFactory;
+  /** Wire inbound events and connection updates to the EventBus for a given account */
+  wireEvents?: (account: ChannelAccount, eventBus: EventBus) => Promise<void>;
 }
 
 // ── ProviderRegistry ────────────────────────────────────────────

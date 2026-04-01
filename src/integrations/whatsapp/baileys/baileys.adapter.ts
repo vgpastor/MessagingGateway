@@ -4,7 +4,6 @@ import type { OutboundMessage } from '../../../core/messaging/outbound-message.j
 import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
 import { ProviderError } from '../../../core/errors.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
-import { parseBaileysConfig } from './baileys.types.js';
 
 export class BaileysAdapter implements MessagingPort {
   private readonly accountId: string;
@@ -15,14 +14,6 @@ export class BaileysAdapter implements MessagingPort {
     _inlineCredential?: string,
   ) {
     this.accountId = (providerConfig['accountId'] as string | undefined) ?? credentialsRef;
-    const config = parseBaileysConfig(providerConfig);
-
-    // Ensure socket is being connected (non-blocking)
-    if (!baileysSocketManager.isConnected(this.accountId)) {
-      void baileysSocketManager.connect(this.accountId, config).catch((err) => {
-        console.error(`[baileys:${this.accountId}] Failed to connect:`, err);
-      });
-    }
   }
 
   async sendMessage(msg: OutboundMessage): Promise<MessageResult> {

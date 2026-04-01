@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type { ChannelType } from '../../core/messaging/channel.types.js';
@@ -91,39 +91,35 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
   private persist(): void {
     if (!this.persistPath) return;
 
-    try {
-      const dir = dirname(this.persistPath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
+    const data = {
+      accounts: this.accounts.map((a) => ({
+        id: a.id,
+        alias: a.alias,
+        channel: a.channel,
+        provider: a.provider,
+        ...(a.status !== 'unchecked' ? { status: a.status } : {}),
+        identity: this.serializeIdentity(a),
+        ...(a.credentialsRef ? { credentialsRef: a.credentialsRef } : {}),
+        ...(a.credentials ? { credentials: a.credentials } : {}),
+        ...(Object.keys(a.providerConfig).length > 0
+          ? { providerConfig: a.providerConfig }
+          : {}),
+        metadata: {
+          owner: a.metadata.owner,
+          environment: a.metadata.environment,
+          ...(a.metadata.webhookPath ? { webhookPath: a.metadata.webhookPath } : {}),
+          ...(a.metadata.rateLimit ? { rateLimit: a.metadata.rateLimit } : {}),
+          tags: a.metadata.tags,
+        },
+      })),
+    };
 
-      const data = {
-        accounts: this.accounts.map((a) => ({
-          id: a.id,
-          alias: a.alias,
-          channel: a.channel,
-          provider: a.provider,
-          ...(a.status !== 'unchecked' ? { status: a.status } : {}),
-          identity: this.serializeIdentity(a),
-          ...(a.credentialsRef ? { credentialsRef: a.credentialsRef } : {}),
-          ...(a.credentials ? { credentials: a.credentials } : {}),
-          ...(Object.keys(a.providerConfig).length > 0
-            ? { providerConfig: a.providerConfig }
-            : {}),
-          metadata: {
-            owner: a.metadata.owner,
-            environment: a.metadata.environment,
-            ...(a.metadata.webhookPath ? { webhookPath: a.metadata.webhookPath } : {}),
-            ...(a.metadata.rateLimit ? { rateLimit: a.metadata.rateLimit } : {}),
-            tags: a.metadata.tags,
-          },
-        })),
-      };
-
-      writeFileSync(this.persistPath, stringifyYaml(data), 'utf-8');
-    } catch (err) {
-      console.warn(`Failed to persist accounts to ${this.persistPath}: ${(err as Error).message}`);
-    }
+    const path = this.persistPath;
+    mkdir(dirname(path), { recursive: true })
+      .then(() => writeFile(path, stringifyYaml(data), 'utf-8'))
+      .catch((err) => {
+        console.warn(`Failed to persist accounts to ${path}: ${(err as Error).message}`);
+      });
   }
 
   private serializeIdentity(account: ChannelAccount): Record<string, unknown> {
