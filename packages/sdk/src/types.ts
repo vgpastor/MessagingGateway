@@ -229,6 +229,12 @@ export interface ConnectionUpdateData {
   qr?: string;
 }
 
+export interface MessageSentData {
+  result: MessageResult;
+  accountId: string;
+  replyTo?: string;
+}
+
 export interface MessageSendFailedData {
   error: string;
   replyTo?: string;

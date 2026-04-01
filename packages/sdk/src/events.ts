@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
 import type {
   EventsConfig, SendMessageCommand, UnifiedEnvelope,
-  MessageResult, ConnectionUpdateData, MessageSendFailedData,
+  MessageSentData, ConnectionUpdateData, MessageSendFailedData,
   WsEventType,
 } from './types.js';
 
@@ -11,7 +11,7 @@ type EventMap = {
   'disconnected': [code: number, reason: string];
   'error': [error: Error];
   'message.inbound': [envelope: UnifiedEnvelope];
-  'message.sent': [result: MessageResult & { accountId: string; replyTo?: string }];
+  'message.sent': [data: MessageSentData];
   'message.send.failed': [data: MessageSendFailedData];
   'connection.update': [data: ConnectionUpdateData];
   'subscribed': [accounts: string[]];
@@ -166,7 +166,7 @@ export class MessagingGatewayEvents {
         this.emitter.emit('message.inbound', msg.data as UnifiedEnvelope);
         break;
       case 'message.sent':
-        this.emitter.emit('message.sent', msg.data as MessageResult & { accountId: string; replyTo?: string });
+        this.emitter.emit('message.sent', msg.data as MessageSentData);
         break;
       case 'message.send.failed':
         this.emitter.emit('message.send.failed', msg.data as MessageSendFailedData);

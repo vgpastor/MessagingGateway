@@ -64,5 +64,6 @@ export type {
   WsEventType,
   WsEvent,
   ConnectionUpdateData,
+  MessageSentData,
   MessageSendFailedData,
 } from './types.js';
