@@ -1,9 +1,11 @@
 # Unified Messaging Gateway
 
+[![CI](https://github.com/vgpastor/MessagingGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/vgpastor/MessagingGateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript)](https://www.typescriptlang.org/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](Dockerfile)
-[![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=node.js)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker)](https://ghcr.io/vgpastor/messaginggateway)
+[![npm](https://img.shields.io/npm/v/@messaging-gateway/sdk?logo=npm)](https://www.npmjs.com/package/@messaging-gateway/sdk)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
 
 A single API to send and receive messages across **WhatsApp**, **Telegram**, **Email**, and **SMS**. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
 
@@ -16,8 +18,19 @@ A single API to send and receive messages across **WhatsApp**, **Telegram**, **E
 
 ## Quickstart
 
+### Using the published Docker image (recommended)
+
 ```bash
-# 1. Clone and start
+docker run -d --name messaging-gateway \
+  -p 3123:3000 \
+  -v $(pwd)/data:/app/data \
+  -e API_KEY=your-secret-key \
+  ghcr.io/vgpastor/messaginggateway:latest
+```
+
+### From source
+
+```bash
 git clone https://github.com/vgpastor/MessagingGateway.git
 cd MessagingGateway
 cp accounts.yaml.example data/accounts.yaml
@@ -259,6 +272,30 @@ npm install
 npm run build      # TypeScript -> dist/
 npm test           # Run all tests (vitest)
 npm run lint       # Type check (tsc --noEmit)
+```
+
+## Releases
+
+**Docker image** is published to [GitHub Container Registry](https://ghcr.io/vgpastor/messaginggateway) on every version tag (`v*`):
+```bash
+docker pull ghcr.io/vgpastor/messaginggateway:latest
+docker pull ghcr.io/vgpastor/messaginggateway:1.0.0
+```
+
+**SDK** is published to [npm](https://www.npmjs.com/package/@messaging-gateway/sdk) on SDK version tags (`sdk-v*`):
+```bash
+npm install @messaging-gateway/sdk
+```
+
+To create a release:
+```bash
+# Gateway release
+git tag v1.0.0
+git push origin v1.0.0
+
+# SDK release
+git tag sdk-v0.1.0
+git push origin sdk-v0.1.0
 ```
 
 ## Contributing
