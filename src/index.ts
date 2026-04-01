@@ -54,7 +54,7 @@ async function main() {
 
   // Core services
   const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
-  const webhookConfigRepo = new FileWebhookConfigStore(resolve(process.cwd(), 'data/webhooks.json'));
+  const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
@@ -136,6 +136,15 @@ async function main() {
     }
 
     healthCheckScheduler.start();
+
+    const shutdown = async () => {
+      console.log('Shutting down gracefully...');
+      healthCheckScheduler.stop();
+      await server.close();
+      process.exit(0);
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
   } catch (err) {
     server.log.error(err);
     process.exit(1);

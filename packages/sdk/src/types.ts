@@ -110,7 +110,7 @@ export interface RoutingCriteria {
 }
 
 export interface SendContent {
-  type: string;
+  type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'sticker' | 'location' | 'contact' | 'reaction' | 'poll';
   body?: string;
   mediaUrl?: string;
   mimeType?: string;

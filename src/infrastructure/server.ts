@@ -39,9 +39,10 @@ export interface ServerDeps {
 
 export async function createServer(deps: ServerDeps) {
   const isDev = process.env['NODE_ENV'] !== 'production';
+  const usePrettyLogs = process.env['NODE_ENV'] === 'development';
 
   const fastify = Fastify({
-    logger: isDev
+    logger: usePrettyLogs
       ? {
           level: deps.logLevel,
           transport: {

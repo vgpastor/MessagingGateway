@@ -1,10 +1,7 @@
 import type { ChannelAccount } from '../accounts/channel-account.js';
+import type { RoutingCriteria } from '../messaging/outbound-message.js';
 
-export interface RoutingCriteria {
-  channel?: string;
-  owner?: string;
-  tags?: string[];
-}
+export type { RoutingCriteria };
 
 export function matchesRoutingCriteria(
   account: ChannelAccount,

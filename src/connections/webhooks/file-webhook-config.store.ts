@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WebhookConfig, WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
@@ -7,10 +8,15 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
   private configs: Map<string, WebhookConfig>;
   private readonly filePath: string;
 
-  constructor(filePath: string) {
+  private constructor(filePath: string) {
     this.filePath = filePath;
     this.configs = new Map();
-    this.load();
+  }
+
+  static async create(filePath: string): Promise<FileWebhookConfigStore> {
+    const store = new FileWebhookConfigStore(filePath);
+    await store.load();
+    return store;
   }
 
   async findByAccountId(accountId: string): Promise<WebhookConfig | undefined> {
@@ -36,25 +42,25 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
     };
 
     this.configs.set(accountId, config);
-    this.persist();
+    await this.persist();
     return config;
   }
 
   async remove(accountId: string): Promise<boolean> {
     const deleted = this.configs.delete(accountId);
     if (deleted) {
-      this.persist();
+      await this.persist();
     }
     return deleted;
   }
 
-  private load(): void {
+  private async load(): Promise<void> {
     if (!existsSync(this.filePath)) {
       return;
     }
 
     try {
-      const raw = readFileSync(this.filePath, 'utf-8');
+      const raw = await readFile(this.filePath, 'utf-8');
       const data = JSON.parse(raw) as WebhookConfig[];
       for (const config of data) {
         this.configs.set(config.accountId, config);
@@ -64,13 +70,13 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
     }
   }
 
-  private persist(): void {
+  private async persist(): Promise<void> {
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+      await mkdir(dir, { recursive: true });
     }
 
     const data = [...this.configs.values()];
-    writeFileSync(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
+    await writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
   }
 }
