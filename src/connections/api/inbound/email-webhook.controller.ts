@@ -57,7 +57,7 @@ export async function emailWebhookController(
         });
       }
 
-      fastify.log.info({ accountId }, 'Email inbound received (adapter not yet implemented)');
+      await deps.webhookForwarder.forwardRaw(accountId, request.body, 'message.inbound', account.channel);
 
       return { received: true };
     },

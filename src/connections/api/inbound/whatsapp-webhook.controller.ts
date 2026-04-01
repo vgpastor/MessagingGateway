@@ -1,40 +1,35 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../core/accounts/channel-account.repository.js';
-import { WwebjsWebhookAdapter } from '../../../integrations/whatsapp/wwebjs-api/wwebjs-webhook.adapter.js';
-import type { WwebjsInboundPayload, WwebjsStatusPayload } from '../../../integrations/whatsapp/wwebjs-api/wwebjs.types.js';
+import type { ProviderRegistry } from '../../../integrations/provider-registry.js';
 import type { WebhookForwarder } from '../../webhooks/webhook-forwarder.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
 
 interface WhatsAppWebhookDeps {
   accountRepository: ChannelAccountRepository;
   webhookForwarder: WebhookForwarder;
+  providerRegistry: ProviderRegistry;
 }
 
 export async function whatsappWebhookController(
   fastify: FastifyInstance,
   deps: WhatsAppWebhookDeps,
 ): Promise<void> {
-  const webhookAdapter = new WwebjsWebhookAdapter();
-
-  fastify.post<{ Params: { accountId: string }; Body: WwebjsInboundPayload }>(
+  fastify.post<{ Params: { accountId: string }; Body: unknown }>(
     '/webhooks/whatsapp/:accountId/inbound',
     {
       schema: {
-        description: 'Receive inbound WhatsApp messages from external HTTP providers (wwebjs-api, evolution-api, etc.)',
+        description: 'Receive inbound WhatsApp messages from external HTTP providers',
         tags: ['Webhooks'],
         params: {
           type: 'object',
           properties: { accountId: { type: 'string' } },
           required: ['accountId'],
         },
-        body: {
-          type: 'object',
-          additionalProperties: true,
-        },
+        body: { type: 'object', additionalProperties: true },
         response: {
           200: unifiedEnvelopeSchema,
-          404: errorResponseSchema,
           400: errorResponseSchema,
+          404: errorResponseSchema,
         },
       },
     },
@@ -44,33 +39,38 @@ export async function whatsappWebhookController(
       const account = await deps.accountRepository.findById(accountId);
       if (!account) {
         return reply.status(404).send({
-          error: 'Not Found',
-          code: 'ACCOUNT_NOT_FOUND',
+          error: 'Not Found', code: 'ACCOUNT_NOT_FOUND',
           message: `Account '${accountId}' not found`,
         });
       }
 
       if (account.channel !== 'whatsapp') {
         return reply.status(400).send({
-          error: 'Bad Request',
-          code: 'CHANNEL_MISMATCH',
+          error: 'Bad Request', code: 'CHANNEL_MISMATCH',
           message: `Account '${accountId}' is not a WhatsApp account`,
         });
       }
 
-      // Baileys accounts receive messages internally via the socket,
-      // not through external HTTP webhooks.
-      if (account.provider === 'baileys') {
+      // Managed providers (Baileys) receive messages internally, not via HTTP webhooks
+      if (deps.providerRegistry.get(account.provider)?.connection) {
         return reply.status(400).send({
-          error: 'Bad Request',
-          code: 'INTERNAL_PROVIDER',
-          message: `Account '${accountId}' uses Baileys which receives messages internally. External webhook not supported.`,
+          error: 'Bad Request', code: 'INTERNAL_PROVIDER',
+          message: `Account '${accountId}' uses a managed provider that receives messages internally.`,
+        });
+      }
+
+      // Get inbound adapter from registry (no hardcoded WwebjsWebhookAdapter)
+      const inboundAdapter = deps.providerRegistry.getInboundAdapter(account.provider);
+      if (!inboundAdapter) {
+        return reply.status(400).send({
+          error: 'Bad Request', code: 'NO_INBOUND_ADAPTER',
+          message: `No inbound adapter registered for provider '${account.provider}'`,
         });
       }
 
       try {
-        const event = webhookAdapter.parseIncoming(request.body);
-        const envelope = webhookAdapter.toEnvelope(event, account);
+        const event = inboundAdapter.parseIncoming(request.body);
+        const envelope = inboundAdapter.toEnvelope(event, account);
 
         fastify.log.info(
           { messageId: envelope.id, accountId, type: envelope.content.type },
@@ -78,20 +78,18 @@ export async function whatsappWebhookController(
         );
 
         await deps.webhookForwarder.forward(envelope);
-
         return envelope;
       } catch (error) {
         fastify.log.error({ error, accountId }, 'Failed to process WhatsApp inbound webhook');
         return reply.status(400).send({
-          error: 'Bad Request',
-          code: 'INVALID_PAYLOAD',
+          error: 'Bad Request', code: 'INVALID_PAYLOAD',
           message: error instanceof Error ? error.message : 'Invalid payload',
         });
       }
     },
   );
 
-  fastify.post<{ Params: { accountId: string }; Body: WwebjsStatusPayload }>(
+  fastify.post<{ Params: { accountId: string }; Body: Record<string, unknown> }>(
     '/webhooks/whatsapp/:accountId/status',
     {
       schema: {
@@ -102,10 +100,7 @@ export async function whatsappWebhookController(
           properties: { accountId: { type: 'string' } },
           required: ['accountId'],
         },
-        body: {
-          type: 'object',
-          additionalProperties: true,
-        },
+        body: { type: 'object', additionalProperties: true },
         response: {
           200: {
             type: 'object',
@@ -126,50 +121,20 @@ export async function whatsappWebhookController(
       const account = await deps.accountRepository.findById(accountId);
       if (!account) {
         return reply.status(404).send({
-          error: 'Not Found',
-          code: 'ACCOUNT_NOT_FOUND',
+          error: 'Not Found', code: 'ACCOUNT_NOT_FOUND',
           message: `Account '${accountId}' not found`,
         });
       }
 
-      const statusMap: Record<number, string> = {
-        1: 'sent',
-        2: 'delivered',
-        3: 'read',
-        4: 'played',
-        5: 'failed',
-      };
-
-      const data = request.body.data;
-      const status = statusMap[data.status] ?? 'unknown';
-      const messageId = data.id._serialized;
-
-      fastify.log.info(
-        { messageId, accountId, status },
-        'WhatsApp status update received',
-      );
-
+      // Forward raw status payload through EventBus
       await deps.webhookForwarder.forwardRaw(
         account.id,
-        {
-          id: `status-${messageId}-${Date.now()}`,
-          accountId: account.id,
-          channel: account.channel,
-          messageId,
-          status,
-          timestamp: new Date(data.timestamp * 1000),
-          error: data.error,
-          channelPayload: request.body,
-        },
+        request.body,
         'message.status',
         account.channel,
       );
 
-      return {
-        received: true,
-        messageId,
-        status,
-      };
+      return { received: true };
     },
   );
 }

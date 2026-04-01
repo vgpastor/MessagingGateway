@@ -7,6 +7,7 @@ export interface EnvConfig {
   port: number;
   nodeEnv: string;
   logLevel: string;
+  apiKey?: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
   accountsConfigPath?: string;
@@ -18,6 +19,7 @@ export function loadEnvConfig(): EnvConfig {
     port: parseInt(process.env['PORT'] ?? '3000', 10),
     nodeEnv: process.env['NODE_ENV'] ?? 'development',
     logLevel: process.env['LOG_LEVEL'] ?? 'info',
+    apiKey: process.env['API_KEY'],
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],

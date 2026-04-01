@@ -57,7 +57,7 @@ export async function smsWebhookController(
         });
       }
 
-      fastify.log.info({ accountId }, 'SMS inbound received (adapter not yet implemented)');
+      await deps.webhookForwarder.forwardRaw(accountId, request.body, 'message.inbound', account.channel);
 
       return { received: true };
     },
@@ -100,7 +100,7 @@ export async function smsWebhookController(
         });
       }
 
-      fastify.log.info({ accountId }, 'SMS status update received (adapter not yet implemented)');
+      await deps.webhookForwarder.forwardRaw(accountId, request.body, 'message.status', account.channel);
 
       return { received: true };
     },

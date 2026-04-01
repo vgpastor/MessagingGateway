@@ -104,6 +104,7 @@ async function main() {
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
     webhookForwarder, wsBroadcaster,
+    apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
   });
 
@@ -140,4 +141,12 @@ async function main() {
   }
 }
 
-main();
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection:', err);
+  process.exit(1);
+});
+
+main().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});
