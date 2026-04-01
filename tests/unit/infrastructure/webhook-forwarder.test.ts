@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { WebhookForwarder } from '../../../src/infrastructure/webhook-forwarder.js';
-import type { WebhookConfig, WebhookConfigInput } from '../../../src/domain/webhooks/webhook-config.js';
-import type { WebhookConfigRepository } from '../../../src/domain/webhooks/webhook-config.repository.js';
-import type { UnifiedEnvelope } from '../../../src/domain/messaging/unified-envelope.js';
+import { WebhookForwarder } from '../../../src/connections/webhooks/webhook-forwarder.js';
+import type { WebhookConfig, WebhookConfigInput } from '../../../src/core/webhooks/webhook-config.js';
+import type { WebhookConfigRepository } from '../../../src/core/webhooks/webhook-config.repository.js';
+import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 
 function makeRepo(config?: WebhookConfig): WebhookConfigRepository {
   return {
@@ -23,8 +23,8 @@ function makeEnvelope(accountId = 'wa-acme'): UnifiedEnvelope {
     conversationId: '34699000001@c.us',
     sender: { id: '34699000001@c.us', displayName: 'Test' },
     recipient: { id: '+34600000001' },
-    contentSummary: { type: 'text', preview: 'Hello', hasMedia: false },
-    channelPayload: {},
+    content: { type: 'text', body: 'Hello' },
+    channelDetails: { platform: 'whatsapp', messageId: 'wamid.test123' },
     gateway: {
       receivedAt: new Date(),
       adapterId: 'wwebjs-api',

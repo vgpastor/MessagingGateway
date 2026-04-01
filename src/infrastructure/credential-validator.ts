@@ -1,12 +1,16 @@
-import type { ChannelAccount } from '../domain/accounts/channel-account.js';
-import type { ValidationResult } from '../domain/messaging/provider-health.port.js';
-import type { HealthCheckerRegistry } from '../adapters/health-checker.registry.js';
+import type { ChannelAccount } from '../core/accounts/channel-account.js';
+import type { ProviderHealthChecker, ValidationResult } from '../core/messaging/provider-health.port.js';
+
+/** Anything that can provide a health checker by provider ID */
+export interface HealthCheckerProvider {
+  getHealthChecker(providerId: string): ProviderHealthChecker | undefined;
+}
 
 export class CredentialValidator {
-  constructor(private readonly registry: HealthCheckerRegistry) {}
+  constructor(private readonly healthCheckers: HealthCheckerProvider) {}
 
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const checker = this.registry.get(account.provider);
+    const checker = this.healthCheckers.getHealthChecker(account.provider);
     if (!checker) {
       return { status: 'unchecked', credentialsConfigured: false, detail: `No health checker for provider '${account.provider}'` };
     }
@@ -26,7 +30,6 @@ export class CredentialValidator {
         const result = await this.validate(account);
         const updated = { ...account, status: result.status };
 
-        // Auto-populate identity from provider if discovered
         if (result.discoveredIdentity) {
           updated.identity = { ...updated.identity, ...result.discoveredIdentity } as typeof updated.identity;
         }

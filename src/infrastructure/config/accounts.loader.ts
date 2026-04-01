@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { ChannelAccount } from '../../domain/accounts/channel-account.js';
-import type { AccountIdentity } from '../../domain/accounts/account-identity.js';
-import type { ChannelType, ProviderType } from '../../domain/messaging/channel.types.js';
+import type { ChannelAccount } from '../../core/accounts/channel-account.js';
+import type { AccountIdentity } from '../../core/accounts/account-identity.js';
+import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import { accountsConfigSchema } from './accounts.schema.js';
 
 export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {

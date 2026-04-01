@@ -1,5 +1,5 @@
-import type { ChannelAccountRepository } from '../domain/accounts/channel-account.repository.js';
-import type { AccountIdentity } from '../domain/accounts/account-identity.js';
+import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
+import type { AccountIdentity } from '../core/accounts/account-identity.js';
 import type { CredentialValidator } from './credential-validator.js';
 
 export interface HealthCheckSchedulerConfig {

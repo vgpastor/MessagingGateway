@@ -10,6 +10,7 @@ export interface EnvConfig {
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
   accountsConfigPath?: string;
+  healthCheckIntervalMs: number;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -20,6 +21,7 @@ export function loadEnvConfig(): EnvConfig {
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
+    healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
   };
 }
 

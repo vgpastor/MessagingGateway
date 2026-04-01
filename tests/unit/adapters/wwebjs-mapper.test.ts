@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { mapWwebjsToWhatsAppEvent } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.mapper.js';
 import {
-  mapWwebjsToWhatsAppEvent,
-  mapWhatsAppEventToContentSummary,
+  mapWhatsAppMessageToContent,
   buildWhatsAppEnvelope,
-} from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.mapper.js';
-import type { WwebjsInboundPayload } from '../../../src/adapters/whatsapp/wwebjs-api/wwebjs.types.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+} from '../../../src/integrations/whatsapp/whatsapp-content.mapper.js';
+import type { WwebjsInboundPayload } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.types.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {
   id: 'wa-acme',
@@ -197,48 +197,57 @@ describe('mapWwebjsToWhatsAppEvent', () => {
   });
 });
 
-describe('mapWhatsAppEventToContentSummary', () => {
-  it('should map text message summary', () => {
-    const summary = mapWhatsAppEventToContentSummary({ type: 'text', body: 'Hello world' });
-    expect(summary.type).toBe('text');
-    expect(summary.preview).toBe('Hello world');
-    expect(summary.hasMedia).toBe(false);
+describe('mapWhatsAppMessageToContent', () => {
+  it('should map text message content', () => {
+    const content = mapWhatsAppMessageToContent({ type: 'text', body: 'Hello world' });
+    expect(content.type).toBe('text');
+    if (content.type === 'text') {
+      expect(content.body).toBe('Hello world');
+    }
   });
 
-  it('should truncate long text preview to 100 chars', () => {
+  it('should preserve full text body', () => {
     const longText = 'A'.repeat(200);
-    const summary = mapWhatsAppEventToContentSummary({ type: 'text', body: longText });
-    expect(summary.preview).toHaveLength(100);
+    const content = mapWhatsAppMessageToContent({ type: 'text', body: longText });
+    if (content.type === 'text') {
+      expect(content.body).toHaveLength(200);
+    }
   });
 
-  it('should mark media messages correctly', () => {
-    const imageSummary = mapWhatsAppEventToContentSummary({
+  it('should map media messages correctly', () => {
+    const imageContent = mapWhatsAppMessageToContent({
       type: 'image',
       mediaId: 'x',
       mimeType: 'image/jpeg',
     });
-    expect(imageSummary.type).toBe('image');
-    expect(imageSummary.hasMedia).toBe(true);
+    expect(imageContent.type).toBe('image');
+    if (imageContent.type === 'image') {
+      expect(imageContent.media).toBeDefined();
+    }
 
-    const audioSummary = mapWhatsAppEventToContentSummary({
+    const audioContent = mapWhatsAppMessageToContent({
       type: 'audio',
       mediaId: 'x',
       mimeType: 'audio/ogg',
       isVoiceNote: true,
     });
-    expect(audioSummary.type).toBe('audio');
-    expect(audioSummary.hasMedia).toBe(true);
+    expect(audioContent.type).toBe('audio');
+    if (audioContent.type === 'audio') {
+      expect(audioContent.media).toBeDefined();
+    }
   });
 
   it('should handle reaction message', () => {
-    const summary = mapWhatsAppEventToContentSummary({
+    const content = mapWhatsAppMessageToContent({
       type: 'reaction',
-      emoji: '👍',
+      emoji: '\u{1F44D}',
       targetMessageId: 'msg-1',
     });
-    expect(summary.type).toBe('reaction');
-    expect(summary.preview).toBe('👍');
-    expect(summary.hasMedia).toBe(false);
+    expect(content.type).toBe('reaction');
+    if (content.type === 'reaction') {
+      expect(content.emoji).toBe('\u{1F44D}');
+      expect(content.targetMessageId).toBe('msg-1');
+    }
   });
 });
 
@@ -256,10 +265,12 @@ describe('buildWhatsAppEnvelope', () => {
     expect(envelope.sender.id).toBe('34699000001@c.us');
     expect(envelope.sender.displayName).toBe('Ciudadano');
     expect(envelope.recipient.id).toBe('+34600000001');
-    expect(envelope.contentSummary.type).toBe('text');
-    expect(envelope.contentSummary.preview).toBe('Test message');
-    expect(envelope.contentSummary.hasMedia).toBe(false);
-    expect(envelope.channelPayload).toBe(event);
+    expect(envelope.content.type).toBe('text');
+    if (envelope.content.type === 'text') {
+      expect(envelope.content.body).toBe('Test message');
+    }
+    expect(envelope.channelDetails).toBeDefined();
+    expect(envelope.channelDetails?.messageId).toBe('wamid.test123');
     expect(envelope.gateway.adapterId).toBe('wwebjs-api');
     expect(envelope.gateway.account.id).toBe('wa-acme');
     expect(envelope.gateway.account.alias).toBe('Acme WhatsApp');

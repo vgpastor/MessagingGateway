@@ -3,15 +3,13 @@ import type { FastifyInstance } from 'fastify';
 import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
-import { AdapterFactory } from '../../src/adapters/adapter.factory.js';
-import { HealthCheckerRegistry } from '../../src/adapters/health-checker.registry.js';
-import { MessageRouterService } from '../../src/domain/routing/message-router.service.js';
-import { WebhookForwarder } from '../../src/infrastructure/webhook-forwarder.js';
+import { ProviderRegistry } from '../../src/integrations/provider-registry.js';
+import { MessageRouterService } from '../../src/core/routing/message-router.service.js';
+import { WebhookForwarder } from '../../src/connections/webhooks/webhook-forwarder.js';
 import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
-import { ConnectionManagerRegistry } from '../../src/infrastructure/connection-manager.registry.js';
 import { createServer } from '../../src/infrastructure/server.js';
-import type { WebhookConfig, WebhookConfigInput } from '../../src/domain/webhooks/webhook-config.js';
-import type { WebhookConfigRepository } from '../../src/domain/webhooks/webhook-config.repository.js';
+import type { WebhookConfig, WebhookConfigInput } from '../../src/core/webhooks/webhook-config.js';
+import type { WebhookConfigRepository } from '../../src/core/webhooks/webhook-config.repository.js';
 
 class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
   private configs = new Map<string, WebhookConfig>();
@@ -38,21 +36,18 @@ beforeAll(async () => {
     resolve(process.cwd(), 'tests/fixtures/accounts.yaml'),
   );
   const accountRepository = new InMemoryAccountRepository(accounts);
-  const adapterFactory = new AdapterFactory();
-  const healthCheckerRegistry = new HealthCheckerRegistry();
-  const credentialValidator = new CredentialValidator(healthCheckerRegistry);
-  const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
+  const providerRegistry = new ProviderRegistry();
+  const credentialValidator = new CredentialValidator(providerRegistry);
+  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
-  const connectionManagerRegistry = new ConnectionManagerRegistry();
 
   app = await createServer({
     accountRepository,
     webhookConfigRepo,
+    providerRegistry,
     messageRouter,
-    adapterFactory,
     credentialValidator,
-    connectionManagerRegistry,
     webhookForwarder,
     port: 0,
     logLevel: 'silent',
@@ -230,12 +225,10 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
     expect(envelope.direction).toBe('inbound');
     expect(envelope.sender.id).toBe('34699000001@c.us');
     expect(envelope.sender.displayName).toBe('Ciudadano');
-    expect(envelope.contentSummary.type).toBe('text');
-    expect(envelope.contentSummary.preview).toBe('He encontrado un DEA en la calle Mayor');
-    expect(envelope.contentSummary.hasMedia).toBe(false);
-    expect(envelope.channelPayload.messageId).toBe('wamid.test123');
-    expect(envelope.channelPayload.message.type).toBe('text');
-    expect(envelope.channelPayload.message.body).toBe('He encontrado un DEA en la calle Mayor');
+    expect(envelope.content.type).toBe('text');
+    expect(envelope.content.body).toBe('He encontrado un DEA en la calle Mayor');
+    expect(envelope.channelDetails.messageId).toBe('wamid.test123');
+    expect(envelope.channelDetails.platform).toBe('whatsapp');
     expect(envelope.gateway.adapterId).toBe('wwebjs-api');
     expect(envelope.gateway.account.id).toBe('wa-acme');
     expect(envelope.gateway.account.owner).toBe('acme-corp');

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { matchesRoutingCriteria } from '../../../src/domain/routing/routing-rules.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+import { matchesRoutingCriteria } from '../../../src/core/routing/routing-rules.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
 function makeAccount(overrides: Partial<ChannelAccount> = {}): ChannelAccount {
   return {
