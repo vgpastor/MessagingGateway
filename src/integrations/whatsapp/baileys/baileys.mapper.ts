@@ -177,6 +177,29 @@ function mapMessage(msg: WAMessage): WhatsAppMessage {
       };
     }
 
+    case 'pollCreationMessage':
+    case 'pollCreationMessageV3': {
+      const poll = content.pollCreationMessage ?? content.pollCreationMessageV3;
+      return {
+        type: 'poll',
+        pollName: poll?.name ?? '',
+        options: (poll?.options ?? []).map((o) => o.optionName ?? ''),
+        allowMultipleAnswers: (poll?.selectableOptionsCount ?? 0) > 1,
+      };
+    }
+
+    case 'editedMessage': {
+      const edited = content.editedMessage?.message;
+      if (edited) {
+        const inner = extractMessageContent(edited);
+        if (inner?.protocolMessage?.editedMessage) {
+          return mapMessage({ ...msg, message: inner.protocolMessage.editedMessage });
+        }
+        return mapMessage({ ...msg, message: edited });
+      }
+      return { type: 'text', body: '[Edited message]' };
+    }
+
     default:
       return { type: 'text', body: `[Unsupported message type: ${contentType ?? 'unknown'}]` };
   }
@@ -192,10 +215,22 @@ function mapContext(msg: WAMessage): WhatsAppMessageContext {
     contextInfo = msgContent?.['contextInfo'] as proto.IContextInfo | null | undefined;
   }
 
+  // Extract quoted message info (reply-to)
+  const quotedMessage = contextInfo?.stanzaId
+    ? {
+        messageId: contextInfo.stanzaId,
+        body: extractQuotedBody(contextInfo.quotedMessage),
+        participant: contextInfo.participant
+          ? jidNormalizedUser(contextInfo.participant)
+          : undefined,
+      }
+    : undefined;
+
   return {
     isForwarded: (contextInfo?.isForwarded ?? false) as boolean,
     forwardingScore: contextInfo?.forwardingScore ?? undefined,
     isFrequentlyForwarded: (contextInfo?.forwardingScore ?? 0) >= 5,
+    quotedMessage,
     mentionedIds: contextInfo?.mentionedJid
       ? contextInfo.mentionedJid.filter((jid): jid is string => typeof jid === 'string')
       : undefined,
@@ -204,6 +239,18 @@ function mapContext(msg: WAMessage): WhatsAppMessageContext {
     isFromStatusBroadcast: msg.key?.remoteJid === 'status@broadcast',
     isViewOnce: !!msg.message?.viewOnceMessage || !!msg.message?.viewOnceMessageV2,
   };
+}
+
+function extractQuotedBody(quotedMessage: proto.IMessage | null | undefined): string | undefined {
+  if (!quotedMessage) return undefined;
+  const content = extractMessageContent(quotedMessage);
+  if (!content) return undefined;
+  if (content.conversation) return content.conversation;
+  if (content.extendedTextMessage?.text) return content.extendedTextMessage.text;
+  if (content.imageMessage?.caption) return content.imageMessage.caption;
+  if (content.videoMessage?.caption) return content.videoMessage.caption;
+  const type = getContentType(content);
+  return type ? `[${type}]` : undefined;
 }
 
 function extractPhonesFromVCard(vcard: string): Array<{ phone: string; type?: string }> {

@@ -110,7 +110,7 @@ export const sendMessageBodySchema = {
       properties: {
         type: {
           type: 'string' as const,
-          enum: ['text', 'image', 'audio', 'video', 'document', 'location'],
+          enum: ['text', 'image', 'audio', 'video', 'document', 'sticker', 'location', 'contact', 'reaction', 'poll'],
         },
         body: { type: 'string' as const },
         mediaUrl: { type: 'string' as const },
