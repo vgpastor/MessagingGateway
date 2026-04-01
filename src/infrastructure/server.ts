@@ -64,7 +64,7 @@ export async function createServer(deps: ServerDeps) {
   });
 
   await fastify.register(fastifyCors, {
-    origin: true,
+    origin: process.env['CORS_ORIGIN'] ?? (isDev ? true : false),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
@@ -91,17 +91,19 @@ export async function createServer(deps: ServerDeps) {
     },
   });
 
-  await fastify.register(fastifySwaggerUi, {
-    routePrefix: '/docs',
-    uiConfig: { docExpansion: 'list', deepLinking: true },
-  });
+  if (isDev || process.env['SWAGGER_ENABLED'] === 'true') {
+    await fastify.register(fastifySwaggerUi, {
+      routePrefix: '/docs',
+      uiConfig: { docExpansion: 'list', deepLinking: true },
+    });
 
-  fastify.get('/openapi.json', { schema: { hide: true } }, async (_request, reply) => {
-    return reply
-      .header('content-type', 'application/json; charset=utf-8')
-      .header('cache-control', 'public, max-age=300')
-      .send(fastify.swagger());
-  });
+    fastify.get('/openapi.json', { schema: { hide: true } }, async (_request, reply) => {
+      return reply
+        .header('content-type', 'application/json; charset=utf-8')
+        .header('cache-control', 'public, max-age=300')
+        .send(fastify.swagger());
+    });
+  }
 
   // ── Public routes (no auth) ──────────────────────────────────
 

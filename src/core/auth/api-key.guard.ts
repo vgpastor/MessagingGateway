@@ -61,7 +61,7 @@ function extractApiKey(request: FastifyRequest): string | undefined {
   return undefined;
 }
 
-function safeCompare(a: string, b: string): boolean {
+export function safeCompare(a: string, b: string): boolean {
   try {
     const bufA = Buffer.from(a, 'utf-8');
     const bufB = Buffer.from(b, 'utf-8');

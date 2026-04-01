@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { WebSocketBroadcaster } from './websocket-broadcaster.js';
+import { safeCompare } from '../../core/auth/api-key.guard.js';
 
 interface WebSocketControllerDeps {
   wsBroadcaster: WebSocketBroadcaster;
@@ -34,7 +35,7 @@ export async function websocketController(
 
     // Authenticate if API key is configured
     if (deps.apiKey) {
-      if (!query.token || query.token !== deps.apiKey) {
+      if (!query.token || !safeCompare(query.token, deps.apiKey)) {
         socket.close(4401, 'Unauthorized: invalid or missing token');
         return;
       }

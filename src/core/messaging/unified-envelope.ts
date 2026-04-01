@@ -34,11 +34,3 @@ export interface UnifiedEnvelope {
 
   gateway: GatewayMetadata;
 }
-
-// ── Deprecated compat ───────────────────────────────────────────
-// TODO: Remove once all consumers migrate to content/context/channelDetails
-export interface ContentSummary {
-  type: string;
-  preview?: string;
-  hasMedia: boolean;
-}

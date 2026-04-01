@@ -1,4 +1,3 @@
-import type { ContentType } from '../../../core/messaging/channel.types.js';
 import type {
   WhatsAppInboundEvent,
   WhatsAppContact,
@@ -202,16 +201,4 @@ function extractPhonesFromVCard(vcard: string): Array<{ phone: string; type?: st
     }
   }
   return phones;
-}
-
-// Content summary helper used by whatsapp-webhook.controller for inline status parsing
-export function getContentTypeForWhatsApp(messageType: string): ContentType {
-  const typeMap: Record<string, ContentType> = {
-    text: 'text', image: 'image', audio: 'audio', video: 'video',
-    document: 'document', sticker: 'sticker', location: 'location',
-    contact: 'contact', reaction: 'reaction', poll: 'text',
-    list_response: 'text', button_response: 'text',
-    system: 'system', call: 'system',
-  };
-  return typeMap[messageType] ?? 'unknown';
 }

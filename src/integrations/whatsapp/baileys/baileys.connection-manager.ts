@@ -1,8 +1,8 @@
-import type { ConnectionManagerPort, ConnectionInfo } from '../../../core/accounts/connection-manager.port.js';
+import type { ConnectionManagerPort, ConnectionInfo, PairingCodeCapable } from '../../../core/accounts/connection-manager.port.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 
-export class BaileysConnectionManager implements ConnectionManagerPort {
+export class BaileysConnectionManager implements ConnectionManagerPort, PairingCodeCapable {
   supports(provider: string): boolean {
     return provider === 'baileys';
   }

@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { DomainError } from './core/errors.js';
 import { loadEnvConfig } from './infrastructure/config/env.config.js';
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
@@ -22,7 +23,8 @@ import { createServer } from './infrastructure/server.js';
 
 async function main() {
   const envConfig = loadEnvConfig();
-  const rawAccounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
+  const yamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
+  const rawAccounts = loadAccountsFromYaml(yamlPath);
 
   // Event Bus — backbone of inter-domain communication
   const eventBus = new EventBus();
@@ -48,8 +50,7 @@ async function main() {
   console.log(`Validation complete: ${counts.active} active, ${counts.auth_expired} auth_expired, ${counts.unchecked} unchecked, ${counts.error} error`);
 
   // Repository
-  const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
-  const accountRepository = new InMemoryAccountRepository(accounts, accountsYamlPath);
+  const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
 
   // Core services
   const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
@@ -81,7 +82,7 @@ async function main() {
           Events.MESSAGE_SEND_FAILURE, 'router',
           {
             error: err instanceof Error ? err.message : 'Send failed',
-            code: (err as Record<string, string>)?.code ?? 'UNKNOWN',
+            code: err instanceof DomainError ? err.code : 'UNKNOWN',
             accountId: command.fromAccountId,
             replyTo,
           },

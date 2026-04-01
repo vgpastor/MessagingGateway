@@ -18,12 +18,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": false,
-    "paths": {
-      "@domain/*": ["./src/domain/*"],
-      "@adapters/*": ["./src/adapters/*"],
-      "@infrastructure/*": ["./src/infrastructure/*"]
-    }
+    "exactOptionalPropertyTypes": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]

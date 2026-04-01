@@ -1,7 +1,6 @@
 export type { ChannelType, ProviderType, ContentType, ContactRef } from './channel.types.js';
 export type {
   UnifiedEnvelope,
-  ContentSummary,
   GatewayMetadata,
 } from './unified-envelope.js';
 export type {

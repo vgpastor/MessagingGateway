@@ -19,9 +19,13 @@ Never commit code that fails any of these steps.
 
 ## Architecture Rules
 
-- **DDD / Hexagonal architecture**: domain logic in `src/domain/`, adapters in `src/adapters/`, infrastructure in `src/infrastructure/`
-- Never import from `infrastructure` or `adapters` inside `domain/`
-- All provider integrations go through adapter interfaces defined in domain
+- **DDD / Hexagonal architecture**:
+  - `src/core/` — domain logic (accounts, messaging, routing, auth)
+  - `src/integrations/` — provider adapters (Baileys, wwebjs, Telegram, etc.)
+  - `src/connections/` — I/O transports (REST API, WebSocket, webhooks)
+  - `src/infrastructure/` — framework config (Fastify server, env config, persistence)
+- Never import from `integrations/` or `infrastructure/` inside `core/`
+- All provider integrations go through adapter interfaces defined in core
 - Use `UnifiedEnvelope` as the canonical message format across all channels
 
 ## TypeScript Strict Rules
