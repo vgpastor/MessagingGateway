@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
+
+const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')) as { version: string };
 import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
 import type { WebhookConfigRepository } from '../core/webhooks/webhook-config.repository.js';
 import type { MessageRouterService } from '../core/routing/message-router.service.js';
@@ -79,7 +83,7 @@ export async function createServer(deps: ServerDeps) {
         description:
           'Single point of contact for all messaging integrations. ' +
           'Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.',
-        version: '1.0.0',
+        version: pkg.version,
       },
       tags: [
         { name: 'Health', description: 'Health check endpoints' },
