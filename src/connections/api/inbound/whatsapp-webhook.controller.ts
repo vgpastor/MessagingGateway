@@ -73,7 +73,7 @@ export async function whatsappWebhookController(
         const envelope = webhookAdapter.toEnvelope(event, account);
 
         fastify.log.info(
-          { messageId: envelope.id, accountId, type: envelope.contentSummary.type },
+          { messageId: envelope.id, accountId, type: envelope.content.type },
           'WhatsApp inbound message processed',
         );
 

@@ -18,4 +18,4 @@ export interface SmsStatusEvent {
   errorMessage?: string;
 }
 
-export type SmsEnvelope = UnifiedEnvelope<SmsInboundEvent>;
+export type SmsEnvelope = UnifiedEnvelope;

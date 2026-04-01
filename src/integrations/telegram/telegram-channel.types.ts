@@ -117,4 +117,4 @@ export interface TelegramCallbackQuery {
   data?: string;
 }
 
-export type TelegramEnvelope = UnifiedEnvelope<TelegramUpdate>;
+export type TelegramEnvelope = UnifiedEnvelope;

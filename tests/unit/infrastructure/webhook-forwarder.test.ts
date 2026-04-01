@@ -23,8 +23,8 @@ function makeEnvelope(accountId = 'wa-acme'): UnifiedEnvelope {
     conversationId: '34699000001@c.us',
     sender: { id: '34699000001@c.us', displayName: 'Test' },
     recipient: { id: '+34600000001' },
-    contentSummary: { type: 'text', preview: 'Hello', hasMedia: false },
-    channelPayload: {},
+    content: { type: 'text', body: 'Hello' },
+    channelDetails: { platform: 'whatsapp', messageId: 'wamid.test123' },
     gateway: {
       receivedAt: new Date(),
       adapterId: 'wwebjs-api',

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mapBaileysToWhatsAppEvent } from '../../../src/integrations/whatsapp/baileys/baileys.mapper.js';
-import { buildWhatsAppEnvelope, mapWhatsAppEventToContentSummary } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.mapper.js';
+import { buildWhatsAppEnvelope, mapWhatsAppMessageToContent } from '../../../src/integrations/whatsapp/whatsapp-content.mapper.js';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {
@@ -403,33 +403,39 @@ describe('mapBaileysToWhatsAppEvent', () => {
   });
 });
 
-describe('mapWhatsAppEventToContentSummary (from Baileys events)', () => {
-  it('should map text message summary', () => {
+describe('mapWhatsAppMessageToContent (from Baileys events)', () => {
+  it('should map text message content', () => {
     const event = mapBaileysToWhatsAppEvent(makeTextMessage('Hello world'));
-    const summary = mapWhatsAppEventToContentSummary(event.message);
-    expect(summary.type).toBe('text');
-    expect(summary.preview).toBe('Hello world');
-    expect(summary.hasMedia).toBe(false);
+    const content = mapWhatsAppMessageToContent(event.message);
+    expect(content.type).toBe('text');
+    if (content.type === 'text') {
+      expect(content.body).toBe('Hello world');
+    }
   });
 
-  it('should mark media messages correctly', () => {
+  it('should map media messages correctly', () => {
     const imageEvent = mapBaileysToWhatsAppEvent(makeImageMessage());
-    const imageSummary = mapWhatsAppEventToContentSummary(imageEvent.message);
-    expect(imageSummary.type).toBe('image');
-    expect(imageSummary.hasMedia).toBe(true);
+    const imageContent = mapWhatsAppMessageToContent(imageEvent.message);
+    expect(imageContent.type).toBe('image');
+    if (imageContent.type === 'image') {
+      expect(imageContent.media).toBeDefined();
+    }
 
     const audioEvent = mapBaileysToWhatsAppEvent(makeAudioMessage(true));
-    const audioSummary = mapWhatsAppEventToContentSummary(audioEvent.message);
-    expect(audioSummary.type).toBe('audio');
-    expect(audioSummary.hasMedia).toBe(true);
+    const audioContent = mapWhatsAppMessageToContent(audioEvent.message);
+    expect(audioContent.type).toBe('audio');
+    if (audioContent.type === 'audio') {
+      expect(audioContent.media).toBeDefined();
+    }
   });
 
   it('should handle reaction message', () => {
     const event = mapBaileysToWhatsAppEvent(makeReactionMessage());
-    const summary = mapWhatsAppEventToContentSummary(event.message);
-    expect(summary.type).toBe('reaction');
-    expect(summary.preview).toBe('👍');
-    expect(summary.hasMedia).toBe(false);
+    const content = mapWhatsAppMessageToContent(event.message);
+    expect(content.type).toBe('reaction');
+    if (content.type === 'reaction') {
+      expect(content.emoji).toBe('\u{1F44D}');
+    }
   });
 });
 
@@ -446,10 +452,12 @@ describe('buildWhatsAppEnvelope (from Baileys events)', () => {
     expect(envelope.sender.id).toBe('34699000001@s.whatsapp.net');
     expect(envelope.sender.displayName).toBe('TestUser');
     expect(envelope.recipient.id).toBe('+34600000001');
-    expect(envelope.contentSummary.type).toBe('text');
-    expect(envelope.contentSummary.preview).toBe('Test message');
-    expect(envelope.contentSummary.hasMedia).toBe(false);
-    expect(envelope.channelPayload).toBe(event);
+    expect(envelope.content.type).toBe('text');
+    if (envelope.content.type === 'text') {
+      expect(envelope.content.body).toBe('Test message');
+    }
+    expect(envelope.channelDetails).toBeDefined();
+    expect(envelope.channelDetails?.messageId).toBe('BAILEYS_MSG_001');
     expect(envelope.gateway.adapterId).toBe('baileys');
     expect(envelope.gateway.account.id).toBe('wa-baileys-test');
     expect(envelope.gateway.account.alias).toBe('Baileys Test');

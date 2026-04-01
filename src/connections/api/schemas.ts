@@ -7,21 +7,39 @@ export const contactRefSchema = {
   required: ['id'] as const,
 };
 
-export const contentSummarySchema = {
+export const messageContentSchema = {
   type: 'object' as const,
+  additionalProperties: true,
   properties: {
     type: {
       type: 'string' as const,
       enum: [
         'text', 'image', 'audio', 'video', 'document',
         'location', 'contact', 'sticker', 'reaction',
-        'status_update', 'system', 'unknown',
+        'poll', 'interactive_response', 'system', 'unknown',
       ],
     },
-    preview: { type: 'string' as const },
-    hasMedia: { type: 'boolean' as const },
   },
-  required: ['type', 'hasMedia'] as const,
+  required: ['type'] as const,
+};
+
+export const channelDetailsSchema = {
+  type: 'object' as const,
+  additionalProperties: true,
+  properties: {
+    platform: { type: 'string' as const },
+  },
+  required: ['platform'] as const,
+};
+
+export const messageContextSchema = {
+  type: 'object' as const,
+  additionalProperties: true,
+  properties: {
+    quotedMessageId: { type: 'string' as const },
+    isForwarded: { type: 'boolean' as const },
+    mentions: { type: 'array' as const, items: { type: 'string' as const } },
+  },
 };
 
 export const gatewayMetadataSchema = {
@@ -55,14 +73,15 @@ export const unifiedEnvelopeSchema = {
     conversationId: { type: 'string' as const },
     sender: contactRefSchema,
     recipient: contactRefSchema,
-    contentSummary: contentSummarySchema,
-    channelPayload: { type: 'object' as const, additionalProperties: true },
+    content: messageContentSchema,
+    context: messageContextSchema,
+    channelDetails: channelDetailsSchema,
     gateway: gatewayMetadataSchema,
   },
   required: [
     'id', 'accountId', 'channel', 'direction', 'timestamp',
-    'conversationId', 'sender', 'recipient', 'contentSummary',
-    'channelPayload', 'gateway',
+    'conversationId', 'sender', 'recipient', 'content',
+    'gateway',
   ] as const,
 };
 

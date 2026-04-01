@@ -4,7 +4,7 @@ import type { UnifiedEnvelope } from '../../../core/messaging/unified-envelope.j
 import type { WhatsAppInboundEvent } from '../whatsapp-channel.types.js';
 import type { proto } from '@whiskeysockets/baileys';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
-import { buildWhatsAppEnvelope } from '../wwebjs-api/wwebjs.mapper.js';
+import { buildWhatsAppEnvelope } from '../whatsapp-content.mapper.js';
 import { InvalidPayloadError } from '../../../core/errors.js';
 
 export interface BaileysInboundPayload {
@@ -24,14 +24,10 @@ export class BaileysWebhookAdapter
   }
 
   validateSignature(_req: RawRequest): boolean {
-    // Baileys messages come from the local socket, no external signature needed
     return true;
   }
 
-  toEnvelope(
-    event: WhatsAppInboundEvent,
-    account: ChannelAccount,
-  ): UnifiedEnvelope<WhatsAppInboundEvent> {
+  toEnvelope(event: WhatsAppInboundEvent, account: ChannelAccount): UnifiedEnvelope {
     return buildWhatsAppEnvelope(event, account);
   }
 }

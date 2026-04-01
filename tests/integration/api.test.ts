@@ -225,12 +225,10 @@ describe('POST /webhooks/whatsapp/:accountId/inbound', () => {
     expect(envelope.direction).toBe('inbound');
     expect(envelope.sender.id).toBe('34699000001@c.us');
     expect(envelope.sender.displayName).toBe('Ciudadano');
-    expect(envelope.contentSummary.type).toBe('text');
-    expect(envelope.contentSummary.preview).toBe('He encontrado un DEA en la calle Mayor');
-    expect(envelope.contentSummary.hasMedia).toBe(false);
-    expect(envelope.channelPayload.messageId).toBe('wamid.test123');
-    expect(envelope.channelPayload.message.type).toBe('text');
-    expect(envelope.channelPayload.message.body).toBe('He encontrado un DEA en la calle Mayor');
+    expect(envelope.content.type).toBe('text');
+    expect(envelope.content.body).toBe('He encontrado un DEA en la calle Mayor');
+    expect(envelope.channelDetails.messageId).toBe('wamid.test123');
+    expect(envelope.channelDetails.platform).toBe('whatsapp');
     expect(envelope.gateway.adapterId).toBe('wwebjs-api');
     expect(envelope.gateway.account.id).toBe('wa-acme');
     expect(envelope.gateway.account.owner).toBe('acme-corp');

@@ -1,10 +1,5 @@
-import type { ChannelType, ContactRef, ContentType } from './channel.types.js';
-
-export interface ContentSummary {
-  type: ContentType;
-  preview?: string;
-  hasMedia: boolean;
-}
+import type { ChannelType, ContactRef } from './channel.types.js';
+import type { MessageContent, MessageContext, ChannelDetails } from './content.js';
 
 export interface GatewayMetadata {
   receivedAt: Date;
@@ -18,16 +13,32 @@ export interface GatewayMetadata {
   };
 }
 
-export interface UnifiedEnvelope<TPayload = unknown> {
+export interface UnifiedEnvelope {
+  /** Unique envelope ID (msg_<uuid>) */
   id: string;
   accountId: string;
   channel: ChannelType;
   direction: 'inbound' | 'outbound';
   timestamp: Date;
+  /** Conversation/chat thread ID */
   conversationId: string;
   sender: ContactRef;
   recipient: ContactRef;
-  contentSummary: ContentSummary;
-  channelPayload: TPayload;
+
+  /** Standardized message content — platform-agnostic */
+  content: MessageContent;
+  /** Message context (reply, forward, mentions, ephemeral) */
+  context?: MessageContext;
+  /** Optional channel-specific details for advanced consumers */
+  channelDetails?: ChannelDetails;
+
   gateway: GatewayMetadata;
+}
+
+// ── Deprecated compat ───────────────────────────────────────────
+// TODO: Remove once all consumers migrate to content/context/channelDetails
+export interface ContentSummary {
+  type: string;
+  preview?: string;
+  hasMedia: boolean;
 }

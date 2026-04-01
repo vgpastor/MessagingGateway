@@ -10,5 +10,5 @@ export interface RawRequest {
 export interface InboundWebhookPort<TRawPayload, TChannelEvent> {
   parseIncoming(raw: TRawPayload): TChannelEvent;
   validateSignature(req: RawRequest): boolean;
-  toEnvelope(event: TChannelEvent, account: ChannelAccount): UnifiedEnvelope<TChannelEvent>;
+  toEnvelope(event: TChannelEvent, account: ChannelAccount): UnifiedEnvelope;
 }

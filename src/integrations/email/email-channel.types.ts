@@ -28,4 +28,4 @@ export interface EmailAttachment {
   url?: string;
 }
 
-export type EmailEnvelope = UnifiedEnvelope<EmailInboundEvent>;
+export type EmailEnvelope = UnifiedEnvelope;

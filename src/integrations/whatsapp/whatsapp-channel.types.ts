@@ -214,4 +214,4 @@ export interface WhatsAppStatusEvent {
 
 // === Typed Envelope ===
 
-export type WhatsAppEnvelope = UnifiedEnvelope<WhatsAppInboundEvent>;
+export type WhatsAppEnvelope = UnifiedEnvelope;

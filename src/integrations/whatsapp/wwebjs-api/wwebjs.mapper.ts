@@ -1,7 +1,4 @@
-import { v4 as uuid } from 'uuid';
-import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ContentType } from '../../../core/messaging/channel.types.js';
-import type { UnifiedEnvelope, ContentSummary } from '../../../core/messaging/unified-envelope.js';
 import type {
   WhatsAppInboundEvent,
   WhatsAppContact,
@@ -207,71 +204,14 @@ function extractPhonesFromVCard(vcard: string): Array<{ phone: string; type?: st
   return phones;
 }
 
-export function mapWhatsAppEventToContentSummary(message: WhatsAppMessage): ContentSummary {
+// Content summary helper used by whatsapp-webhook.controller for inline status parsing
+export function getContentTypeForWhatsApp(messageType: string): ContentType {
   const typeMap: Record<string, ContentType> = {
-    text: 'text',
-    image: 'image',
-    audio: 'audio',
-    video: 'video',
-    document: 'document',
-    sticker: 'sticker',
-    location: 'location',
-    contact: 'contact',
-    reaction: 'reaction',
-    poll: 'text',
-    list_response: 'text',
-    button_response: 'text',
-    system: 'system',
-    call: 'system',
+    text: 'text', image: 'image', audio: 'audio', video: 'video',
+    document: 'document', sticker: 'sticker', location: 'location',
+    contact: 'contact', reaction: 'reaction', poll: 'text',
+    list_response: 'text', button_response: 'text',
+    system: 'system', call: 'system',
   };
-
-  const hasMedia = ['image', 'audio', 'video', 'document', 'sticker'].includes(message.type);
-
-  let preview: string | undefined;
-  if (message.type === 'text') {
-    preview = message.body.substring(0, 100);
-  } else if ('caption' in message && message.caption) {
-    preview = message.caption.substring(0, 100);
-  } else if (message.type === 'reaction') {
-    preview = message.emoji;
-  }
-
-  return {
-    type: typeMap[message.type] ?? 'unknown',
-    preview,
-    hasMedia,
-  };
-}
-
-export function buildWhatsAppEnvelope(
-  event: WhatsAppInboundEvent,
-  account: ChannelAccount,
-): UnifiedEnvelope<WhatsAppInboundEvent> {
-  return {
-    id: `msg_${uuid()}`,
-    accountId: account.id,
-    channel: 'whatsapp',
-    direction: 'inbound',
-    timestamp: new Date(),
-    conversationId: event.chat.chatId,
-    sender: {
-      id: event.from.wid,
-      displayName: event.from.pushName,
-    },
-    recipient: {
-      id: account.identity.channel === 'whatsapp' ? account.identity.phoneNumber : account.id,
-    },
-    contentSummary: mapWhatsAppEventToContentSummary(event.message),
-    channelPayload: event,
-    gateway: {
-      receivedAt: new Date(),
-      adapterId: account.provider,
-      account: {
-        id: account.id,
-        alias: account.alias,
-        owner: account.metadata.owner,
-        tags: account.metadata.tags,
-      },
-    },
-  };
+  return typeMap[messageType] ?? 'unknown';
 }
