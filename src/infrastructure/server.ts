@@ -11,6 +11,7 @@ import type { WebhookForwarder } from '../connections/webhooks/webhook-forwarder
 import type { CredentialValidator } from './credential-validator.js';
 import type { HealthCheckScheduler } from './health-check-scheduler.js';
 import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
+import { createApiKeyGuard } from '../core/auth/api-key.guard.js';
 import { healthController } from '../connections/api/health.controller.js';
 import { accountsController } from '../connections/api/accounts.controller.js';
 import { sendController } from '../connections/api/send.controller.js';
@@ -31,6 +32,7 @@ export interface ServerDeps {
   healthCheckScheduler?: HealthCheckScheduler;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
+  apiKey?: string;
   port: number;
   logLevel: string;
 }
@@ -62,7 +64,7 @@ export async function createServer(deps: ServerDeps) {
   });
 
   await fastify.register(fastifyCors, {
-    origin: true,
+    origin: process.env['CORS_ORIGIN'] ?? (isDev ? true : false),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
@@ -89,44 +91,31 @@ export async function createServer(deps: ServerDeps) {
     },
   });
 
-  await fastify.register(fastifySwaggerUi, {
-    routePrefix: '/docs',
-    uiConfig: { docExpansion: 'list', deepLinking: true },
-  });
+  if (isDev || process.env['SWAGGER_ENABLED'] === 'true') {
+    await fastify.register(fastifySwaggerUi, {
+      routePrefix: '/docs',
+      uiConfig: { docExpansion: 'list', deepLinking: true },
+    });
 
-  fastify.get('/openapi.json', { schema: { hide: true } }, async (_request, reply) => {
-    return reply
-      .header('content-type', 'application/json; charset=utf-8')
-      .header('cache-control', 'public, max-age=300')
-      .send(fastify.swagger());
-  });
+    fastify.get('/openapi.json', { schema: { hide: true } }, async (_request, reply) => {
+      return reply
+        .header('content-type', 'application/json; charset=utf-8')
+        .header('cache-control', 'public, max-age=300')
+        .send(fastify.swagger());
+    });
+  }
+
+  // ── Public routes (no auth) ──────────────────────────────────
 
   await fastify.register(healthController);
 
-  await fastify.register(
-    async (instance) => accountsController(instance, {
-      accountRepository: deps.accountRepository,
-      credentialValidator: deps.credentialValidator,
-      healthCheckScheduler: deps.healthCheckScheduler,
-      providerRegistry: deps.providerRegistry,
-    }),
-  );
-
-  await fastify.register(
-    async (instance) => sendController(instance, { messageRouter: deps.messageRouter }),
-  );
-
-  await fastify.register(
-    async (instance) => statusController(instance, {
-      accountRepository: deps.accountRepository,
-      providerRegistry: deps.providerRegistry,
-    }),
-  );
+  // ── Inbound webhooks (provider-to-gateway, own signature validation) ──
 
   await fastify.register(
     async (instance) => whatsappWebhookController(instance, {
       accountRepository: deps.accountRepository,
       webhookForwarder: deps.webhookForwarder,
+      providerRegistry: deps.providerRegistry,
     }),
   );
 
@@ -151,17 +140,48 @@ export async function createServer(deps: ServerDeps) {
     }),
   );
 
-  await fastify.register(
-    async (instance) => webhookConfigController(instance, {
-      accountRepository: deps.accountRepository,
-      webhookConfigRepo: deps.webhookConfigRepo,
-    }),
-  );
+  // ── Authenticated API routes ────────────────────────────────
+
+  const apiKeyGuard = createApiKeyGuard(deps.apiKey);
+
+  await fastify.register(async (authenticated) => {
+    authenticated.addHook('preHandler', apiKeyGuard);
+
+    await authenticated.register(
+      async (instance) => accountsController(instance, {
+        accountRepository: deps.accountRepository,
+        credentialValidator: deps.credentialValidator,
+        healthCheckScheduler: deps.healthCheckScheduler,
+        providerRegistry: deps.providerRegistry,
+      }),
+    );
+
+    await authenticated.register(
+      async (instance) => sendController(instance, { messageRouter: deps.messageRouter }),
+    );
+
+    await authenticated.register(
+      async (instance) => statusController(instance, {
+        accountRepository: deps.accountRepository,
+        providerRegistry: deps.providerRegistry,
+      }),
+    );
+
+    await authenticated.register(
+      async (instance) => webhookConfigController(instance, {
+        accountRepository: deps.accountRepository,
+        webhookConfigRepo: deps.webhookConfigRepo,
+      }),
+    );
+  });
+
+  // ── WebSocket (token-based auth handled inside controller) ──
 
   if (deps.wsBroadcaster) {
     await fastify.register(
       async (instance) => websocketController(instance, {
         wsBroadcaster: deps.wsBroadcaster!,
+        apiKey: deps.apiKey,
       }),
     );
   }

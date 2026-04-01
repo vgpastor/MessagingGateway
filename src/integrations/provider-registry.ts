@@ -16,7 +16,7 @@ export type MessagingFactory = (
   inlineCredential?: string,
 ) => MessagingPort;
 
-export type InboundAdapterFactory = () => InboundWebhookPort<any, any>;
+export type InboundAdapterFactory = () => InboundWebhookPort<unknown, unknown>;
 
 export type HealthAdapterFactory = () => ProviderHealthChecker;
 
@@ -75,7 +75,7 @@ export class ProviderRegistry implements MessagingAdapterFactory {
     return this.providers.get(providerId)?.connection?.();
   }
 
-  getInboundAdapter(providerId: ProviderType): InboundWebhookPort<any, any> | undefined {
+  getInboundAdapter(providerId: ProviderType): InboundWebhookPort<unknown, unknown> | undefined {
     return this.providers.get(providerId)?.inbound?.();
   }
 

@@ -27,9 +27,10 @@ export interface ConnectionManagerPort {
   /** Whether a connection exists (connected or connecting) */
   hasConnection(accountId: string): boolean;
 
-  /** Request a pairing code as alternative to QR scanning */
-  requestPairingCode(accountId: string, phoneNumber: string): Promise<string>;
-
   /** Disconnect and clear session */
   disconnect(accountId: string): Promise<void>;
+}
+
+export interface PairingCodeCapable {
+  requestPairingCode(accountId: string, phoneNumber: string): Promise<string>;
 }

@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+
+const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')) as { version: string };
 
 export async function healthController(fastify: FastifyInstance): Promise<void> {
   fastify.get('/health', {
@@ -22,7 +26,7 @@ export async function healthController(fastify: FastifyInstance): Promise<void> 
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),
-      version: '1.0.0',
+      version: pkg.version,
       uptime: process.uptime(),
     };
   });

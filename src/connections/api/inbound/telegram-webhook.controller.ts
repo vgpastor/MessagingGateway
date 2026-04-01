@@ -57,7 +57,7 @@ export async function telegramWebhookController(
         });
       }
 
-      fastify.log.info({ accountId }, 'Telegram update received (adapter not yet implemented)');
+      await deps.webhookForwarder.forwardRaw(accountId, request.body, 'message.inbound', account.channel);
 
       return { received: true };
     },

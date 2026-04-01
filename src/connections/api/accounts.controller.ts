@@ -6,6 +6,7 @@ import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidator } from '../../infrastructure/credential-validator.js';
 import type { HealthCheckScheduler } from '../../infrastructure/health-check-scheduler.js';
 import type { ProviderRegistry } from '../../integrations/provider-registry.js';
+import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
 import { accountSchema } from '../../infrastructure/config/accounts.schema.js';
 import { buildDefaultIdentity } from '../../infrastructure/config/accounts.loader.js';
 import {
@@ -436,13 +437,21 @@ export async function accountsController(
       });
     }
 
+    if (!('requestPairingCode' in manager)) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'PAIRING_NOT_SUPPORTED',
+        message: `Provider '${account.provider}' does not support pairing codes.`,
+      });
+    }
+
     // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
       await manager.connect(account.id, account.providerConfig);
     }
 
     try {
-      const pairingCode = await manager.requestPairingCode(account.id, phoneNumber);
+      const pairingCode = await (manager as unknown as PairingCodeCapable).requestPairingCode(account.id, phoneNumber);
 
       fastify.log.info(
         { accountId: account.id, phoneNumber },

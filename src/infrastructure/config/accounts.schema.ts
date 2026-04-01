@@ -72,7 +72,7 @@ const accountSchema = z.object({
 );
 
 export const accountsConfigSchema = z.object({
-  accounts: z.array(accountSchema).min(1),
+  accounts: z.array(accountSchema).min(0),
 });
 
 export { accountSchema };
