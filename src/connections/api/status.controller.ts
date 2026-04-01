@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { AdapterFactory } from '../../integrations/adapter.factory.js';
+import type { ProviderRegistry } from '../../integrations/provider-registry.js';
 import { messageResultSchema, errorResponseSchema } from './schemas.js';
 
 interface StatusControllerDeps {
   accountRepository: ChannelAccountRepository;
-  adapterFactory: AdapterFactory;
+  providerRegistry: ProviderRegistry;
 }
 
 export async function statusController(
@@ -61,7 +61,7 @@ export async function statusController(
         });
       }
 
-      const adapter = deps.adapterFactory.create(account);
+      const adapter = deps.providerRegistry.create(account);
       const status = await adapter.getMessageStatus(id);
 
       return {
@@ -114,7 +114,7 @@ export async function statusController(
         });
       }
 
-      const adapter = deps.adapterFactory.create(account);
+      const adapter = deps.providerRegistry.create(account);
       await adapter.markAsRead(id);
 
       return { success: true };

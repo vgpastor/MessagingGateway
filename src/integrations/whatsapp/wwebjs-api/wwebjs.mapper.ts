@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { ContentType } from '../../../domain/messaging/channel.types.js';
-import type { UnifiedEnvelope, ContentSummary } from '../../../domain/messaging/unified-envelope.js';
+import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
+import type { ContentType } from '../../../core/messaging/channel.types.js';
+import type { UnifiedEnvelope, ContentSummary } from '../../../core/messaging/unified-envelope.js';
 import type {
   WhatsAppInboundEvent,
   WhatsAppContact,

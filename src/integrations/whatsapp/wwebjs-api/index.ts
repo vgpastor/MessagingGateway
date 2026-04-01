@@ -7,8 +7,8 @@ export const wwebjsProvider: ProviderBundle = {
   id: 'wwebjs-api',
   channel: 'whatsapp',
   displayName: 'WhatsApp (wwebjs-api)',
-  messaging: (providerConfig, credentialsRef, inlineCredential) =>
-    new WwebjsApiAdapter(providerConfig, credentialsRef, inlineCredential),
+  messaging: (config: Record<string, unknown>, cred: string, inline?: string) =>
+    new WwebjsApiAdapter(config, cred, inline),
   inbound: () => new WwebjsWebhookAdapter(),
   health: () => new WwebjsHealthChecker(),
 };

@@ -12,8 +12,6 @@ import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
 import { baileysSocketManager } from './integrations/whatsapp/baileys/baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './integrations/whatsapp/baileys/baileys.mapper.js';
 import { parseBaileysConfig } from './integrations/whatsapp/baileys/baileys.types.js';
-import { HealthCheckerRegistry } from './integrations/health-checker.registry.js';
-import { AdapterFactory } from './integrations/adapter.factory.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { Events, createEvent } from './core/events.js';
@@ -23,7 +21,6 @@ import { FileWebhookConfigStore } from './connections/webhooks/file-webhook-conf
 import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
-import { ConnectionManagerRegistry } from './infrastructure/connection-manager.registry.js';
 import { createServer } from './infrastructure/server.js';
 
 async function main() {
@@ -31,10 +28,10 @@ async function main() {
   const envConfig = loadEnvConfig();
   const rawAccounts = loadAccountsFromYaml(envConfig.accountsConfigPath);
 
-  // 2. Create Event Bus (backbone of the system)
+  // 2. Create Event Bus
   const eventBus = new EventBus();
 
-  // 3. Register all providers via ProviderRegistry
+  // 3. Register all providers
   const providerRegistry = new ProviderRegistry();
   providerRegistry.register(baileysProvider);
   providerRegistry.register(wwebjsProvider);
@@ -45,30 +42,8 @@ async function main() {
 
   console.log(`Registered ${providerRegistry.listProviders().length} provider(s): ${providerRegistry.listProviders().map((p) => p.id).join(', ')}`);
 
-  // 4. Build legacy registries from ProviderRegistry (backwards compat for existing code)
-  const healthCheckerRegistry = new HealthCheckerRegistry();
-  const adapterFactory = new AdapterFactory();
-  const connectionManagerRegistry = new ConnectionManagerRegistry();
-
-  for (const info of providerRegistry.listProviders()) {
-    const bundle = providerRegistry.getOrThrow(info.id);
-    if (bundle.health) healthCheckerRegistry.register(info.id, bundle.health());
-    if (bundle.connection) connectionManagerRegistry.register(bundle.connection());
-    // Register messaging adapter constructor for AdapterFactory compatibility
-    const messagingFactory = bundle.messaging;
-    adapterFactory.register(info.id, class {
-      constructor(
-        providerConfig: Record<string, unknown>,
-        credentialsRef: string,
-        inlineCredential?: string,
-      ) {
-        return messagingFactory(providerConfig, credentialsRef, inlineCredential) as any;
-      }
-    } as any);
-  }
-
-  // 5. Validate credentials against real provider APIs
-  const credentialValidator = new CredentialValidator(healthCheckerRegistry);
+  // 4. Validate credentials
+  const credentialValidator = new CredentialValidator(providerRegistry);
   console.log(`Loaded ${rawAccounts.length} account(s) from configuration, validating credentials...`);
   const accounts = await credentialValidator.validateAll(rawAccounts);
 
@@ -78,12 +53,12 @@ async function main() {
   const errored = accounts.filter((a) => a.status === 'error').length;
   console.log(`Validation complete: ${active} active, ${authExpired} auth_expired, ${unchecked} unchecked, ${errored} error`);
 
-  // 6. Create repository (with persistence back to YAML)
+  // 5. Create repository
   const accountsYamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
   const accountRepository = new InMemoryAccountRepository(accounts, accountsYamlPath);
 
-  // 7. Create services
-  const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
+  // 6. Create services
+  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
   const webhookConfigRepo = new FileWebhookConfigStore(
     resolve(process.cwd(), 'data/webhooks.json'),
   );
@@ -96,12 +71,11 @@ async function main() {
   const webhookConfigs = await webhookConfigRepo.findAll();
   console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
 
-  // 8. Subscribe connections to event bus
+  // 7. Subscribe connections to event bus
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
     await webhookForwarder.forward(event.data.envelope);
   });
 
-  // 9. Subscribe MessageRouter to send requests from WebSocket/API
   eventBus.on<MessageSendRequestPayload>(Events.MESSAGE_SEND_REQUEST, async (event) => {
     const { command, replyTo } = event.data;
     try {
@@ -121,7 +95,7 @@ async function main() {
           'router',
           {
             error: err instanceof Error ? err.message : 'Send failed',
-            code: (err as any)?.code ?? 'UNKNOWN',
+            code: (err as Record<string, string>)?.code ?? 'UNKNOWN',
             accountId: command.fromAccountId,
             replyTo,
           },
@@ -131,10 +105,10 @@ async function main() {
     }
   });
 
-  // 10. Create WebSocket broadcaster (subscribes to event bus automatically)
+  // 8. Create WebSocket broadcaster
   const wsBroadcaster = new WebSocketBroadcaster(eventBus);
 
-  // 10. Create health check scheduler
+  // 9. Create health check scheduler
   const healthCheckIntervalMs = parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10);
   const healthCheckScheduler = new HealthCheckScheduler(
     accountRepository,
@@ -146,11 +120,10 @@ async function main() {
   const server = await createServer({
     accountRepository,
     webhookConfigRepo,
+    providerRegistry,
     messageRouter,
-    adapterFactory,
     credentialValidator,
     healthCheckScheduler,
-    connectionManagerRegistry,
     webhookForwarder,
     wsBroadcaster,
     port: envConfig.port,
@@ -162,7 +135,7 @@ async function main() {
     console.log(`Unified Messaging Gateway listening on port ${envConfig.port}`);
     console.log(`Swagger UI available at http://localhost:${envConfig.port}/docs`);
 
-    // Connect managed providers (Baileys) and wire inbound events
+    // 11. Connect managed providers and wire inbound events
     const managedAccounts = accounts.filter(
       (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
     );
@@ -171,35 +144,33 @@ async function main() {
       const bundle = providerRegistry.getOrThrow(account.provider);
       const inboundAdapter = bundle.inbound?.();
 
-      if (account.provider === 'baileys') {
-        // Baileys-specific: connect socket and wire message handler
-        const config = parseBaileysConfig(account.providerConfig);
-        try {
-          await baileysSocketManager.connect(account.id, config);
+      // Use ConnectionAdapter from the bundle to connect
+      const connectionManager = bundle.connection!();
+      try {
+        await connectionManager.connect(account.id, account.providerConfig);
 
-          if (inboundAdapter) {
-            baileysSocketManager.onMessage(account.id, async (event) => {
-              for (const msg of event.messages) {
-                if (msg.key?.fromMe) continue;
-                try {
-                  const waEvent = mapBaileysToWhatsAppEvent(msg);
-                  const envelope = inboundAdapter.toEnvelope(waEvent, account);
-                  await eventBus.emit(
-                    createEvent<MessageInboundPayload>(
-                      Events.MESSAGE_INBOUND,
-                      account.provider,
-                      { envelope },
-                      account.id,
-                    ),
-                  );
-                } catch (err) {
-                  console.error(`[${account.provider}:${account.id}] Failed to process inbound message:`, err);
-                }
+        // Wire inbound messages if provider supports Baileys socket events
+        if (account.provider === 'baileys' && inboundAdapter) {
+          baileysSocketManager.onMessage(account.id, async (event) => {
+            for (const msg of event.messages) {
+              if (msg.key?.fromMe) continue;
+              try {
+                const waEvent = mapBaileysToWhatsAppEvent(msg);
+                const envelope = inboundAdapter.toEnvelope(waEvent, account);
+                await eventBus.emit(
+                  createEvent<MessageInboundPayload>(
+                    Events.MESSAGE_INBOUND,
+                    account.provider,
+                    { envelope },
+                    account.id,
+                  ),
+                );
+              } catch (err) {
+                console.error(`[${account.provider}:${account.id}] Failed to process inbound message:`, err);
               }
-            });
-          }
+            }
+          });
 
-          // Connection updates → emit to event bus
           baileysSocketManager.onConnectionUpdate(account.id, (update) => {
             const status = baileysSocketManager.getConnectionStatus(account.id);
             const qr = update.qr ?? baileysSocketManager.getLastQr(account.id);
@@ -212,15 +183,14 @@ async function main() {
               ),
             );
           });
-
-          console.log(`[${account.provider}:${account.id}] Connected and listening for messages`);
-        } catch (err) {
-          console.error(`[${account.provider}:${account.id}] Failed to connect:`, err);
         }
+
+        console.log(`[${account.provider}:${account.id}] Connected and listening for messages`);
+      } catch (err) {
+        console.error(`[${account.provider}:${account.id}] Failed to connect:`, err);
       }
     }
 
-    // Start periodic health checks after server is ready
     healthCheckScheduler.start();
   } catch (err) {
     server.log.error(err);

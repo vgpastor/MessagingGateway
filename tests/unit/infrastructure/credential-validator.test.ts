@@ -1,20 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CredentialValidator } from '../../../src/infrastructure/credential-validator.js';
-import { HealthCheckerRegistry } from '../../../src/integrations/health-checker.registry.js';
-import { WwebjsHealthChecker } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.health-checker.js';
-import { TelegramBotHealthChecker } from '../../../src/integrations/telegram/bot-api/telegram-bot.health-checker.js';
-import { BrevoHealthChecker } from '../../../src/integrations/email/brevo/brevo.health-checker.js';
-import { TwilioHealthChecker } from '../../../src/integrations/sms/twilio/twilio.health-checker.js';
-import { MessageBirdHealthChecker } from '../../../src/integrations/sms/messagebird/messagebird.health-checker.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+import { ProviderRegistry } from '../../../src/integrations/provider-registry.js';
+import { wwebjsProvider } from '../../../src/integrations/whatsapp/wwebjs-api/index.js';
+import { telegramBotProvider } from '../../../src/integrations/telegram/bot-api/index.js';
+import { brevoProvider } from '../../../src/integrations/email/brevo/index.js';
+import { twilioProvider } from '../../../src/integrations/sms/twilio/index.js';
+import { messagebirdProvider } from '../../../src/integrations/sms/messagebird/index.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
-function makeRegistry(): HealthCheckerRegistry {
-  const registry = new HealthCheckerRegistry();
-  registry.register('wwebjs-api', new WwebjsHealthChecker());
-  registry.register('telegram-bot-api', new TelegramBotHealthChecker());
-  registry.register('brevo', new BrevoHealthChecker());
-  registry.register('twilio', new TwilioHealthChecker());
-  registry.register('messagebird', new MessageBirdHealthChecker());
+function makeRegistry(): ProviderRegistry {
+  const registry = new ProviderRegistry();
+  registry.register(wwebjsProvider);
+  registry.register(telegramBotProvider);
+  registry.register(brevoProvider);
+  registry.register(twilioProvider);
+  registry.register(messagebirdProvider);
   return registry;
 }
 

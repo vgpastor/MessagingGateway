@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mapBaileysToWhatsAppEvent } from '../../../src/integrations/whatsapp/baileys/baileys.mapper.js';
 import { buildWhatsAppEnvelope, mapWhatsAppEventToContentSummary } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.mapper.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {
   id: 'wa-baileys-test',

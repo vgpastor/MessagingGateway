@@ -1,13 +1,13 @@
 import type { ChannelAccountRepository } from '../accounts/channel-account.repository.js';
 import type { MessageResult } from '../messaging/message-result.js';
 import type { SendMessageCommand } from '../messaging/outbound-message.js';
-import type { AdapterFactory } from '../../integrations/adapter.factory.js';
+import type { MessagingAdapterFactory } from '../messaging/ports/messaging-adapter.port.js';
 import { AccountNotFoundError, AccountUnavailableError } from '../errors.js';
 
 export class MessageRouterService {
   constructor(
     private readonly accountRepository: ChannelAccountRepository,
-    private readonly adapterFactory: AdapterFactory,
+    private readonly adapterFactory: MessagingAdapterFactory,
   ) {}
 
   async send(command: SendMessageCommand): Promise<MessageResult> {

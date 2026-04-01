@@ -3,15 +3,13 @@ import type { FastifyInstance } from 'fastify';
 import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
-import { AdapterFactory } from '../../src/integrations/adapter.factory.js';
-import { HealthCheckerRegistry } from '../../src/integrations/health-checker.registry.js';
-import { MessageRouterService } from '../../src/domain/routing/message-router.service.js';
+import { ProviderRegistry } from '../../src/integrations/provider-registry.js';
+import { MessageRouterService } from '../../src/core/routing/message-router.service.js';
 import { WebhookForwarder } from '../../src/connections/webhooks/webhook-forwarder.js';
 import { CredentialValidator } from '../../src/infrastructure/credential-validator.js';
-import { ConnectionManagerRegistry } from '../../src/infrastructure/connection-manager.registry.js';
 import { createServer } from '../../src/infrastructure/server.js';
-import type { WebhookConfig, WebhookConfigInput } from '../../src/domain/webhooks/webhook-config.js';
-import type { WebhookConfigRepository } from '../../src/domain/webhooks/webhook-config.repository.js';
+import type { WebhookConfig, WebhookConfigInput } from '../../src/core/webhooks/webhook-config.js';
+import type { WebhookConfigRepository } from '../../src/core/webhooks/webhook-config.repository.js';
 
 class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
   private configs = new Map<string, WebhookConfig>();
@@ -38,21 +36,18 @@ beforeAll(async () => {
     resolve(process.cwd(), 'tests/fixtures/accounts.yaml'),
   );
   const accountRepository = new InMemoryAccountRepository(accounts);
-  const adapterFactory = new AdapterFactory();
-  const healthCheckerRegistry = new HealthCheckerRegistry();
-  const credentialValidator = new CredentialValidator(healthCheckerRegistry);
-  const messageRouter = new MessageRouterService(accountRepository, adapterFactory);
+  const providerRegistry = new ProviderRegistry();
+  const credentialValidator = new CredentialValidator(providerRegistry);
+  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
-  const connectionManagerRegistry = new ConnectionManagerRegistry();
 
   app = await createServer({
     accountRepository,
     webhookConfigRepo,
+    providerRegistry,
     messageRouter,
-    adapterFactory,
     credentialValidator,
-    connectionManagerRegistry,
     webhookForwarder,
     port: 0,
     logLevel: 'silent',

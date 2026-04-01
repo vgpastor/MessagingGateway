@@ -1,4 +1,4 @@
-import type { ConnectionManagerPort, ConnectionInfo } from '../../../domain/accounts/connection-manager.port.js';
+import type { ConnectionManagerPort, ConnectionInfo } from '../../../core/accounts/connection-manager.port.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 

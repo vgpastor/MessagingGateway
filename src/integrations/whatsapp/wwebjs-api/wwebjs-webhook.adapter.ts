@@ -1,13 +1,13 @@
-import type { InboundWebhookPort, RawRequest } from '../../../domain/messaging/inbound-webhook.port.js';
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { UnifiedEnvelope } from '../../../domain/messaging/unified-envelope.js';
+import type { InboundWebhookPort, RawRequest } from '../../../core/messaging/inbound-webhook.port.js';
+import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
+import type { UnifiedEnvelope } from '../../../core/messaging/unified-envelope.js';
 import type { WhatsAppInboundEvent } from '../whatsapp-channel.types.js';
 import type { WwebjsInboundPayload } from './wwebjs.types.js';
 import {
   mapWwebjsToWhatsAppEvent,
   buildWhatsAppEnvelope,
 } from './wwebjs.mapper.js';
-import { InvalidPayloadError } from '../../../domain/errors.js';
+import { InvalidPayloadError } from '../../../core/errors.js';
 
 export class WwebjsWebhookAdapter
   implements InboundWebhookPort<WwebjsInboundPayload, WhatsAppInboundEvent>

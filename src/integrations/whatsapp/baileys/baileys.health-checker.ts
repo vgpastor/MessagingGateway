@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { ProviderHealthChecker, ValidationResult } from '../../../domain/messaging/provider-health.port.js';
+import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
+import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 

@@ -5,7 +5,7 @@ import {
   buildWhatsAppEnvelope,
 } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.mapper.js';
 import type { WwebjsInboundPayload } from '../../../src/integrations/whatsapp/wwebjs-api/wwebjs.types.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 
 const testAccount: ChannelAccount = {
   id: 'wa-acme',

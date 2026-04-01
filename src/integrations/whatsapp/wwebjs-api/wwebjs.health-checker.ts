@@ -1,5 +1,5 @@
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { ProviderHealthChecker, ValidationResult } from '../../../domain/messaging/provider-health.port.js';
+import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
+import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
 import { resolveProviderCredentialParsed } from '../../../infrastructure/config/env.config.js';
 import { fetchWithTimeout } from '../../shared/http.js';
 

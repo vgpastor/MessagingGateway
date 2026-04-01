@@ -1,4 +1,4 @@
-import type { UnifiedEnvelope } from '../../domain/messaging/unified-envelope.js';
+import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 
 // === WhatsApp Inbound Event (complete native contract) ===
 

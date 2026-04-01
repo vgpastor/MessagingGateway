@@ -1,11 +1,11 @@
-import type { InboundWebhookPort, RawRequest } from '../../../domain/messaging/inbound-webhook.port.js';
-import type { ChannelAccount } from '../../../domain/accounts/channel-account.js';
-import type { UnifiedEnvelope } from '../../../domain/messaging/unified-envelope.js';
+import type { InboundWebhookPort, RawRequest } from '../../../core/messaging/inbound-webhook.port.js';
+import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
+import type { UnifiedEnvelope } from '../../../core/messaging/unified-envelope.js';
 import type { WhatsAppInboundEvent } from '../whatsapp-channel.types.js';
 import type { proto } from '@whiskeysockets/baileys';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { buildWhatsAppEnvelope } from '../wwebjs-api/wwebjs.mapper.js';
-import { InvalidPayloadError } from '../../../domain/errors.js';
+import { InvalidPayloadError } from '../../../core/errors.js';
 
 export interface BaileysInboundPayload {
   messages: proto.IWebMessageInfo[];

@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import type { ChannelType } from '../../domain/messaging/channel.types.js';
-import type { ChannelAccount } from '../../domain/accounts/channel-account.js';
-import type { ChannelAccountRepository } from '../../domain/accounts/channel-account.repository.js';
-import { matchesRoutingCriteria } from '../../domain/routing/routing-rules.js';
+import type { ChannelType } from '../../core/messaging/channel.types.js';
+import type { ChannelAccount } from '../../core/accounts/channel-account.js';
+import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
+import { matchesRoutingCriteria } from '../../core/routing/routing-rules.js';
 
 export class InMemoryAccountRepository implements ChannelAccountRepository {
   private accounts: ChannelAccount[];

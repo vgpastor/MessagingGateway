@@ -1,8 +1,8 @@
 import type { WASocket } from '@whiskeysockets/baileys';
-import type { MessagingPort } from '../../../domain/messaging/messaging.port.js';
-import type { OutboundMessage } from '../../../domain/messaging/outbound-message.js';
-import type { MediaContent, MessageResult, MessageStatus } from '../../../domain/messaging/message-result.js';
-import { ProviderError } from '../../../domain/errors.js';
+import type { MessagingPort } from '../../../core/messaging/messaging.port.js';
+import type { OutboundMessage } from '../../../core/messaging/outbound-message.js';
+import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
+import { ProviderError } from '../../../core/errors.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 

@@ -3,14 +3,14 @@ import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
-import type { ChannelAccountRepository } from '../domain/accounts/channel-account.repository.js';
-import type { WebhookConfigRepository } from '../domain/webhooks/webhook-config.repository.js';
-import type { MessageRouterService } from '../domain/routing/message-router.service.js';
-import type { AdapterFactory } from '../integrations/adapter.factory.js';
+import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
+import type { WebhookConfigRepository } from '../core/webhooks/webhook-config.repository.js';
+import type { MessageRouterService } from '../core/routing/message-router.service.js';
+import type { ProviderRegistry } from '../integrations/provider-registry.js';
 import type { WebhookForwarder } from '../connections/webhooks/webhook-forwarder.js';
 import type { CredentialValidator } from './credential-validator.js';
 import type { HealthCheckScheduler } from './health-check-scheduler.js';
-import type { ConnectionManagerRegistry } from './connection-manager.registry.js';
+import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
 import { healthController } from '../connections/api/health.controller.js';
 import { accountsController } from '../connections/api/accounts.controller.js';
 import { sendController } from '../connections/api/send.controller.js';
@@ -21,16 +21,14 @@ import { emailWebhookController } from '../connections/api/inbound/email-webhook
 import { smsWebhookController } from '../connections/api/inbound/sms-webhook.controller.js';
 import { webhookConfigController } from '../connections/api/webhook-config.controller.js';
 import { websocketController } from '../connections/ws/websocket.controller.js';
-import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
   webhookConfigRepo: WebhookConfigRepository;
+  providerRegistry: ProviderRegistry;
   messageRouter: MessageRouterService;
-  adapterFactory: AdapterFactory;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
-  connectionManagerRegistry: ConnectionManagerRegistry;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
   port: number;
@@ -54,7 +52,6 @@ export async function createServer(deps: ServerDeps) {
         },
   });
 
-  // Accept empty JSON body as {} (POST endpoints with optional body)
   fastify.removeContentTypeParser('application/json');
   fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
     try {
@@ -64,16 +61,13 @@ export async function createServer(deps: ServerDeps) {
     }
   });
 
-  // CORS — allow external tools to consume the API and OpenAPI spec
   await fastify.register(fastifyCors, {
     origin: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
-  // WebSocket support
   await fastify.register(fastifyWebsocket);
 
-  // OpenAPI / Swagger
   await fastify.register(fastifySwagger, {
     openapi: {
       openapi: '3.1.0',
@@ -90,56 +84,45 @@ export async function createServer(deps: ServerDeps) {
         { name: 'Messaging', description: 'Unified message sending API' },
         { name: 'Webhooks', description: 'Inbound message webhooks from providers' },
         { name: 'Webhooks Config', description: 'Per-account webhook configuration management' },
+        { name: 'WebSocket', description: 'Real-time bidirectional event streaming' },
       ],
     },
   });
 
   await fastify.register(fastifySwaggerUi, {
     routePrefix: '/docs',
-    uiConfig: {
-      docExpansion: 'list',
-      deepLinking: true,
-    },
+    uiConfig: { docExpansion: 'list', deepLinking: true },
   });
 
-  // OpenAPI spec at a well-known path (easier for external tooling)
-  fastify.get('/openapi.json', {
-    schema: { hide: true },
-  }, async (_request, reply) => {
+  fastify.get('/openapi.json', { schema: { hide: true } }, async (_request, reply) => {
     return reply
       .header('content-type', 'application/json; charset=utf-8')
       .header('cache-control', 'public, max-age=300')
       .send(fastify.swagger());
   });
 
-  // Health
   await fastify.register(healthController);
 
-  // Accounts (includes connection management: connect, pair, disconnect)
   await fastify.register(
     async (instance) => accountsController(instance, {
       accountRepository: deps.accountRepository,
       credentialValidator: deps.credentialValidator,
       healthCheckScheduler: deps.healthCheckScheduler,
-      connectionManagerRegistry: deps.connectionManagerRegistry,
+      providerRegistry: deps.providerRegistry,
     }),
   );
 
-  // Messaging (send / status)
   await fastify.register(
-    async (instance) => sendController(instance, {
-      messageRouter: deps.messageRouter,
-    }),
+    async (instance) => sendController(instance, { messageRouter: deps.messageRouter }),
   );
 
   await fastify.register(
     async (instance) => statusController(instance, {
       accountRepository: deps.accountRepository,
-      adapterFactory: deps.adapterFactory,
+      providerRegistry: deps.providerRegistry,
     }),
   );
 
-  // Webhooks
   await fastify.register(
     async (instance) => whatsappWebhookController(instance, {
       accountRepository: deps.accountRepository,
@@ -168,7 +151,6 @@ export async function createServer(deps: ServerDeps) {
     }),
   );
 
-  // Webhook config management
   await fastify.register(
     async (instance) => webhookConfigController(instance, {
       accountRepository: deps.accountRepository,
@@ -176,7 +158,6 @@ export async function createServer(deps: ServerDeps) {
     }),
   );
 
-  // WebSocket real-time events
   if (deps.wsBroadcaster) {
     await fastify.register(
       async (instance) => websocketController(instance, {

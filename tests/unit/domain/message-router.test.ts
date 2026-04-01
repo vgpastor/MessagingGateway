@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MessageRouterService } from '../../../src/domain/routing/message-router.service.js';
-import type { ChannelAccountRepository } from '../../../src/domain/accounts/channel-account.repository.js';
+import { MessageRouterService } from '../../../src/core/routing/message-router.service.js';
+import type { ChannelAccountRepository } from '../../../src/core/accounts/channel-account.repository.js';
 import type { AdapterFactory } from '../../../src/integrations/adapter.factory.js';
-import type { ChannelAccount } from '../../../src/domain/accounts/channel-account.js';
-import type { MessagingPort } from '../../../src/domain/messaging/messaging.port.js';
-import { AccountNotFoundError, AccountUnavailableError } from '../../../src/domain/errors.js';
+import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
+import type { MessagingPort } from '../../../src/core/messaging/messaging.port.js';
+import { AccountNotFoundError, AccountUnavailableError } from '../../../src/core/errors.js';
 
 const activeAccount: ChannelAccount = {
   id: 'wa-acme',

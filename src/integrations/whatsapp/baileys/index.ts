@@ -8,8 +8,8 @@ export const baileysProvider: ProviderBundle = {
   id: 'baileys',
   channel: 'whatsapp',
   displayName: 'WhatsApp (Baileys)',
-  messaging: (providerConfig, credentialsRef, inlineCredential) =>
-    new BaileysAdapter(providerConfig, credentialsRef, inlineCredential),
+  messaging: (config: Record<string, unknown>, cred: string, inline?: string) =>
+    new BaileysAdapter(config, cred, inline),
   inbound: () => new BaileysWebhookAdapter(),
   health: () => new BaileysHealthChecker(),
   connection: () => new BaileysConnectionManager(),

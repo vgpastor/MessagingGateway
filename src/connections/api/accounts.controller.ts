@@ -5,7 +5,7 @@ import type { ChannelType, ProviderType } from '../../core/messaging/channel.typ
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidator } from '../../infrastructure/credential-validator.js';
 import type { HealthCheckScheduler } from '../../infrastructure/health-check-scheduler.js';
-import type { ConnectionManagerRegistry } from '../../infrastructure/connection-manager.registry.js';
+import type { ProviderRegistry } from '../../integrations/provider-registry.js';
 import { accountSchema } from '../../infrastructure/config/accounts.schema.js';
 import { buildDefaultIdentity } from '../../infrastructure/config/accounts.loader.js';
 import {
@@ -19,11 +19,18 @@ export interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
-  connectionManagerRegistry: ConnectionManagerRegistry;
+  providerRegistry: ProviderRegistry;
 }
 
-function sanitizeAccount(account: ChannelAccount, connectionManagerRegistry: ConnectionManagerRegistry) {
-  const connectionInfo = connectionManagerRegistry.getConnectionInfo(account.provider, account.id);
+function getConnectionInfo(account: ChannelAccount, registry: ProviderRegistry) {
+  const manager = registry.getConnectionManager(account.provider);
+  if (!manager) return { managed: false as const };
+  const info = manager.getConnectionInfo(account.id);
+  return { managed: true as const, status: info.status, qr: info.qr };
+}
+
+function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderRegistry) {
+  const connectionInfo = getConnectionInfo(account, providerRegistry);
 
   return {
     id: account.id,
@@ -86,7 +93,7 @@ export async function accountsController(
       accounts = await deps.accountRepository.findAll();
     }
 
-    return accounts.map((a) => sanitizeAccount(a, deps.connectionManagerRegistry));
+    return accounts.map((a) => sanitizeAccount(a, deps.providerRegistry));
   });
 
   fastify.get<{ Params: { id: string } }>('/api/v1/accounts/:id', {
@@ -111,14 +118,14 @@ export async function accountsController(
     }
 
     // Auto-reconnect managed providers that are disconnected
-    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (manager && !manager.hasConnection(account.id)) {
       manager.connect(account.id, account.providerConfig).catch((err) => {
         fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
       });
     }
 
-    return sanitizeAccount(account, deps.connectionManagerRegistry);
+    return sanitizeAccount(account, deps.providerRegistry);
   });
 
   fastify.get<{ Params: { id: string } }>('/api/v1/accounts/:id/health', {
@@ -233,7 +240,7 @@ export async function accountsController(
         });
       }
 
-      return reply.status(201).send(sanitizeAccount(saved, deps.connectionManagerRegistry));
+      return reply.status(201).send(sanitizeAccount(saved, deps.providerRegistry));
     } catch (err) {
       const message = (err as Error).message;
       if (message.includes('already exists')) {
@@ -292,7 +299,7 @@ export async function accountsController(
       });
     }
 
-    return sanitizeAccount(updated!, deps.connectionManagerRegistry);
+    return sanitizeAccount(updated!, deps.providerRegistry);
   });
 
   // DELETE /api/v1/accounts/:id — delete an account
@@ -355,7 +362,7 @@ export async function accountsController(
       });
     }
 
-    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (!manager) {
       return reply.status(400).send({
         error: 'Bad Request',
@@ -366,7 +373,7 @@ export async function accountsController(
 
     await manager.connect(account.id, account.providerConfig);
 
-    return sanitizeAccount(account, deps.connectionManagerRegistry);
+    return sanitizeAccount(account, deps.providerRegistry);
   });
 
   // POST /api/v1/accounts/:id/pair — request pairing code
@@ -409,7 +416,7 @@ export async function accountsController(
       });
     }
 
-    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (!manager) {
       return reply.status(400).send({
         error: 'Bad Request',
@@ -481,7 +488,7 @@ export async function accountsController(
       });
     }
 
-    const manager = deps.connectionManagerRegistry.findFor(account.provider);
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (!manager) {
       return reply.status(400).send({
         error: 'Bad Request',
