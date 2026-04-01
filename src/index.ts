@@ -13,7 +13,7 @@ import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { Events, createEvent } from './core/events.js';
-import type { MessageInboundPayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
+import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
 import { WebhookForwarder } from './connections/webhooks/webhook-forwarder.js';
 import { FileWebhookConfigStore } from './connections/webhooks/file-webhook-config.store.js';
 import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js';
@@ -63,6 +63,22 @@ async function main() {
   // Subscribe connections to event bus
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
     await webhookForwarder.forward(event.data.envelope);
+  });
+
+  // Auto-update account status when connection state changes
+  eventBus.on<ConnectionUpdatePayload>(Events.CONNECTION_UPDATE, async (event) => {
+    const { accountId, status } = event.data;
+    if (!accountId) return;
+    const account = await accountRepository.findById(accountId);
+    if (!account) return;
+
+    if (status === 'connected' && account.status !== 'active') {
+      await accountRepository.update(accountId, { status: 'active' });
+      console.log(`[${accountId}] Status auto-updated to active (connected)`);
+    } else if (status === 'disconnected' && account.status === 'active') {
+      await accountRepository.update(accountId, { status: 'auth_expired' });
+      console.log(`[${accountId}] Status auto-updated to auth_expired (disconnected)`);
+    }
   });
 
   eventBus.on<MessageSendRequestPayload>(Events.MESSAGE_SEND_REQUEST, async (event) => {
