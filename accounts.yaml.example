@@ -1,0 +1,73 @@
+accounts:
+  # === WhatsApp (Baileys — self-hosted, QR auth) ===
+  - id: my-whatsapp
+    alias: "My WhatsApp"
+    channel: whatsapp
+    provider: baileys
+    identity:
+      phoneNumber: "+34600000001"
+    # providerConfig:
+    #   browser: ["MyApp", "Chrome", "1.0.0"]
+    #   connectTimeoutMs: 60000
+    #   maxRetries: 5
+    metadata:
+      owner: my-org
+      environment: production
+      tags: [whatsapp, main]
+
+  # === WhatsApp (wwebjs-api — external HTTP service) ===
+  # - id: wa-external
+  #   alias: "External WhatsApp"
+  #   channel: whatsapp
+  #   provider: wwebjs-api
+  #   identity:
+  #     phoneNumber: "+34600000002"
+  #   credentialsRef: WWEBJS_EXTERNAL  # reads WWEBJS_EXTERNAL_API_KEY env var
+  #   providerConfig:
+  #     baseUrl: http://wwebjs-service:3001
+  #     sessionId: my-session
+  #   metadata:
+  #     owner: my-org
+  #     environment: production
+  #     tags: [whatsapp, external]
+
+  # === Telegram ===
+  # - id: tg-bot
+  #   alias: "My Telegram Bot"
+  #   channel: telegram
+  #   provider: telegram-bot-api
+  #   identity:
+  #     botUsername: my_bot
+  #   credentialsRef: TG_BOT  # reads TG_BOT_TOKEN env var
+  #   metadata:
+  #     owner: my-org
+  #     environment: production
+  #     tags: [telegram, bot]
+
+  # === Email (Brevo/Sendinblue) ===
+  # - id: email-support
+  #   alias: "Support Email"
+  #   channel: email
+  #   provider: brevo
+  #   identity:
+  #     address: support@example.com
+  #   credentialsRef: BREVO_MAIN  # reads BREVO_MAIN_API_KEY env var
+  #   providerConfig:
+  #     senderName: "Support Team"
+  #   metadata:
+  #     owner: my-org
+  #     environment: production
+  #     tags: [email, support]
+
+  # === SMS (Twilio) ===
+  # - id: sms-alerts
+  #   alias: "SMS Alerts"
+  #   channel: sms
+  #   provider: twilio
+  #   identity:
+  #     phoneNumber: "+14155550001"
+  #   credentialsRef: TWILIO_ALERTS  # reads TWILIO_ALERTS_AUTH_TOKEN env var
+  #   metadata:
+  #     owner: my-org
+  #     environment: production
+  #     tags: [sms, alerts]

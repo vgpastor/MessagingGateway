@@ -1,0 +1,56 @@
+# Full stack: Messaging Gateway + n8n
+# Usage: cp docker-compose.example.yml docker-compose.override.yml && docker compose up -d
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "${HOST_PORT:-3123}:3000"
+    env_file:
+      - path: .env
+        required: true
+      - path: .env.local
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
+      WEBHOOK_CALLBACK_URL: http://n8n:5678/webhook/messaging-gateway
+      WEBHOOK_CALLBACK_SECRET: change-me-shared-secret
+      API_KEY: change-me-api-key
+    volumes:
+      - gateway-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://n8n:5678
+      GENERIC_TIMEZONE: Europe/Madrid
+    volumes:
+      - n8n-data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
+  n8n-data:

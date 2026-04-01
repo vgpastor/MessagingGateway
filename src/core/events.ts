@@ -9,7 +9,7 @@ import type { MessageResult } from './messaging/message-result.js';
 export const Events = {
   // Inbound (Integration → Core → Connections)
   MESSAGE_INBOUND: 'message.inbound',
-  MESSAGE_STATUS: 'message.status',
+  MESSAGE_STATUS: 'message.status', // TODO: wire these events
   CONNECTION_UPDATE: 'connection.update',
 
   // Outbound (Connections → Core → Integration)
@@ -18,20 +18,13 @@ export const Events = {
   MESSAGE_SEND_FAILURE: 'message.send.failure',
 
   // Account lifecycle
-  ACCOUNT_HEALTH_CHANGED: 'account.health.changed',
+  ACCOUNT_HEALTH_CHANGED: 'account.health.changed', // TODO: wire these events
 } as const;
 
 // ── Event payloads ──────────────────────────────────────────────
 
 export interface MessageInboundPayload {
   envelope: UnifiedEnvelope;
-}
-
-export interface MessageStatusPayload {
-  messageId: string;
-  accountId: string;
-  status: string;
-  timestamp: Date;
 }
 
 export interface ConnectionUpdatePayload {
@@ -56,12 +49,6 @@ export interface MessageSendFailurePayload {
   code: string;
   accountId?: string;
   replyTo?: string;
-}
-
-export interface AccountHealthChangedPayload {
-  accountId: string;
-  oldStatus: string;
-  newStatus: string;
 }
 
 // ── Factory helpers ─────────────────────────────────────────────

@@ -1,0 +1,48 @@
+{
+  "name": "@messaging-gateway/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Unified Messaging Gateway — REST client, WebSocket events, and full type definitions",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "messaging",
+    "gateway",
+    "whatsapp",
+    "telegram",
+    "sms",
+    "email",
+    "sdk",
+    "websocket",
+    "unified-messaging"
+  ],
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vgpastor/MessagingGateway",
+    "directory": "packages/sdk"
+  }
+}

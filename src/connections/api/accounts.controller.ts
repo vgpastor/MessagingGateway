@@ -300,7 +300,10 @@ export async function accountsController(
       });
     }
 
-    return sanitizeAccount(updated!, deps.providerRegistry);
+    if (!updated) {
+      return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found after update' });
+    }
+    return sanitizeAccount(updated, deps.providerRegistry);
   });
 
   // DELETE /api/v1/accounts/:id — delete an account

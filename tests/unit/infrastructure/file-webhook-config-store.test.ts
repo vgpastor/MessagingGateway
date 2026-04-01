@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FileWebhookConfigStore } from '../../../src/connections/webhooks/file-webhook-config.store.js';
 
@@ -20,13 +20,13 @@ describe('FileWebhookConfigStore', () => {
   });
 
   it('should start empty when file does not exist', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
     const configs = await store.findAll();
     expect(configs).toEqual([]);
   });
 
   it('should create directory and file on first upsert', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
 
     await store.upsert('wa-acme', {
       url: 'https://example.com/hook',
@@ -37,14 +37,14 @@ describe('FileWebhookConfigStore', () => {
   });
 
   it('should persist and reload configs', async () => {
-    const store1 = new FileWebhookConfigStore(TEST_FILE);
+    const store1 = await FileWebhookConfigStore.create(TEST_FILE);
     await store1.upsert('wa-acme', {
       url: 'https://example.com/hook',
       events: ['message.inbound'],
     });
 
     // Create a new store instance that reads from the same file
-    const store2 = new FileWebhookConfigStore(TEST_FILE);
+    const store2 = await FileWebhookConfigStore.create(TEST_FILE);
     const config = await store2.findByAccountId('wa-acme');
 
     expect(config).toBeDefined();
@@ -57,7 +57,7 @@ describe('FileWebhookConfigStore', () => {
   it('should update existing config preserving createdAt', async () => {
     vi.useFakeTimers();
     try {
-      const store = new FileWebhookConfigStore(TEST_FILE);
+      const store = await FileWebhookConfigStore.create(TEST_FILE);
 
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
       const created = await store.upsert('wa-acme', { url: 'https://first.com' });
@@ -74,7 +74,7 @@ describe('FileWebhookConfigStore', () => {
   });
 
   it('should default events to ["*"] and enabled to true', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
     const config = await store.upsert('wa-acme', { url: 'https://example.com' });
 
     expect(config.events).toEqual(['*']);
@@ -82,7 +82,7 @@ describe('FileWebhookConfigStore', () => {
   });
 
   it('should remove config and persist', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
     await store.upsert('wa-acme', { url: 'https://example.com' });
     await store.upsert('wa-test', { url: 'https://patrol.com' });
 
@@ -94,13 +94,13 @@ describe('FileWebhookConfigStore', () => {
     expect(all[0].accountId).toBe('wa-test');
 
     // Verify persisted
-    const store2 = new FileWebhookConfigStore(TEST_FILE);
+    const store2 = await FileWebhookConfigStore.create(TEST_FILE);
     expect(await store2.findByAccountId('wa-acme')).toBeUndefined();
     expect(await store2.findByAccountId('wa-test')).toBeDefined();
   });
 
   it('should return false when removing non-existent config', async () => {
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
     const deleted = await store.remove('nonexistent');
     expect(deleted).toBe(false);
   });
@@ -110,7 +110,7 @@ describe('FileWebhookConfigStore', () => {
     const { writeFileSync } = await import('node:fs');
     writeFileSync(TEST_FILE, 'not valid json', 'utf-8');
 
-    const store = new FileWebhookConfigStore(TEST_FILE);
+    const store = await FileWebhookConfigStore.create(TEST_FILE);
     const configs = await store.findAll();
     expect(configs).toEqual([]);
   });
