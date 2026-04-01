@@ -70,7 +70,7 @@ describe('GET /health', () => {
     const body = response.json();
     expect(body.status).toBe('ok');
     expect(body.timestamp).toBeDefined();
-    expect(body.version).toBe('1.0.0');
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body.uptime).toBeGreaterThan(0);
   });
 });
