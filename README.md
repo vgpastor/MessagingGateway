@@ -276,26 +276,21 @@ npm run lint       # Type check (tsc --noEmit)
 
 ## Releases
 
-**Docker image** is published to [GitHub Container Registry](https://ghcr.io/vgpastor/messaginggateway) on every version tag (`v*`):
+Releases are **version-driven** — just bump the version in `package.json` and merge to main:
+
 ```bash
-docker pull ghcr.io/vgpastor/messaginggateway:latest
-docker pull ghcr.io/vgpastor/messaginggateway:1.0.0
+# Gateway release (Docker + GitHub Release)
+# Edit package.json → "version": "0.2.0" → commit → merge to main
+# → Automatically builds and pushes Docker image + creates GitHub Release
+
+# SDK release (npm)
+# Edit packages/sdk/package.json → "version": "0.2.0" → commit → merge to main
+# → Automatically publishes to npm
 ```
 
-**SDK** is published to [npm](https://www.npmjs.com/package/@messaging-gateway/sdk) on SDK version tags (`sdk-v*`):
 ```bash
+docker pull vgpastor/messaging-gateway:latest
 npm install @messaging-gateway/sdk
-```
-
-To create a release:
-```bash
-# Gateway release
-git tag v1.0.0
-git push origin v1.0.0
-
-# SDK release
-git tag sdk-v0.1.0
-git push origin sdk-v0.1.0
 ```
 
 ## Contributing
