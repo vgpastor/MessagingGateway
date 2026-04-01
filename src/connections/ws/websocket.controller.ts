@@ -4,7 +4,7 @@ import { safeCompare } from '../../core/auth/api-key.guard.js';
 
 interface WebSocketControllerDeps {
   wsBroadcaster: WebSocketBroadcaster;
-  apiKey?: string;
+  apiKey: string;
 }
 
 export async function websocketController(
@@ -33,12 +33,9 @@ export async function websocketController(
   }, (socket, request) => {
     const query = request.query as { accounts?: string; token?: string };
 
-    // Authenticate if API key is configured
-    if (deps.apiKey) {
-      if (!query.token || !safeCompare(query.token, deps.apiKey)) {
-        socket.close(4401, 'Unauthorized: invalid or missing token');
-        return;
-      }
+    if (!query.token || !safeCompare(query.token, deps.apiKey)) {
+      socket.close(4401, 'Unauthorized: invalid or missing token');
+      return;
     }
 
     const accounts = query.accounts

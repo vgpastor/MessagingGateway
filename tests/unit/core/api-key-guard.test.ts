@@ -17,14 +17,13 @@ function mockReply() {
 }
 
 describe('createApiKeyGuard', () => {
-  it('should pass through when no API key configured (dev mode)', async () => {
-    const guard = createApiKeyGuard(undefined);
+  it('should reject request with no key', async () => {
+    const guard = createApiKeyGuard('my-secret-key');
     const reply = mockReply();
 
     await guard(mockRequest(), reply);
 
-    expect(reply.statusCode).toBe(200);
-    expect(reply.body).toBeUndefined();
+    expect(reply.statusCode).toBe(401);
   });
 
   it('should accept valid Bearer token', async () => {

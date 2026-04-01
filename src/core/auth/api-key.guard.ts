@@ -10,10 +10,8 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
  *
  * If no API key is configured (apiKey is undefined), all requests pass through (dev mode).
  */
-export function createApiKeyGuard(apiKey: string | undefined) {
+export function createApiKeyGuard(apiKey: string) {
   return async function apiKeyGuard(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    if (!apiKey) return; // Dev mode: no key configured, allow all
-
     const provided = extractApiKey(request);
     if (!provided) {
       return reply.status(401).send({

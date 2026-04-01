@@ -51,6 +51,7 @@ beforeAll(async () => {
     messageRouter,
     credentialValidator,
     webhookForwarder,
+    apiKey: 'test-api-key',
     port: 0,
     logLevel: 'silent',
   });
@@ -77,7 +78,8 @@ describe('GET /health', () => {
 
 describe('GET /api/v1/accounts', () => {
   it('should return all accounts without credentials', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/v1/accounts' });
+    const response = await app.inject({ method: 'GET', headers: { 'x-api-key': 'test-api-key' },
+      url: '/api/v1/accounts' });
     expect(response.statusCode).toBe(200);
 
     const accounts = response.json();
@@ -98,6 +100,7 @@ describe('GET /api/v1/accounts', () => {
   it('should filter by channel', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts?channel=whatsapp',
     });
     expect(response.statusCode).toBe(200);
@@ -112,6 +115,7 @@ describe('GET /api/v1/accounts', () => {
   it('should filter by owner', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts?owner=test-org',
     });
     expect(response.statusCode).toBe(200);
@@ -128,6 +132,7 @@ describe('GET /api/v1/accounts/:id', () => {
   it('should return specific account', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme',
     });
     expect(response.statusCode).toBe(200);
@@ -140,6 +145,7 @@ describe('GET /api/v1/accounts/:id', () => {
   it('should return 404 for unknown account', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/nonexistent',
     });
     expect(response.statusCode).toBe(404);
@@ -150,6 +156,7 @@ describe('GET /api/v1/accounts/:id/health', () => {
   it('should return account health status', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/health',
     });
     expect(response.statusCode).toBe(200);
@@ -166,6 +173,7 @@ describe('POST /api/v1/messages/send', () => {
   it('should return 400 when missing from and routing', async () => {
     const response = await app.inject({
       method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/messages/send',
       payload: {
         to: '+34612345678',
@@ -178,6 +186,7 @@ describe('POST /api/v1/messages/send', () => {
   it('should return 404 for unknown account ID', async () => {
     const response = await app.inject({
       method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/messages/send',
       payload: {
         from: 'nonexistent-account',
@@ -302,6 +311,7 @@ describe('Webhook Config API', () => {
   it('should return 404 when no webhook configured for account', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(404);
@@ -311,6 +321,7 @@ describe('Webhook Config API', () => {
   it('should create webhook config via PUT', async () => {
     const response = await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
       payload: {
         url: 'https://n8n.example.com/webhook/acme',
@@ -333,6 +344,7 @@ describe('Webhook Config API', () => {
   it('should return existing webhook config via GET', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(200);
@@ -342,6 +354,7 @@ describe('Webhook Config API', () => {
   it('should update webhook config via PUT', async () => {
     const response = await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
       payload: {
         url: 'https://new-url.example.com/webhook',
@@ -360,12 +373,14 @@ describe('Webhook Config API', () => {
     // Add a second webhook
     await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-test/webhook',
       payload: { url: 'https://test-org.example.com/hook' },
     });
 
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/webhooks',
     });
     expect(response.statusCode).toBe(200);
@@ -377,6 +392,7 @@ describe('Webhook Config API', () => {
   it('should delete webhook config', async () => {
     const response = await app.inject({
       method: 'DELETE',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(response.statusCode).toBe(200);
@@ -385,6 +401,7 @@ describe('Webhook Config API', () => {
     // Verify it's gone
     const getResponse = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-acme/webhook',
     });
     expect(getResponse.statusCode).toBe(404);
@@ -393,6 +410,7 @@ describe('Webhook Config API', () => {
   it('should return 404 for unknown account on PUT', async () => {
     const response = await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/nonexistent/webhook',
       payload: { url: 'https://example.com' },
     });
@@ -419,6 +437,7 @@ describe('POST /api/v1/accounts', () => {
   it('should create a new account', async () => {
     const response = await app.inject({
       method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts',
       payload: {
         id: 'wa-test-new',
@@ -452,6 +471,7 @@ describe('POST /api/v1/accounts', () => {
   it('should return 409 for duplicate account ID', async () => {
     const response = await app.inject({
       method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts',
       payload: {
         id: 'wa-acme',
@@ -471,6 +491,7 @@ describe('POST /api/v1/accounts', () => {
   it('should return 400 for invalid payload', async () => {
     const response = await app.inject({
       method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts',
       payload: {
         id: '',
@@ -489,6 +510,7 @@ describe('POST /api/v1/accounts', () => {
   it('should be retrievable after creation', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-test-new',
     });
 
@@ -501,6 +523,7 @@ describe('PUT /api/v1/accounts/:id', () => {
   it('should update an existing account', async () => {
     const response = await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-test-new',
       payload: {
         alias: 'Updated WhatsApp',
@@ -523,6 +546,7 @@ describe('PUT /api/v1/accounts/:id', () => {
   it('should return 404 for unknown account', async () => {
     const response = await app.inject({
       method: 'PUT',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/nonexistent',
       payload: { alias: 'Nope' },
     });
@@ -536,6 +560,7 @@ describe('DELETE /api/v1/accounts/:id', () => {
   it('should delete an existing account', async () => {
     const response = await app.inject({
       method: 'DELETE',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-test-new',
     });
 
@@ -547,6 +572,7 @@ describe('DELETE /api/v1/accounts/:id', () => {
   it('should return 404 after deletion', async () => {
     const response = await app.inject({
       method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/wa-test-new',
     });
 
@@ -556,6 +582,7 @@ describe('DELETE /api/v1/accounts/:id', () => {
   it('should return 404 for unknown account', async () => {
     const response = await app.inject({
       method: 'DELETE',
+      headers: { 'x-api-key': 'test-api-key' },
       url: '/api/v1/accounts/nonexistent',
     });
 

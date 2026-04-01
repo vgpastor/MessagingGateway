@@ -3,11 +3,13 @@ import { resolve } from 'node:path';
 
 config({ path: resolve(process.cwd(), '.env.local') });
 
+const DEV_API_KEY = 'umg-dev-key-not-for-production';
+
 export interface EnvConfig {
   port: number;
   nodeEnv: string;
   logLevel: string;
-  apiKey?: string;
+  apiKey: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
   accountsConfigPath?: string;
@@ -15,16 +17,50 @@ export interface EnvConfig {
 }
 
 export function loadEnvConfig(): EnvConfig {
+  const nodeEnv = process.env['NODE_ENV'] ?? 'development';
+  const apiKey = resolveApiKey(nodeEnv);
+
   return {
     port: parseInt(process.env['PORT'] ?? '3000', 10),
-    nodeEnv: process.env['NODE_ENV'] ?? 'development',
+    nodeEnv,
     logLevel: process.env['LOG_LEVEL'] ?? 'info',
-    apiKey: process.env['API_KEY'],
+    apiKey,
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
   };
+}
+
+function resolveApiKey(nodeEnv: string): string {
+  const configured = process.env['API_KEY'];
+
+  if (configured) {
+    if (configured === DEV_API_KEY && nodeEnv !== 'development') {
+      throw new Error(
+        'SECURITY: The default development API key cannot be used outside NODE_ENV=development. ' +
+        'Set a unique API_KEY environment variable for production.',
+      );
+    }
+    return configured;
+  }
+
+  // No API_KEY configured
+  if (nodeEnv === 'development') {
+    console.warn('');
+    console.warn('⚠️  WARNING: No API_KEY configured. Using default development key.');
+    console.warn(`   API_KEY: ${DEV_API_KEY}`);
+    console.warn('   This key ONLY works when NODE_ENV=development.');
+    console.warn('   Set a unique API_KEY environment variable before deploying.');
+    console.warn('');
+    return DEV_API_KEY;
+  }
+
+  throw new Error(
+    'SECURITY: API_KEY environment variable is required. ' +
+    'The gateway cannot start without authentication configured. ' +
+    'Set API_KEY to a strong, unique secret.',
+  );
 }
 
 export function resolveCredential(credentialsRef: string, suffix: string): string | undefined {

@@ -32,7 +32,7 @@ export interface ServerDeps {
   healthCheckScheduler?: HealthCheckScheduler;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
-  apiKey?: string;
+  apiKey: string;
   port: number;
   logLevel: string;
 }
