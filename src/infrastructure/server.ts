@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
+import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { ChannelAccountRepository } from '../domain/accounts/channel-account.repository.js';
@@ -19,6 +20,8 @@ import { telegramWebhookController } from '../connections/api/inbound/telegram-w
 import { emailWebhookController } from '../connections/api/inbound/email-webhook.controller.js';
 import { smsWebhookController } from '../connections/api/inbound/sms-webhook.controller.js';
 import { webhookConfigController } from '../connections/api/webhook-config.controller.js';
+import { websocketController } from '../connections/ws/websocket.controller.js';
+import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
@@ -29,6 +32,7 @@ export interface ServerDeps {
   healthCheckScheduler?: HealthCheckScheduler;
   connectionManagerRegistry: ConnectionManagerRegistry;
   webhookForwarder: WebhookForwarder;
+  wsBroadcaster?: WebSocketBroadcaster;
   port: number;
   logLevel: string;
 }
@@ -65,6 +69,9 @@ export async function createServer(deps: ServerDeps) {
     origin: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
+
+  // WebSocket support
+  await fastify.register(fastifyWebsocket);
 
   // OpenAPI / Swagger
   await fastify.register(fastifySwagger, {
@@ -168,6 +175,15 @@ export async function createServer(deps: ServerDeps) {
       webhookConfigRepo: deps.webhookConfigRepo,
     }),
   );
+
+  // WebSocket real-time events
+  if (deps.wsBroadcaster) {
+    await fastify.register(
+      async (instance) => websocketController(instance, {
+        wsBroadcaster: deps.wsBroadcaster!,
+      }),
+    );
+  }
 
   return fastify;
 }
