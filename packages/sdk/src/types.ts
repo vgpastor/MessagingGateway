@@ -37,7 +37,7 @@ export interface InteractiveResponseContent { type: 'interactive_response'; resp
 export interface SystemContent { type: 'system'; eventType: string; body?: string; affectedUsers?: string[] }
 export interface UnknownContent { type: 'unknown'; body?: string }
 
-export interface MediaInfo { id?: string; url?: string; mimeType: string; size?: number }
+export interface MediaInfo { id?: string; url?: string; mimeType: string; size?: number; base64?: string; filename?: string }
 
 // ── Message Context ─────────────────────────────────────────────
 
