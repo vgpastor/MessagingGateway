@@ -9,6 +9,7 @@ import { BaileysConnectionManager } from './baileys.connection-manager.js';
 import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
 import { baileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
+import { downloadBaileysMedia } from './baileys-media.js';
 
 export const baileysProvider: ProviderBundle = {
   id: 'baileys',
@@ -29,6 +30,16 @@ export const baileysProvider: ProviderBundle = {
         try {
           const waEvent = mapBaileysToWhatsAppEvent(msg);
           const envelope = inboundAdapter.toEnvelope(waEvent, account);
+
+          // Download media if present (non-blocking: continues without media on failure)
+          if ('media' in envelope.content && envelope.content.media) {
+            const media = await downloadBaileysMedia(msg);
+            if (media) {
+              envelope.content.media.base64 = media.base64;
+              if (media.filename) envelope.content.media.filename = media.filename;
+            }
+          }
+
           await eventBus.emit(
             createEvent<MessageInboundPayload>(
               Events.MESSAGE_INBOUND,

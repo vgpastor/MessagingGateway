@@ -120,6 +120,10 @@ export interface MediaInfo {
   url?: string;
   mimeType: string;
   size?: number;
+  /** Base64-encoded media content (downloaded at inbound time) */
+  base64?: string;
+  /** Original filename if available */
+  filename?: string;
 }
 
 // ── Message context ─────────────────────────────────────────────
