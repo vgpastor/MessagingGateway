@@ -221,4 +221,40 @@ export async function messagesController(
 
     return result;
   });
+
+  // GET /api/v1/conversations/:conversationId/context — AI-ready conversation context
+  fastify.get<{
+    Params: { conversationId: string };
+    Querystring: { limit?: string; since?: string; accountId?: string; format?: string; includeMedia?: string };
+  }>('/api/v1/conversations/:conversationId/context', {
+    schema: {
+      description: 'Get conversation history formatted for AI consumption. Returns messages in chronological order with participant info. Use format=openai for ChatGPT-compatible output, format=raw for full envelopes.',
+      tags: ['Messages'],
+      params: {
+        type: 'object' as const,
+        properties: { conversationId: { type: 'string' as const, description: 'Conversation/group/chat ID' } },
+        required: ['conversationId'],
+      },
+      querystring: {
+        type: 'object' as const,
+        properties: {
+          limit: { type: 'string' as const, description: 'Max messages to return (default: 50)' },
+          since: { type: 'string' as const, format: 'date-time', description: 'Only messages after this UTC timestamp' },
+          accountId: { type: 'string' as const, description: 'Filter by account' },
+          format: { type: 'string' as const, enum: ['openai', 'raw'], description: 'Output format (default: openai)' },
+          includeMedia: { type: 'string' as const, description: 'Include media descriptions (default: true)' },
+        },
+      },
+    },
+  }, async (request) => {
+    const { conversationId } = request.params;
+    const q = request.query;
+    return deps.messageStore.getConversationContext(conversationId, {
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      since: q.since ? new Date(q.since) : undefined,
+      accountId: q.accountId,
+      format: (q.format as 'openai' | 'raw') ?? 'openai',
+      includeMedia: q.includeMedia !== 'false',
+    });
+  });
 }

@@ -204,6 +204,97 @@ export class SqliteMessageStore implements MessageStorePort {
     };
   }
 
+  async getConversationContext(
+    conversationId: string,
+    options?: import('./message-store.port.js').ConversationContextOptions,
+  ): Promise<import('./message-store.port.js').ConversationContext> {
+    const limit = options?.limit ?? 50;
+    const includeMedia = options?.includeMedia ?? true;
+    const format = options?.format ?? 'openai';
+
+    const conditions = ['conversation_id = ?'];
+    const params: unknown[] = [conversationId];
+
+    if (options?.accountId) { conditions.push('account_id = ?'); params.push(options.accountId); }
+    if (options?.since) { conditions.push('timestamp >= ?'); params.push(toUTC(options.since)); }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    if (!this.db) {
+      return { conversationId, participantCount: 0, participants: [], totalMessages: 0, messages: [] };
+    }
+
+    // Total count
+    const totalRow = this.db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
+
+    // Participants summary
+    const participantRows = this.db.prepare(
+      `SELECT sender_id, sender_name, COUNT(*) as cnt FROM messages ${where} GROUP BY sender_id ORDER BY cnt DESC`,
+    ).all(...params) as Array<{ sender_id: string; sender_name: string | null; cnt: number }>;
+
+    const participants = participantRows.map((p) => ({
+      id: p.sender_id,
+      name: p.sender_name ?? p.sender_id,
+      messageCount: p.cnt,
+    }));
+
+    // Get the last N messages (ordered chronologically)
+    const rows = this.db.prepare(
+      `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC`,
+    ).all(...params, limit) as any[];
+
+    const envelopes = rows.map((r) => this.rowToEnvelope(r));
+
+    // Format messages for AI consumption
+    const messages = envelopes.map((env) => ({
+      role: (env.direction === 'outbound' ? 'assistant' : 'user') as 'user' | 'assistant' | 'system',
+      name: env.sender.displayName ?? env.sender.id,
+      content: this.formatContentForAI(env, includeMedia),
+      timestamp: typeof env.timestamp === 'string' ? env.timestamp : new Date(env.timestamp).toISOString(),
+      type: env.content.type,
+      id: env.id,
+    }));
+
+    // Try to get group name from channel details
+    const groupName = rows.length > 0
+      ? (() => { try { const d = JSON.parse(rows[rows.length - 1].channel_details_json ?? '{}'); return d.groupName; } catch { return undefined; } })()
+      : undefined;
+
+    const result: import('./message-store.port.js').ConversationContext = {
+      conversationId,
+      groupName,
+      participantCount: participants.length,
+      participants,
+      totalMessages: totalRow.total,
+      messages,
+    };
+
+    if (format === 'raw') {
+      result.envelopes = envelopes;
+    }
+
+    return result;
+  }
+
+  private formatContentForAI(env: UnifiedEnvelope, includeMedia: boolean): string {
+    const c = env.content;
+    switch (c.type) {
+      case 'text': return c.body;
+      case 'image': return includeMedia ? `[Image${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Image]');
+      case 'video': return includeMedia ? `[Video${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Video]');
+      case 'audio': return c.isVoiceNote ? '[Voice note]' : '[Audio]';
+      case 'document': return `[Document: ${c.fileName}${c.caption ? ` — ${c.caption}` : ''}]`;
+      case 'sticker': return '[Sticker]';
+      case 'location': return `[Location: ${c.latitude}, ${c.longitude}${c.name ? ` — ${c.name}` : ''}]`;
+      case 'contact': return `[Contact: ${c.contacts.map((ct) => ct.name).join(', ')}]`;
+      case 'reaction': return `[Reacted with ${c.emoji}]`;
+      case 'poll': return `[Poll: ${c.question}]`;
+      case 'interactive_response': return `[Selected: ${c.selectedText}]`;
+      case 'system': return `[System: ${c.body ?? c.eventType}]`;
+      default: return '[Unknown message type]';
+    }
+  }
+
   async close(): Promise<void> {
     if (this.db) {
       this.db.close();
