@@ -1,16 +1,17 @@
 import { existsSync } from 'node:fs';
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
-import { baileysSocketManager } from './baileys-socket.manager.js';
+import type { BaileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 
 export class BaileysHealthChecker implements ProviderHealthChecker {
+  constructor(private readonly socketManager: BaileysSocketManager) {}
   async validate(account: ChannelAccount): Promise<ValidationResult> {
     const config = parseBaileysConfig(account.providerConfig);
-    const authDir = baileysSocketManager.resolveAuthDir(account.id, config);
+    const authDir = this.socketManager.resolveAuthDir(account.id, config);
     const hasAuthFiles = existsSync(authDir);
 
-    if (baileysSocketManager.isConnected(account.id)) {
+    if (this.socketManager.isConnected(account.id)) {
       return {
         status: 'active',
         credentialsConfigured: true,

@@ -9,11 +9,10 @@ import { resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
+import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
 
-type MessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
-type ConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
-
-type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+type BaileysMessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
+type BaileysConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
 
 interface SocketEntry {
   socket: WASocket;
@@ -21,17 +20,17 @@ interface SocketEntry {
   retryCount: number;
   connectionStatus: ConnectionStatus;
   lastQr: string | undefined;
-  messageHandlers: MessageHandler[];
-  connectionHandlers: ConnectionHandler[];
+  messageHandlers: BaileysMessageHandler[];
+  connectionHandlers: BaileysConnectionHandler[];
 }
 
-export class BaileysSocketManager {
+export class BaileysSocketManager implements SocketManagerPort<BaileysProviderConfig> {
   private sockets = new Map<string, SocketEntry>();
 
-  async connect(accountId: string, config: BaileysProviderConfig): Promise<WASocket> {
+  async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
     const existing = this.sockets.get(accountId);
     if (existing) {
-      return existing.socket;
+      return;
     }
 
     const authDir = this.resolveAuthDir(accountId, config);
@@ -127,21 +126,20 @@ export class BaileysSocketManager {
       }
     });
 
-    return socket;
   }
 
   getSocket(accountId: string): WASocket | undefined {
     return this.sockets.get(accountId)?.socket;
   }
 
-  onMessage(accountId: string, handler: MessageHandler): void {
+  onMessage(accountId: string, handler: BaileysMessageHandler): void {
     const entry = this.sockets.get(accountId);
     if (entry) {
       entry.messageHandlers.push(handler);
     }
   }
 
-  onConnectionUpdate(accountId: string, handler: ConnectionHandler): void {
+  onConnectionUpdate(accountId: string, handler: BaileysConnectionHandler): void {
     const entry = this.sockets.get(accountId);
     if (entry) {
       entry.connectionHandlers.push(handler);

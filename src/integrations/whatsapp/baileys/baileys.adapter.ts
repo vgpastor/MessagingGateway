@@ -3,7 +3,7 @@ import type { MessagingPort } from '../../../core/messaging/messaging.port.js';
 import type { OutboundMessage } from '../../../core/messaging/outbound-message.js';
 import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
 import { ProviderError } from '../../../core/errors.js';
-import { baileysSocketManager } from './baileys-socket.manager.js';
+import type { BaileysSocketManager } from './baileys-socket.manager.js';
 
 export class BaileysAdapter implements MessagingPort {
   private readonly accountId: string;
@@ -11,7 +11,8 @@ export class BaileysAdapter implements MessagingPort {
   constructor(
     providerConfig: Record<string, unknown>,
     credentialsRef: string,
-    _inlineCredential?: string,
+    _inlineCredential: string | undefined,
+    private readonly socketManager: BaileysSocketManager,
   ) {
     this.accountId = (providerConfig['accountId'] as string | undefined) ?? credentialsRef;
   }
@@ -142,7 +143,7 @@ export class BaileysAdapter implements MessagingPort {
   }
 
   private getSocketOrThrow(): WASocket {
-    const socket = baileysSocketManager.getSocket(this.accountId);
+    const socket = this.socketManager.getSocket(this.accountId);
     if (!socket) {
       throw new ProviderError('baileys', `No active connection for account '${this.accountId}'`);
     }

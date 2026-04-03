@@ -8,24 +8,26 @@ import { BaileysAdapter } from './baileys.adapter.js';
 import { BaileysHealthChecker } from './baileys.health-checker.js';
 import { BaileysConnectionManager } from './baileys.connection-manager.js';
 import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
-import { baileysSocketManager } from './baileys-socket.manager.js';
+import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { downloadBaileysMedia } from './baileys-media.js';
+
+const socketManager = new BaileysSocketManager();
 
 export const baileysProvider: ProviderBundle = {
   id: 'baileys',
   channel: 'whatsapp',
   displayName: 'WhatsApp (Baileys)',
   messaging: (config: Record<string, unknown>, cred: string, inline?: string) =>
-    new BaileysAdapter(config, cred, inline),
+    new BaileysAdapter(config, cred, inline, socketManager),
   inbound: () => new BaileysWebhookAdapter(),
-  health: () => new BaileysHealthChecker(),
-  connection: () => new BaileysConnectionManager(),
+  health: () => new BaileysHealthChecker(socketManager),
+  connection: () => new BaileysConnectionManager(socketManager),
 
   async wireEvents(account: ChannelAccount, eventBus: EventBus): Promise<void> {
     const inboundAdapter = new BaileysWebhookAdapter();
 
-    baileysSocketManager.onMessage(account.id, async (event) => {
+    socketManager.onMessage(account.id, async (event) => {
       for (const msg of event.messages) {
         if (msg.key?.fromMe) continue;
         try {
@@ -55,9 +57,9 @@ export const baileysProvider: ProviderBundle = {
       }
     });
 
-    baileysSocketManager.onConnectionUpdate(account.id, (update) => {
-      const status = baileysSocketManager.getConnectionStatus(account.id);
-      const qr = update.qr ?? baileysSocketManager.getLastQr(account.id);
+    socketManager.onConnectionUpdate(account.id, (update) => {
+      const status = socketManager.getConnectionStatus(account.id);
+      const qr = update.qr ?? socketManager.getLastQr(account.id);
       eventBus.emit(
         createEvent<ConnectionUpdatePayload>(
           Events.CONNECTION_UPDATE,
