@@ -256,6 +256,76 @@ export interface MessageSendFailedData {
   replyTo?: string;
 }
 
+// ── Groups ─────────────────────────────────────────────────────
+
+export interface GroupInfo {
+  id: string;
+  name: string;
+  description?: string;
+  participants: GroupParticipant[];
+  createdAt?: string;
+  createdBy?: string;
+  isAnnouncement: boolean;
+}
+
+export interface GroupParticipant {
+  id: string;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+}
+
+// ── Message Queries & Analytics ────────────────────────────────
+
+export interface MessageQuery {
+  accountId?: string;
+  channel?: string;
+  conversationId?: string;
+  senderId?: string;
+  contentType?: string;
+  direction?: 'inbound' | 'outbound';
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MessageQueryResult {
+  messages: UnifiedEnvelope[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MessageStats {
+  totalMessages: number;
+  byChannel: Record<string, number>;
+  byContentType: Record<string, number>;
+  byDirection: Record<string, number>;
+  topConversations: Array<{ conversationId: string; count: number; lastMessage?: string }>;
+  byHour: number[];
+}
+
+// ── Conversation Context ───────────────────────────────────────
+
+export interface ConversationContext {
+  conversationId: string;
+  groupName?: string;
+  participantCount: number;
+  participants: Array<{ id: string; name: string; messageCount: number }>;
+  totalMessages: number;
+  messages: ConversationMessage[];
+  envelopes?: UnifiedEnvelope[];
+}
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant' | 'system';
+  name: string;
+  content: string;
+  timestamp: string;
+  type: string;
+  id: string;
+}
+
 // ── Client Config ───────────────────────────────────────────────
 
 export interface ClientConfig {

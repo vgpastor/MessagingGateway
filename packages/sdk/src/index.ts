@@ -68,4 +68,17 @@ export type {
   ConnectionUpdateData,
   MessageSentData,
   MessageSendFailedData,
+
+  // Groups
+  GroupInfo,
+  GroupParticipant,
+
+  // Message queries & analytics
+  MessageQuery,
+  MessageQueryResult,
+  MessageStats,
+
+  // Conversation context
+  ConversationContext,
+  ConversationMessage,
 } from './types.js';
