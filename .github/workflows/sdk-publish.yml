@@ -33,13 +33,16 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.check.outputs.changed == 'true'
         with:
-          node-version: 23
+          node-version: 22
           cache: npm
           cache-dependency-path: packages/sdk/package-lock.json
 
-      - name: Check npm version
+      - name: Upgrade npm for OIDC support
         if: steps.check.outputs.changed == 'true'
-        run: echo "npm $(npm -v)"
+        run: |
+          echo "Current npm: $(npm -v)"
+          npm install -g npm@11
+          echo "Updated npm: $(npm -v)"
 
       - name: Configure npm registry
         if: steps.check.outputs.changed == 'true'
