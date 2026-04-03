@@ -23,23 +23,19 @@ jobs:
       - name: Detect version changes
         id: check
         run: |
-          # Gateway version
           CURRENT=$(node -p "require('./package.json').version")
           PREVIOUS=$(git show HEAD~1:package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "")
           if [ "$CURRENT" != "$PREVIOUS" ] && [ -n "$PREVIOUS" ]; then
             echo "gateway_changed=true" >> "$GITHUB_OUTPUT"
-            echo "Gateway version changed: $PREVIOUS → $CURRENT"
           else
             echo "gateway_changed=false" >> "$GITHUB_OUTPUT"
           fi
           echo "gateway_version=$CURRENT" >> "$GITHUB_OUTPUT"
 
-          # SDK version
           SDK_CURRENT=$(node -p "require('./packages/sdk/package.json').version")
           SDK_PREVIOUS=$(git show HEAD~1:packages/sdk/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "")
           if [ "$SDK_CURRENT" != "$SDK_PREVIOUS" ] && [ -n "$SDK_PREVIOUS" ]; then
             echo "sdk_changed=true" >> "$GITHUB_OUTPUT"
-            echo "SDK version changed: $SDK_PREVIOUS → $SDK_CURRENT"
           else
             echo "sdk_changed=false" >> "$GITHUB_OUTPUT"
           fi
@@ -111,15 +107,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 23
           cache: npm
           cache-dependency-path: packages/sdk/package-lock.json
 
-      - name: Upgrade npm for OIDC support
-        run: npx npm@11 --version
+      - name: Check npm version
+        run: echo "npm $(npm -v)"
 
       - name: Configure npm registry
-        run: npx npm@11 config set registry https://registry.npmjs.org/
+        run: npm config set registry https://registry.npmjs.org/
 
       - name: Install dependencies
         working-directory: packages/sdk
@@ -131,7 +127,7 @@ jobs:
 
       - name: Publish to npm (OIDC)
         working-directory: packages/sdk
-        run: npx npm@11 publish --provenance --access public
+        run: npm publish --provenance --access public
 
       - name: Create Git tag
         run: |

@@ -33,7 +33,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.check.outputs.changed == 'true'
         with:
-          node-version: 22
+          node-version: 23
           cache: npm
           cache-dependency-path: packages/n8n-nodes/package-lock.json
 
@@ -41,7 +41,7 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           echo "Current npm: $(npm -v)"
-          npm install -g npm@11
+          echo "npm $(npm -v)"
           echo "Updated npm: $(npm -v)"
 
       - name: Configure npm registry
