@@ -1,5 +1,5 @@
 {
-  "name": "@messaging-gateway/n8n-nodes",
+  "name": "n8n-nodes-messaging-gateway",
   "version": "0.1.0",
   "description": "n8n community nodes for Unified Messaging Gateway — send and receive messages across WhatsApp, Telegram, Email, and SMS",
   "license": "MIT",
