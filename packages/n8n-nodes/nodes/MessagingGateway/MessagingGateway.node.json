@@ -1,0 +1,17 @@
+{
+  "node": "n8n-nodes-messaging-gateway.messagingGateway",
+  "nodeVersion": "1.0",
+  "codexVersion": "1.0",
+  "categories": ["Communication"],
+  "resources": {
+    "primaryDocumentation": [
+      {
+        "url": "https://github.com/vgpastor/MessagingGateway"
+      }
+    ]
+  },
+  "alias": ["whatsapp", "telegram", "sms", "email", "chat", "messaging"],
+  "subcategories": {
+    "Communication": ["Messaging"]
+  }
+}
