@@ -25,11 +25,15 @@ export class WebhookForwarder {
 
     // Filter: enabled + event type match + envelope filter match
     const payloadObj = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>;
-    const matching = accountConfigs.filter((c) =>
-      c.enabled
-      && (c.events.includes('*') || c.events.includes(eventType))
-      && matchesFilter(payloadObj, c.filters),
-    );
+    const matching = accountConfigs.filter((c) => {
+      if (!c.enabled) return false;
+      if (!c.events.includes('*') && !c.events.includes(eventType)) return false;
+      // Only apply envelope filters for message events (not status/raw payloads)
+      if (c.filters && (eventType === 'message.inbound' || eventType === 'message.sent')) {
+        return matchesFilter(payloadObj, c.filters);
+      }
+      return true;
+    });
 
     if (matching.length > 0) {
       // Send to all matching webhooks in parallel

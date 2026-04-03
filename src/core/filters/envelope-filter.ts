@@ -77,12 +77,10 @@ function matchesValue(actual: unknown, expected: FilterValue): boolean {
 }
 
 function primitiveEquals(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  // Loose comparison for string/number ("123" == 123)
-  if (typeof a === 'string' && typeof b === 'number') return a === String(b);
-  if (typeof a === 'number' && typeof b === 'string') return String(a) === b;
-  return false;
+  return a === b;
 }
+
+const MAX_FILTER_DEPTH = 5;
 
 /**
  * Get a nested value from an object using dot notation.
@@ -90,6 +88,7 @@ function primitiveEquals(a: unknown, b: unknown): boolean {
  */
 function getNestedValue(obj: unknown, path: string): unknown {
   const parts = path.split('.');
+  if (parts.length > MAX_FILTER_DEPTH) return undefined;
   let current: unknown = obj;
 
   for (const part of parts) {

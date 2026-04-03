@@ -193,5 +193,32 @@ describe('matchesFilter', () => {
       expect(matchesFilter(textMessage, { include: {} })).toBe(true);
       expect(matchesFilter(textMessage, { exclude: {} })).toBe(true);
     });
+
+    it('should resolve 3-level nested paths', () => {
+      const data = { gateway: { account: { owner: 'alice' } } };
+      expect(matchesFilter(data, { include: { 'gateway.account.owner': 'alice' } })).toBe(true);
+      expect(matchesFilter(data, { include: { 'gateway.account.owner': 'bob' } })).toBe(false);
+    });
+
+    it('should use strict equality (no string/number coercion)', () => {
+      const data = { value: '123' };
+      expect(matchesFilter(data, { include: { value: '123' } })).toBe(true);
+      expect(matchesFilter(data, { include: { value: 123 } })).toBe(false); // strict: string !== number
+    });
+
+    it('should pass non-envelope payloads when no include filter on missing fields', () => {
+      const statusPayload = { accountId: 'wa-1', status: 'delivered', messageId: 'msg-1' };
+      // A filter on content.type should not crash, just not match
+      expect(matchesFilter(statusPayload, { include: { 'content.type': 'text' } })).toBe(false);
+      // No filter = passes
+      expect(matchesFilter(statusPayload, undefined)).toBe(true);
+      expect(matchesFilter(statusPayload, {})).toBe(true);
+    });
+
+    it('should return undefined for paths exceeding max depth', () => {
+      const data = { a: { b: { c: { d: { e: { f: 'deep' } } } } } };
+      expect(matchesFilter(data, { include: { 'a.b.c.d.e.f': 'deep' } })).toBe(false); // 6 levels > max 5
+      expect(matchesFilter(data, { include: { 'a.b.c.d.e': { f: 'deep' } as any } })).toBe(false); // object value
+    });
   });
 });

@@ -9,13 +9,21 @@ interface WebhookConfigDeps {
   webhookConfigRepo: WebhookConfigRepository;
 }
 
+const filterValueSchema = {
+  oneOf: [
+    { type: 'string' },
+    { type: 'number' },
+    { type: 'boolean' },
+    { type: 'array', items: { type: ['string', 'number', 'boolean'] }, maxItems: 50 },
+  ],
+};
+
 const filtersSchema = {
   type: 'object' as const,
-  description: 'Filter rules for this webhook. Include = must match (AND between fields, OR within arrays). Exclude = reject if matches (OR). fromMe = true/false/omit.',
   properties: {
-    include: { type: 'object' as const, additionalProperties: true, description: 'All fields must match. Values can be primitives or arrays. Dot notation supported (e.g. "content.type", "channelDetails.isGroup").' },
-    exclude: { type: 'object' as const, additionalProperties: true, description: 'Any field match rejects the message.' },
-    fromMe: { type: 'boolean' as const, description: 'true = only own messages, false = only others, omit = all' },
+    include: { type: 'object' as const, additionalProperties: filterValueSchema, maxProperties: 20 },
+    exclude: { type: 'object' as const, additionalProperties: filterValueSchema, maxProperties: 20 },
+    fromMe: { type: 'boolean' as const },
   },
 };
 

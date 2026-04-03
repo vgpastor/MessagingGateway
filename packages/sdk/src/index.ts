@@ -53,6 +53,8 @@ export type {
   WebhookConfig,
   WebhookConfigInput,
   WebhookEventType,
+  EnvelopeFilter,
+  FilterValue,
 
   // Health
   HealthStatus,

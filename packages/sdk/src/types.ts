@@ -175,11 +175,26 @@ export interface UpdateAccountInput {
 
 export type WebhookEventType = 'message.inbound' | 'message.status' | 'message.sent' | '*';
 
+/** A filter value: single primitive or array of primitives (OR match) */
+export type FilterValue = string | number | boolean | Array<string | number | boolean>;
+
+/** Envelope filter rules for webhook routing */
+export interface EnvelopeFilter {
+  /** All fields must match (AND between fields, OR within array values) */
+  include?: Record<string, FilterValue>;
+  /** Any field match rejects the message (OR between fields) */
+  exclude?: Record<string, FilterValue>;
+  /** Shortcut: true = only own messages, false = only others, undefined = all */
+  fromMe?: boolean;
+}
+
 export interface WebhookConfig {
+  id: string;
   accountId: string;
   url: string;
   secret?: string;
   events: WebhookEventType[];
+  filters?: EnvelopeFilter;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -189,6 +204,7 @@ export interface WebhookConfigInput {
   url: string;
   secret?: string;
   events?: WebhookEventType[];
+  filters?: EnvelopeFilter;
   enabled?: boolean;
 }
 
