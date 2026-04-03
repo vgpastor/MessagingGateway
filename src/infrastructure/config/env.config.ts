@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
+import { getLogger } from '../../core/logger/logger.port.js';
 
 config({ path: resolve(process.cwd(), '.env.local') });
 
@@ -47,12 +48,10 @@ function resolveApiKey(nodeEnv: string): string {
 
   // No API_KEY configured
   if (nodeEnv === 'development') {
-    console.warn('');
-    console.warn('⚠️  WARNING: No API_KEY configured. Using default development key.');
-    console.warn(`   API_KEY: ${DEV_API_KEY}`);
-    console.warn('   This key ONLY works when NODE_ENV=development.');
-    console.warn('   Set a unique API_KEY environment variable before deploying.');
-    console.warn('');
+    getLogger().warn('No API_KEY configured, using default development key', {
+      apiKey: DEV_API_KEY,
+      note: 'This key ONLY works when NODE_ENV=development. Set a unique API_KEY before deploying.',
+    });
     return DEV_API_KEY;
   }
 

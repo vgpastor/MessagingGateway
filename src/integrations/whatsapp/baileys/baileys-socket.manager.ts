@@ -8,6 +8,7 @@ import type { Boom } from '@hapi/boom';
 import { resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
+import { getLogger } from '../../../core/logger/logger.port.js';
 
 type MessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
 type ConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
@@ -68,7 +69,7 @@ export class BaileysSocketManager {
       if (update.qr) {
         entry.lastQr = update.qr;
         entry.connectionStatus = 'connecting';
-        console.log(`[baileys:${accountId}] QR code received (poll GET /api/v1/accounts/${accountId} to retrieve it)`);
+        getLogger().info('QR code received', { provider: 'baileys', accountId, hint: `poll GET /api/v1/accounts/${accountId} to retrieve it` });
       }
 
       const { connection, lastDisconnect } = update;
@@ -85,9 +86,7 @@ export class BaileysSocketManager {
 
         if (shouldReconnect && entry.retryCount < maxRetries) {
           entry.retryCount++;
-          console.log(
-            `[baileys:${accountId}] Connection closed (status=${statusCode}), reconnecting (attempt ${entry.retryCount}/${maxRetries})...`,
-          );
+          getLogger().info('Connection closed, reconnecting', { provider: 'baileys', accountId, statusCode, attempt: entry.retryCount, maxRetries });
           // Remove the old socket but preserve handlers and QR for the new entry
           const prevHandlers = entry.messageHandlers;
           const prevConnectionHandlers = entry.connectionHandlers;
@@ -107,24 +106,22 @@ export class BaileysSocketManager {
               }
             }
           }).catch((err) => {
-            console.error(`[baileys:${accountId}] Reconnection failed:`, err);
+            getLogger().error('Reconnection failed', { provider: 'baileys', accountId, error: err instanceof Error ? err.message : String(err) });
           });
         } else {
-          console.log(
-            `[baileys:${accountId}] Connection closed permanently (status=${statusCode}, loggedOut=${statusCode === DisconnectReason.loggedOut})`,
-          );
+          getLogger().info('Connection closed permanently', { provider: 'baileys', accountId, statusCode, loggedOut: statusCode === DisconnectReason.loggedOut });
           this.sockets.delete(accountId);
         }
       } else if (connection === 'open') {
         entry.retryCount = 0;
         entry.connectionStatus = 'connected';
         entry.lastQr = undefined;
-        console.log(`[baileys:${accountId}] Connection established`);
+        getLogger().info('Connection established', { provider: 'baileys', accountId });
       }
     });
 
     socket.ev.on('messages.upsert', (event) => {
-      console.log(`[baileys:${accountId}] messages.upsert: ${event.messages.length} message(s), type=${event.type}, handlers=${entry.messageHandlers.length}`);
+      getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: entry.messageHandlers.length });
       for (const handler of entry.messageHandlers) {
         handler(event);
       }

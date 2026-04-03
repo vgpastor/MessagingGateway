@@ -1,6 +1,7 @@
 import type { ProviderBundle } from '../../provider-registry.js';
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { EventBus } from '../../../core/event-bus.js';
+import { getLogger } from '../../../core/logger/logger.port.js';
 import { Events, createEvent } from '../../../core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload } from '../../../core/events.js';
 import { BaileysAdapter } from './baileys.adapter.js';
@@ -49,7 +50,7 @@ export const baileysProvider: ProviderBundle = {
             ),
           );
         } catch (err) {
-          console.error(`[baileys:${account.id}] Failed to process inbound message:`, err);
+          getLogger().error('Failed to process inbound message', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
         }
       }
     });
@@ -65,7 +66,7 @@ export const baileysProvider: ProviderBundle = {
           account.id,
         ),
       ).catch((err) => {
-        console.error(`[baileys:${account.id}] Failed to emit connection update:`, err);
+        getLogger().error('Failed to emit connection update', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
       });
     });
   },

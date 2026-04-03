@@ -4,6 +4,7 @@ import {
   getContentType,
   type proto,
 } from '@whiskeysockets/baileys';
+import { getLogger } from '../../../core/logger/logger.port.js';
 
 type WAMessage = proto.IWebMessageInfo;
 
@@ -71,7 +72,7 @@ export async function downloadBaileysMedia(
     return { base64, mimeType: mimetype, filename };
   } catch (err) {
     const msgId = msg.key?.id ?? 'unknown';
-    console.warn(`[baileys-media] Failed to download media for ${msgId}: ${err instanceof Error ? err.message : err}`);
+    getLogger().warn('Failed to download media', { module: 'baileys-media', msgId, error: err instanceof Error ? err.message : String(err) });
     return undefined;
   }
 }

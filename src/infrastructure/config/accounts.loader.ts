@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { getLogger } from '../../core/logger/logger.port.js';
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
@@ -10,7 +11,7 @@ export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
   const resolvedPath = filePath ?? resolve(process.cwd(), 'data/accounts.yaml');
 
   if (!existsSync(resolvedPath) || !statSync(resolvedPath).isFile()) {
-    console.warn(`Accounts config not found at ${resolvedPath}, starting with 0 accounts`);
+    getLogger().warn('Accounts config not found, starting with 0 accounts', { path: resolvedPath });
     return [];
   }
 
@@ -18,7 +19,7 @@ export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
   const rawConfig = parseYaml(fileContent);
 
   if (!rawConfig || !rawConfig.accounts || rawConfig.accounts.length === 0) {
-    console.warn('Accounts config is empty, starting with 0 accounts');
+    getLogger().warn('Accounts config is empty, starting with 0 accounts');
     return [];
   }
 
