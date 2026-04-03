@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../core/accounts/channel-account.repository.js';
+import type { ProviderLookupPort } from '../../../core/providers/provider-lookup.port.js';
 import type { WebhookForwarder } from '../../webhooks/webhook-forwarder.js';
-import { errorResponseSchema } from '../schemas.js';
+import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
 
 interface TelegramWebhookDeps {
   accountRepository: ChannelAccountRepository;
   webhookForwarder: WebhookForwarder;
+  providerRegistry: ProviderLookupPort;
 }
 
 export async function telegramWebhookController(
@@ -28,11 +30,8 @@ export async function telegramWebhookController(
           additionalProperties: true,
         },
         response: {
-          200: {
-            type: 'object',
-            properties: { received: { type: 'boolean' } },
-            required: ['received'],
-          },
+          200: unifiedEnvelopeSchema,
+          400: errorResponseSchema,
           404: errorResponseSchema,
         },
       },
@@ -57,9 +56,35 @@ export async function telegramWebhookController(
         });
       }
 
-      await deps.webhookForwarder.forwardRaw(accountId, request.body, 'message.inbound', account.channel);
+      // Get inbound adapter from registry
+      const inboundAdapter = deps.providerRegistry.getInboundAdapter(account.provider);
+      if (!inboundAdapter) {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          code: 'NO_INBOUND_ADAPTER',
+          message: `No inbound adapter registered for provider '${account.provider}'`,
+        });
+      }
 
-      return { received: true };
+      try {
+        const event = inboundAdapter.parseIncoming(request.body);
+        const envelope = inboundAdapter.toEnvelope(event, account);
+
+        fastify.log.info(
+          { messageId: envelope.id, accountId, type: envelope.content.type },
+          'Telegram inbound message processed',
+        );
+
+        await deps.webhookForwarder.forward(envelope);
+        return envelope;
+      } catch (error) {
+        fastify.log.error({ error, accountId }, 'Failed to process Telegram inbound webhook');
+        return reply.status(400).send({
+          error: 'Bad Request',
+          code: 'INVALID_PAYLOAD',
+          message: error instanceof Error ? error.message : 'Invalid payload',
+        });
+      }
     },
   );
 }

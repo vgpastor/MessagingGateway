@@ -137,6 +137,7 @@ export async function createServer(deps: ServerDeps) {
     async (instance) => telegramWebhookController(instance, {
       accountRepository: deps.accountRepository,
       webhookForwarder: deps.webhookForwarder,
+      providerRegistry: deps.providerRegistry,
     }),
   );
 

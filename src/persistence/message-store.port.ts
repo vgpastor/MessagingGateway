@@ -17,6 +17,12 @@ export interface MessageStorePort {
   /** Get message count (for metrics) */
   count(filters?: Partial<MessageQuery>): Promise<number>;
 
+  /** Full-text search across stored messages */
+  search(query: string, options?: { accountId?: string; limit?: number; offset?: number }): Promise<MessageQueryResult>;
+
+  /** Get aggregated message statistics */
+  getStats(options?: { accountId?: string; since?: Date; until?: Date }): Promise<MessageStats>;
+
   /** Initialize the store (create tables, etc.) */
   init(): Promise<void>;
 
@@ -42,4 +48,13 @@ export interface MessageQueryResult {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface MessageStats {
+  totalMessages: number;
+  byChannel: Record<string, number>;
+  byContentType: Record<string, number>;
+  byDirection: Record<string, number>;
+  topConversations: Array<{ conversationId: string; count: number; lastMessage?: string }>;
+  byHour: number[]; // 24 elements, messages per hour of day
 }
