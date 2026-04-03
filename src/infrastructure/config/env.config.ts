@@ -15,6 +15,8 @@ export interface EnvConfig {
   webhookCallbackSecret?: string;
   accountsConfigPath?: string;
   healthCheckIntervalMs: number;
+  storageEnabled: boolean;
+  databasePath: string;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -30,6 +32,8 @@ export function loadEnvConfig(): EnvConfig {
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
+    storageEnabled: process.env['STORAGE_ENABLED'] === 'true',
+    databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
   };
 }
 

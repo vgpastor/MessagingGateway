@@ -162,6 +162,18 @@ async function main() {
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
 
+  // Optional: persistence plugin
+  let messageStore: import('./persistence/message-store.port.js').MessageStorePort | undefined;
+  if (envConfig.storageEnabled) {
+    const { SqliteMessageStore } = await import('./persistence/sqlite-message-store.js');
+    const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
+    const dbPath = resolve(process.cwd(), envConfig.databasePath);
+    messageStore = new SqliteMessageStore(dbPath);
+    await messageStore.init();
+    subscribePersistence(eventBus, messageStore);
+    logger.info('Persistence enabled', { database: dbPath });
+  }
+
   // Health check scheduler
   const healthCheckScheduler = new HealthCheckScheduler(
     accountRepository, credentialValidator, { intervalMs: envConfig.healthCheckIntervalMs },
@@ -171,7 +183,7 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
-    webhookForwarder, wsBroadcaster,
+    webhookForwarder, wsBroadcaster, messageStore,
     apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
   });
