@@ -20,17 +20,22 @@ export class WebhookForwarder {
     eventType: WebhookEventType,
     channel?: string,
   ): Promise<void> {
-    const accountConfig = await this.webhookConfigRepo.findByAccountId(accountId);
+    const accountConfigs = await this.webhookConfigRepo.findByAccountId(accountId);
 
-    if (accountConfig?.enabled) {
-      const matchesEvent = accountConfig.events.includes('*') || accountConfig.events.includes(eventType);
-      if (matchesEvent) {
-        await this.send(accountConfig.url, accountConfig.secret, accountId, payload, eventType, channel);
-        return;
-      }
+    // Filter enabled configs that match the event type
+    const matching = accountConfigs.filter((c) =>
+      c.enabled && (c.events.includes('*') || c.events.includes(eventType)),
+    );
+
+    if (matching.length > 0) {
+      // Send to all matching webhooks in parallel
+      await Promise.allSettled(
+        matching.map((c) => this.send(c.url, c.secret, accountId, payload, eventType, channel)),
+      );
+      return;
     }
 
-    // Global fallback
+    // Global fallback (only if no account-specific webhooks matched)
     if (this.globalCallbackUrl) {
       await this.send(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
     }
@@ -70,13 +75,11 @@ export class WebhookForwarder {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error(
-          `Webhook forwarding failed for ${accountId}: HTTP ${response.status} - ${text}`,
-        );
+        console.error(`Webhook forwarding failed for ${accountId} → ${url}: HTTP ${response.status} - ${text}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`Webhook forwarding error for ${accountId}: ${message}`);
+      console.error(`Webhook forwarding error for ${accountId} → ${url}: ${message}`);
     }
   }
 }

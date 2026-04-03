@@ -6,10 +6,13 @@ import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelo
 
 function makeRepo(config?: WebhookConfig): WebhookConfigRepository {
   return {
-    findByAccountId: vi.fn().mockResolvedValue(config),
+    findByAccountId: vi.fn().mockResolvedValue(config ? [config] : []),
+    findById: vi.fn().mockResolvedValue(config),
     findAll: vi.fn().mockResolvedValue(config ? [config] : []),
-    upsert: vi.fn(),
+    add: vi.fn(),
+    update: vi.fn(),
     remove: vi.fn(),
+    removeByAccountId: vi.fn(),
   };
 }
 
@@ -44,6 +47,7 @@ describe('WebhookForwarder', () => {
 
   it('should forward to per-account webhook when configured', async () => {
     const repo = makeRepo({
+      id: 'wh_test1',
       accountId: 'wa-acme',
       url: 'https://account-hook.example.com',
       secret: 'acc-secret',
@@ -83,6 +87,7 @@ describe('WebhookForwarder', () => {
 
   it('should fall back to global when per-account is disabled', async () => {
     const repo = makeRepo({
+      id: 'wh_test2',
       accountId: 'wa-acme',
       url: 'https://disabled-hook.example.com',
       events: ['*'],
@@ -102,6 +107,7 @@ describe('WebhookForwarder', () => {
 
   it('should not forward when event type does not match', async () => {
     const repo = makeRepo({
+      id: 'wh_test3',
       accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['message.status'], // only status events
@@ -131,6 +137,7 @@ describe('WebhookForwarder', () => {
 
   it('should include correct headers', async () => {
     const repo = makeRepo({
+      id: 'wh_test4',
       accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['*'],
@@ -158,6 +165,7 @@ describe('WebhookForwarder', () => {
   it('should not throw when fetch fails', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('Network error'));
     const repo = makeRepo({
+      id: 'wh_test5',
       accountId: 'wa-acme',
       url: 'https://hook.example.com',
       events: ['*'],

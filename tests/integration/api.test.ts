@@ -11,23 +11,50 @@ import { CredentialValidator } from '../../src/infrastructure/credential-validat
 import { createServer } from '../../src/infrastructure/server.js';
 import type { WebhookConfig, WebhookConfigInput } from '../../src/core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../src/core/webhooks/webhook-config.repository.js';
+import { createWebhookId } from '../../src/core/webhooks/webhook-config.js';
 
 class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
-  private configs = new Map<string, WebhookConfig>();
-  async findByAccountId(accountId: string) { return this.configs.get(accountId); }
-  async findAll() { return [...this.configs.values()]; }
-  async upsert(accountId: string, input: WebhookConfigInput) {
+  private configs: WebhookConfig[] = [];
+
+  async findByAccountId(accountId: string): Promise<WebhookConfig[]> {
+    return this.configs.filter((c) => c.accountId === accountId);
+  }
+  async findById(webhookId: string): Promise<WebhookConfig | undefined> {
+    return this.configs.find((c) => c.id === webhookId);
+  }
+  async findAll(): Promise<WebhookConfig[]> { return [...this.configs]; }
+  async add(accountId: string, input: WebhookConfigInput): Promise<WebhookConfig> {
     const now = new Date().toISOString();
-    const existing = this.configs.get(accountId);
     const config: WebhookConfig = {
+      id: createWebhookId(),
       accountId, url: input.url, secret: input.secret,
       events: input.events ?? ['*'], enabled: input.enabled ?? true,
-      createdAt: existing?.createdAt ?? now, updatedAt: now,
+      createdAt: now, updatedAt: now,
     };
-    this.configs.set(accountId, config);
+    this.configs.push(config);
     return config;
   }
-  async remove(accountId: string) { return this.configs.delete(accountId); }
+  async update(webhookId: string, input: Partial<WebhookConfigInput>): Promise<WebhookConfig | undefined> {
+    const config = this.configs.find((c) => c.id === webhookId);
+    if (!config) return undefined;
+    if (input.url !== undefined) config.url = input.url;
+    if (input.secret !== undefined) config.secret = input.secret;
+    if (input.events !== undefined) config.events = input.events.length ? input.events : ['*'];
+    if (input.enabled !== undefined) config.enabled = input.enabled;
+    config.updatedAt = new Date().toISOString();
+    return config;
+  }
+  async remove(webhookId: string): Promise<boolean> {
+    const idx = this.configs.findIndex((c) => c.id === webhookId);
+    if (idx === -1) return false;
+    this.configs.splice(idx, 1);
+    return true;
+  }
+  async removeByAccountId(accountId: string): Promise<number> {
+    const before = this.configs.length;
+    this.configs = this.configs.filter((c) => c.accountId !== accountId);
+    return before - this.configs.length;
+  }
 }
 
 let app: FastifyInstance;
@@ -308,30 +335,31 @@ describe('Swagger UI', () => {
 });
 
 describe('Webhook Config API', () => {
-  it('should return 404 when no webhook configured for account', async () => {
+  it('should return empty array when no webhooks configured for account', async () => {
     const response = await app.inject({
       method: 'GET',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: '/api/v1/accounts/wa-acme/webhooks',
     });
-    expect(response.statusCode).toBe(404);
-    expect(response.json().code).toBe('WEBHOOK_NOT_CONFIGURED');
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
   });
 
-  it('should create webhook config via PUT', async () => {
+  it('should create webhook config via POST', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'POST',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: '/api/v1/accounts/wa-acme/webhooks',
       payload: {
         url: 'https://n8n.example.com/webhook/acme',
         secret: 'test-secret',
         events: ['message.inbound'],
       },
     });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(201);
 
     const config = response.json();
+    expect(config.id).toBeDefined();
     expect(config.accountId).toBe('wa-acme');
     expect(config.url).toBe('https://n8n.example.com/webhook/acme');
     expect(config.secret).toBe('test-secret');
@@ -341,21 +369,31 @@ describe('Webhook Config API', () => {
     expect(config.updatedAt).toBeDefined();
   });
 
-  it('should return existing webhook config via GET', async () => {
+  it('should return existing webhook configs via GET', async () => {
     const response = await app.inject({
       method: 'GET',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: '/api/v1/accounts/wa-acme/webhooks',
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().url).toBe('https://n8n.example.com/webhook/acme');
+    const configs = response.json();
+    expect(configs).toHaveLength(1);
+    expect(configs[0].url).toBe('https://n8n.example.com/webhook/acme');
   });
 
-  it('should update webhook config via PUT', async () => {
+  it('should update webhook config via PUT on /webhooks/:webhookId', async () => {
+    // First, get the webhook ID
+    const listRes = await app.inject({
+      method: 'GET',
+      headers: { 'x-api-key': 'test-api-key' },
+      url: '/api/v1/accounts/wa-acme/webhooks',
+    });
+    const webhookId = listRes.json()[0].id;
+
     const response = await app.inject({
       method: 'PUT',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: `/api/v1/webhooks/${webhookId}`,
       payload: {
         url: 'https://new-url.example.com/webhook',
         enabled: false,
@@ -366,15 +404,14 @@ describe('Webhook Config API', () => {
     const config = response.json();
     expect(config.url).toBe('https://new-url.example.com/webhook');
     expect(config.enabled).toBe(false);
-    expect(config.events).toEqual(['*']); // default when not specified
   });
 
   it('should list all webhook configs', async () => {
-    // Add a second webhook
+    // Add a second webhook to a different account
     await app.inject({
-      method: 'PUT',
+      method: 'POST',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-test/webhook',
+      url: '/api/v1/accounts/wa-test/webhooks',
       payload: { url: 'https://test-org.example.com/hook' },
     });
 
@@ -389,29 +426,30 @@ describe('Webhook Config API', () => {
     expect(configs.length).toBe(2);
   });
 
-  it('should delete webhook config', async () => {
+  it('should delete webhook config by account', async () => {
     const response = await app.inject({
       method: 'DELETE',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: '/api/v1/accounts/wa-acme/webhooks',
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().deleted).toBe(true);
+    expect(response.json().removed).toBeGreaterThanOrEqual(1);
 
     // Verify it's gone
     const getResponse = await app.inject({
       method: 'GET',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/wa-acme/webhook',
+      url: '/api/v1/accounts/wa-acme/webhooks',
     });
-    expect(getResponse.statusCode).toBe(404);
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toEqual([]);
   });
 
-  it('should return 404 for unknown account on PUT', async () => {
+  it('should return 404 for unknown account on POST', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'POST',
       headers: { 'x-api-key': 'test-api-key' },
-      url: '/api/v1/accounts/nonexistent/webhook',
+      url: '/api/v1/accounts/nonexistent/webhooks',
       payload: { url: 'https://example.com' },
     });
     expect(response.statusCode).toBe(404);
