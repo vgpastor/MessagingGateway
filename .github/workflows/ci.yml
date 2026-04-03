@@ -56,3 +56,39 @@ jobs:
       - name: Build SDK
         working-directory: packages/sdk
         run: npm run build
+
+  sdk-sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install SDK dependencies
+        working-directory: packages/sdk
+        run: npm ci
+
+      - name: Build gateway (needed for schema export)
+        run: npm run build
+
+      - name: Export OpenAPI schema
+        run: npm run openapi:export
+
+      - name: Regenerate SDK from schema
+        run: cd packages/sdk && npm run generate && sed -i "s|from '../fetch-mutator'|from '../fetch-mutator.js'|g" src/generated/api.ts
+
+      - name: Check for uncommitted changes
+        run: |
+          if git diff --name-only | grep -q "packages/sdk/src/generated"; then
+            echo "❌ SDK is out of sync with OpenAPI schema!"
+            echo "Run 'npm run sdk:generate' and commit the changes."
+            git diff --stat packages/sdk/src/generated/
+            exit 1
+          fi
+          echo "✅ SDK is in sync with OpenAPI schema"
