@@ -7,6 +7,14 @@ The `rateLimit` config field exists on accounts but is never enforced.
 Add `@fastify/rate-limit` for global API protection.
 Add per-account rate limiting in `MessageRouterService` using the account's `rateLimit.maxPerMinute`.
 
+### SDK auto-generation from OpenAPI (Orval)
+Replace hand-written SDK types and REST client with auto-generated code using [Orval](https://github.com/orval-labs/orval).
+- Source: `GET /openapi.json` from `@fastify/swagger`
+- Generate: TypeScript types + fetch client → `packages/sdk/src/generated/`
+- WebSocket client stays manual but imports generated types
+- CI step: regenerate on API changes, fail if out of sync
+- Covers REST only — WS events derived from same generated types
+
 ## 🟡 Priority: Medium
 
 ## 🟢 Priority: Low (nice to have)
