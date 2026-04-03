@@ -116,10 +116,10 @@ jobs:
           cache-dependency-path: packages/sdk/package-lock.json
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@11
+        run: npx npm@11 --version
 
       - name: Configure npm registry
-        run: npm config set registry https://registry.npmjs.org/
+        run: npx npm@11 config set registry https://registry.npmjs.org/
 
       - name: Install dependencies
         working-directory: packages/sdk
@@ -131,7 +131,7 @@ jobs:
 
       - name: Publish to npm (OIDC)
         working-directory: packages/sdk
-        run: npm publish --provenance --access public
+        run: npx npm@11 publish --provenance --access public
 
       - name: Create Git tag
         run: |
