@@ -1,0 +1,35 @@
+{
+  "name": "n8n-nodes-messaging-gateway",
+  "version": "0.1.0",
+  "description": "n8n community nodes for Unified Messaging Gateway — send and receive messages across WhatsApp, Telegram, Email, and SMS",
+  "license": "MIT",
+  "homepage": "https://github.com/vgpastor/MessagingGateway",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vgpastor/n8n-nodes-messaging-gateway.git"
+  },
+  "main": "dist/nodes/MessagingGateway/MessagingGateway.node.js",
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": ["dist/credentials/MessagingGatewayApi.credentials.js"],
+    "nodes": [
+      "dist/nodes/MessagingGateway/MessagingGateway.node.js",
+      "dist/nodes/MessagingGateway/MessagingGatewayTrigger.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "n8n-workflow": ">=1.0.0"
+  },
+  "devDependencies": {
+    "n8n-workflow": "^1.76.0",
+    "typescript": "^5.7.0"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "keywords": ["n8n", "n8n-community-node-package", "messaging", "whatsapp", "telegram", "sms", "email", "gateway"],
+  "engines": { "node": ">=20" }
+}
