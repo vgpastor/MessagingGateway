@@ -3,7 +3,7 @@
   "info": {
     "title": "Unified Messaging Gateway",
     "description": "Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.",
-    "version": "0.2.2"
+    "version": "0.2.3"
   },
   "components": {
     "schemas": {}

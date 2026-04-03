@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Unified Messaging Gateway
  * Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.
- * OpenAPI spec version: 0.2.2
+ * OpenAPI spec version: 0.2.3
  */
 import { customFetch } from '../fetch-mutator.js';
 export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];

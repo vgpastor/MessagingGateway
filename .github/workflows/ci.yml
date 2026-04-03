@@ -87,12 +87,15 @@ jobs:
       - name: Regenerate SDK from schema
         run: cd packages/sdk && npm run generate && node ../../scripts/fix-generated-imports.js
 
-      - name: Check for uncommitted changes
+      - name: Check for uncommitted changes (ignoring version comment)
         run: |
-          if git diff --name-only | grep -q "packages/sdk/src/generated"; then
+          # Ignore the "OpenAPI spec version" comment line — it changes on every version bump
+          DIFF=$(git diff packages/sdk/src/generated/ | grep '^[+-]' | grep -v '^[+-][+-][+-]' | grep -v 'OpenAPI spec version' || true)
+          if [ -n "$DIFF" ]; then
             echo "❌ SDK is out of sync with OpenAPI schema!"
             echo "Run 'npm run sdk:generate' and commit the changes."
             git diff --stat packages/sdk/src/generated/
+            echo "$DIFF"
             exit 1
           fi
           echo "✅ SDK is in sync with OpenAPI schema"
