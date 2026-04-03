@@ -85,7 +85,7 @@ jobs:
         run: npm run openapi:export
 
       - name: Regenerate SDK from schema
-        run: cd packages/sdk && npm run generate && sed -i "s|from '../fetch-mutator'|from '../fetch-mutator.js'|g" src/generated/api.ts
+        run: cd packages/sdk && npm run generate && node ../../scripts/fix-generated-imports.js
 
       - name: Check for uncommitted changes
         run: |

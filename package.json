@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "openapi:export": "tsx scripts/export-openapi.ts",
-    "sdk:generate": "npm run openapi:export && cd packages/sdk && npm run generate && sed -i 's|from ../fetch-mutator|from ../fetch-mutator.js|g' src/generated/api.ts",
+    "sdk:generate": "npm run openapi:export && cd packages/sdk && npm run generate && node ../../scripts/fix-generated-imports.js",
     "sdk:build": "cd packages/sdk && npm run build"
   },
   "keywords": [
