@@ -59,6 +59,10 @@ jobs:
 
   sdk-sync-check:
     runs-on: ubuntu-latest
+    # Only run when API source files change (not on dependency-only updates)
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && !startsWith(github.head_ref, 'dependabot/'))
     steps:
       - uses: actions/checkout@v4
 
