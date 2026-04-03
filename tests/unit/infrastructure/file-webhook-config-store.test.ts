@@ -25,10 +25,10 @@ describe('FileWebhookConfigStore', () => {
     expect(configs).toEqual([]);
   });
 
-  it('should create directory and file on first upsert', async () => {
+  it('should create directory and file on first add', async () => {
     const store = await FileWebhookConfigStore.create(TEST_FILE);
 
-    await store.upsert('wa-acme', {
+    await store.add('wa-acme', {
       url: 'https://example.com/hook',
       secret: 'my-secret',
     });
@@ -38,36 +38,40 @@ describe('FileWebhookConfigStore', () => {
 
   it('should persist and reload configs', async () => {
     const store1 = await FileWebhookConfigStore.create(TEST_FILE);
-    await store1.upsert('wa-acme', {
+    await store1.add('wa-acme', {
       url: 'https://example.com/hook',
       events: ['message.inbound'],
     });
 
     // Create a new store instance that reads from the same file
     const store2 = await FileWebhookConfigStore.create(TEST_FILE);
-    const config = await store2.findByAccountId('wa-acme');
+    const configs = await store2.findByAccountId('wa-acme');
 
-    expect(config).toBeDefined();
-    expect(config!.accountId).toBe('wa-acme');
-    expect(config!.url).toBe('https://example.com/hook');
-    expect(config!.events).toEqual(['message.inbound']);
-    expect(config!.enabled).toBe(true);
+    expect(configs).toHaveLength(1);
+    expect(configs[0]!.accountId).toBe('wa-acme');
+    expect(configs[0]!.url).toBe('https://example.com/hook');
+    expect(configs[0]!.events).toEqual(['message.inbound']);
+    expect(configs[0]!.enabled).toBe(true);
+    expect(configs[0]!.id).toBeDefined();
   });
 
-  it('should update existing config preserving createdAt', async () => {
+  it('should add multiple webhooks for the same account', async () => {
     vi.useFakeTimers();
     try {
       const store = await FileWebhookConfigStore.create(TEST_FILE);
 
       vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
-      const created = await store.upsert('wa-acme', { url: 'https://first.com' });
+      const first = await store.add('wa-acme', { url: 'https://first.com' });
 
       vi.setSystemTime(new Date('2026-01-01T00:00:01Z'));
-      const updated = await store.upsert('wa-acme', { url: 'https://second.com' });
+      const second = await store.add('wa-acme', { url: 'https://second.com' });
 
-      expect(updated.url).toBe('https://second.com');
-      expect(updated.createdAt).toBe(created.createdAt);
-      expect(updated.updatedAt).not.toBe(created.updatedAt);
+      expect(first.url).toBe('https://first.com');
+      expect(second.url).toBe('https://second.com');
+      expect(first.id).not.toBe(second.id);
+
+      const configs = await store.findByAccountId('wa-acme');
+      expect(configs).toHaveLength(2);
     } finally {
       vi.useRealTimers();
     }
@@ -75,28 +79,29 @@ describe('FileWebhookConfigStore', () => {
 
   it('should default events to ["*"] and enabled to true', async () => {
     const store = await FileWebhookConfigStore.create(TEST_FILE);
-    const config = await store.upsert('wa-acme', { url: 'https://example.com' });
+    const config = await store.add('wa-acme', { url: 'https://example.com' });
 
     expect(config.events).toEqual(['*']);
     expect(config.enabled).toBe(true);
   });
 
-  it('should remove config and persist', async () => {
+  it('should remove config by webhookId and persist', async () => {
     const store = await FileWebhookConfigStore.create(TEST_FILE);
-    await store.upsert('wa-acme', { url: 'https://example.com' });
-    await store.upsert('wa-test', { url: 'https://patrol.com' });
+    const wh1 = await store.add('wa-acme', { url: 'https://example.com' });
+    const wh2 = await store.add('wa-test', { url: 'https://patrol.com' });
 
-    const deleted = await store.remove('wa-acme');
+    const deleted = await store.remove(wh1.id);
     expect(deleted).toBe(true);
 
     const all = await store.findAll();
     expect(all).toHaveLength(1);
-    expect(all[0].accountId).toBe('wa-test');
+    expect(all[0]!.accountId).toBe('wa-test');
 
     // Verify persisted
     const store2 = await FileWebhookConfigStore.create(TEST_FILE);
-    expect(await store2.findByAccountId('wa-acme')).toBeUndefined();
-    expect(await store2.findByAccountId('wa-test')).toBeDefined();
+    expect(await store2.findByAccountId('wa-acme')).toEqual([]);
+    const testConfigs = await store2.findByAccountId('wa-test');
+    expect(testConfigs).toHaveLength(1);
   });
 
   it('should return false when removing non-existent config', async () => {

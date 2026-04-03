@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 export type WebhookEventType =
   | 'message.inbound'
   | 'message.status'
@@ -5,6 +7,7 @@ export type WebhookEventType =
   | '*';
 
 export interface WebhookConfig {
+  id: string;
   accountId: string;
   url: string;
   secret?: string;
@@ -19,4 +22,8 @@ export interface WebhookConfigInput {
   secret?: string;
   events?: WebhookEventType[];
   enabled?: boolean;
+}
+
+export function createWebhookId(): string {
+  return `wh_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
