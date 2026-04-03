@@ -7,6 +7,8 @@
  * but they all share this lifecycle interface.
  */
 
+import type { GroupInfo } from '../groups/group.types.js';
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 export type MessageHandler<TEvent = unknown> = (event: TEvent) => Promise<void> | void;
@@ -36,4 +38,10 @@ export interface SocketManagerPort<TConfig = Record<string, unknown>> {
 
   /** Register a handler for connection state changes */
   onConnectionUpdate(accountId: string, handler: ConnectionHandler): void;
+
+  /** List all groups the account participates in */
+  getGroups?(accountId: string): Promise<GroupInfo[]>;
+
+  /** Get metadata for a specific group */
+  getGroupInfo?(accountId: string, groupId: string): Promise<GroupInfo | undefined>;
 }

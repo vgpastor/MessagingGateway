@@ -1,5 +1,6 @@
 import type { ConnectionManagerPort, ConnectionInfo, PairingCodeCapable } from '../../../core/accounts/connection-manager.port.js';
 import type { BaileysSocketManager } from './baileys-socket.manager.js';
+import type { GroupInfo } from '../../../core/groups/group.types.js';
 import { parseBaileysConfig } from './baileys.types.js';
 
 export class BaileysConnectionManager implements ConnectionManagerPort, PairingCodeCapable {
@@ -32,5 +33,13 @@ export class BaileysConnectionManager implements ConnectionManagerPort, PairingC
 
   async disconnect(accountId: string): Promise<void> {
     await this.socketManager.disconnect(accountId);
+  }
+
+  async getGroups(accountId: string): Promise<GroupInfo[]> {
+    return this.socketManager.getGroups(accountId);
+  }
+
+  async getGroupInfo(accountId: string, groupId: string): Promise<GroupInfo | undefined> {
+    return this.socketManager.getGroupInfo(accountId, groupId);
   }
 }

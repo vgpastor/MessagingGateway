@@ -2,31 +2,12 @@
 
 ## 🔴 Priority: High
 
-### Logger abstraction
-Replace all `console.log/error/warn` with a gateway-owned logger wrapper.
-Not tied to Fastify — a standalone `Logger` port in `core/` with a Pino implementation in `infrastructure/`.
-All layers use `Logger.info()`, `Logger.error()`, etc. Output is structured JSON in production, pretty in dev.
-
-### BaileysSocketManager injection
-Extract from module-level singleton to injectable dependency.
-Pass via constructor in BaileysAdapter, BaileysConnectionManager, BaileysHealthChecker.
-Makes Baileys fully testable without side effects.
-
 ### Rate limiting enforcement
 The `rateLimit` config field exists on accounts but is never enforced.
 Add `@fastify/rate-limit` for global API protection.
 Add per-account rate limiting in `MessageRouterService` using the account's `rateLimit.maxPerMinute`.
 
-## 🟡 Priority: Medium
-
-### Storage plugin (new domain: `persistence/`)
-Optional plugin that stores messages in a database (SQLite default, Postgres for scale).
-- New domain: `src/persistence/` with its own EventBus subscriber
-- Activated via env var `STORAGE_ENABLED=true` + `DATABASE_URL`
-- Subscribes to `message.inbound` and `message.send.success` events
-- Provides query API: `GET /api/v1/messages?accountId=&from=&to=&since=&until=`
-- Tied to metrics: message counts, per-group stats, response times
-- Zero impact when disabled — the EventBus subscriber simply isn't registered
+## 🟡 Priority: Medium (in progress)
 
 ### Metrics & observability
 Prometheus metrics endpoint (`GET /metrics`):
@@ -34,8 +15,6 @@ Prometheus metrics endpoint (`GET /metrics`):
 - `umg_webhook_forward_duration_seconds{account, url}`
 - `umg_ws_clients_connected`
 - `umg_baileys_connection_status{account}`
-Depends on the Logger abstraction for structured correlation.
-Can share storage with the persistence plugin for historical stats.
 
 ### Telegram Bot API provider
 Implement full Telegram adapter:
@@ -52,6 +31,13 @@ New endpoints for group management:
 - `POST /api/v1/accounts/:id/groups/:groupId/send` — send to group
 Requires Baileys `groupMetadata` and `groupFetchAllParticipating`.
 
+### Message search & analytics
+Extends the storage plugin:
+- Full-text search across message history
+- Per-group/per-contact message stats
+- Export to CSV/JSON
+- Dashboard-ready API
+
 ## 🟢 Priority: Low (nice to have)
 
 ### n8n community nodes
@@ -60,13 +46,6 @@ Separate repo: `vgpastor/n8n-nodes-messaging-gateway`
 - Action node: send message, manage accounts, configure webhooks
 - Uses `@messaging-gateway/sdk` as dependency
 - Published to npm as `n8n-nodes-messaging-gateway`
-
-### Message search & analytics
-Extends the storage plugin:
-- Full-text search across message history
-- Per-group/per-contact message stats
-- Export to CSV/JSON
-- Dashboard-ready API
 
 ### Email provider (Brevo full implementation)
 Complete the Brevo adapter:
@@ -95,4 +74,7 @@ Complete SMS adapters:
 - [x] CI/CD: Docker GHCR + Docker Hub + npm OIDC
 - [x] Version-driven releases (package.json = source of truth)
 - [x] Zero DDD cross-layer violations
+- [x] Logger abstraction (Pino, structured JSON)
+- [x] SocketManagerPort + BaileysSocketManager injection
+- [x] Persistence plugin (SQLite, optional)
 - [x] 205 tests

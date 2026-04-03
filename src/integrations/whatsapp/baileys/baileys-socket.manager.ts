@@ -10,6 +10,7 @@ import { mkdir } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
+import type { GroupInfo } from '../../../core/groups/group.types.js';
 
 type BaileysMessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
 type BaileysConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
@@ -185,6 +186,48 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
     const code = await entry.socket.requestPairingCode(cleaned);
     return code;
+  }
+
+  async getGroups(accountId: string): Promise<GroupInfo[]> {
+    const socket = this.getSocket(accountId);
+    if (!socket) return [];
+    const groups = await socket.groupFetchAllParticipating();
+    return Object.values(groups).map(g => ({
+      id: g.id,
+      name: g.subject,
+      description: g.desc ?? undefined,
+      participants: g.participants.map(p => ({
+        id: p.id,
+        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+        isSuperAdmin: p.admin === 'superadmin',
+      })),
+      createdAt: g.creation ? new Date(g.creation * 1000).toISOString() : undefined,
+      createdBy: g.subjectOwner ?? undefined,
+      isAnnouncement: g.announce ?? false,
+    }));
+  }
+
+  async getGroupInfo(accountId: string, groupId: string): Promise<GroupInfo | undefined> {
+    const socket = this.getSocket(accountId);
+    if (!socket) return undefined;
+    try {
+      const metadata = await socket.groupMetadata(groupId);
+      return {
+        id: metadata.id,
+        name: metadata.subject,
+        description: metadata.desc ?? undefined,
+        participants: metadata.participants.map(p => ({
+          id: p.id,
+          isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+          isSuperAdmin: p.admin === 'superadmin',
+        })),
+        createdAt: metadata.creation ? new Date(metadata.creation * 1000).toISOString() : undefined,
+        createdBy: metadata.subjectOwner ?? undefined,
+        isAnnouncement: metadata.announce ?? false,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   resolveAuthDir(accountId: string, config: BaileysProviderConfig): string {

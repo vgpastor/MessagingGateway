@@ -3,6 +3,7 @@ import type { EventBus } from '../../core/event-bus.js';
 import type { SendMessageCommand } from '../../core/messaging/outbound-message.js';
 import { Events, createEvent } from '../../core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendSuccessPayload, MessageSendFailurePayload, MessageSendRequestPayload } from '../../core/events.js';
+import { wsClientsConnected } from '../../infrastructure/metrics/prometheus.js';
 
 interface WsClient {
   socket: WebSocket;
@@ -22,6 +23,7 @@ export class WebSocketBroadcaster {
       accountFilter: accounts?.length ? new Set(accounts) : null,
     };
     this.clients.add(client);
+    wsClientsConnected.inc();
 
     socket.on('message', (raw: Buffer | string) => {
       try {
@@ -47,10 +49,12 @@ export class WebSocketBroadcaster {
 
     socket.on('close', () => {
       this.clients.delete(client);
+      wsClientsConnected.dec();
     });
 
     socket.on('error', () => {
       this.clients.delete(client);
+      wsClientsConnected.dec();
     });
 
     this.sendTo(socket, {
