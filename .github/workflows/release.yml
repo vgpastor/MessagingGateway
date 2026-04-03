@@ -115,6 +115,10 @@ jobs:
           cache: npm
           cache-dependency-path: packages/sdk/package-lock.json
 
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@11
+
+      - name: Configure npm registry
         run: npm config set registry https://registry.npmjs.org/
 
       - name: Install dependencies
