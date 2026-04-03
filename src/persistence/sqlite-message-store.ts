@@ -27,6 +27,8 @@ export class SqliteMessageStore implements MessageStorePort {
       const Database = (await import('better-sqlite3')).default;
       this.db = new Database(this.dbPath);
       this.db.pragma('journal_mode = WAL');
+      // Force UTC for all datetime functions (strftime, etc.)
+      this.db.pragma('timezone = UTC');
       this.createTables();
       getLogger().info('Message store initialized', { path: this.dbPath });
     } catch (err) {
@@ -69,8 +71,8 @@ export class SqliteMessageStore implements MessageStorePort {
       envelope.context ? JSON.stringify(envelope.context) : null,
       envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
       JSON.stringify(envelope.gateway),
-      new Date(envelope.timestamp).toISOString(),
-      new Date().toISOString(),
+      toUTC(envelope.timestamp),
+      nowUTC(),
     );
   }
 
@@ -86,8 +88,8 @@ export class SqliteMessageStore implements MessageStorePort {
     if (filters.senderId) { conditions.push('sender_id = ?'); params.push(filters.senderId); }
     if (filters.contentType) { conditions.push('content_type = ?'); params.push(filters.contentType); }
     if (filters.direction) { conditions.push('direction = ?'); params.push(filters.direction); }
-    if (filters.since) { conditions.push('timestamp >= ?'); params.push(filters.since.toISOString()); }
-    if (filters.until) { conditions.push('timestamp <= ?'); params.push(filters.until.toISOString()); }
+    if (filters.since) { conditions.push('timestamp >= ?'); params.push(toUTC(filters.since)); }
+    if (filters.until) { conditions.push('timestamp <= ?'); params.push(toUTC(filters.until)); }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = filters.limit ?? 50;
@@ -158,8 +160,8 @@ export class SqliteMessageStore implements MessageStorePort {
     const params: unknown[] = [];
 
     if (options?.accountId) { conditions.push('account_id = ?'); params.push(options.accountId); }
-    if (options?.since) { conditions.push('timestamp >= ?'); params.push(options.since.toISOString()); }
-    if (options?.until) { conditions.push('timestamp <= ?'); params.push(options.until.toISOString()); }
+    if (options?.since) { conditions.push('timestamp >= ?'); params.push(toUTC(options.since)); }
+    if (options?.until) { conditions.push('timestamp <= ?'); params.push(toUTC(options.until)); }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -187,7 +189,7 @@ export class SqliteMessageStore implements MessageStorePort {
     }));
 
     const hourRows = this.db.prepare(
-      `SELECT CAST(strftime('%H', timestamp) AS INTEGER) as hour, COUNT(*) as cnt FROM messages ${where} GROUP BY hour`,
+      `SELECT CAST(strftime('%H', timestamp, 'utc') AS INTEGER) as hour, COUNT(*) as cnt FROM messages ${where} GROUP BY hour`,
     ).all(...params) as Array<{ hour: number; cnt: number }>;
     const byHour: number[] = new Array<number>(24).fill(0);
     for (const r of hourRows) { byHour[r.hour] = r.cnt; }
@@ -226,8 +228,8 @@ export class SqliteMessageStore implements MessageStorePort {
         context_json TEXT,
         channel_details_json TEXT,
         gateway_json TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        timestamp TEXT NOT NULL,  -- ISO 8601 UTC (e.g. 2026-04-01T12:00:00.000Z)
+        created_at TEXT NOT NULL  -- ISO 8601 UTC
       );
 
       CREATE INDEX IF NOT EXISTS idx_messages_account ON messages(account_id);
@@ -282,4 +284,19 @@ export class SqliteMessageStore implements MessageStorePort {
       gateway: JSON.parse(row.gateway_json),
     };
   }
+}
+
+// ── UTC helpers ─────────────────────────────────────────────────
+// ALL dates stored as ISO 8601 with explicit Z suffix (UTC).
+// External systems handle timezone conversion.
+
+/** Convert any date-like value to ISO 8601 UTC string */
+function toUTC(value: string | Date | number): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString(); // Always ends with Z (UTC)
+}
+
+/** Current time as ISO 8601 UTC string */
+function nowUTC(): string {
+  return new Date().toISOString();
 }
