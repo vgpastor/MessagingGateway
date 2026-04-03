@@ -34,14 +34,23 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: packages/n8n-nodes/package-lock.json
+
+      - name: Install latest npm (OIDC requires >= 11.5.1)
+        if: steps.check.outputs.changed == 'true'
+        run: npm install -g npm@latest
+
+      - name: Configure npm registry
+        if: steps.check.outputs.changed == 'true'
+        run: npm config set registry https://registry.npmjs.org/
 
       - name: Install and build
         if: steps.check.outputs.changed == 'true'
         working-directory: packages/n8n-nodes
         run: npm install && npm run build
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC)
         if: steps.check.outputs.changed == 'true'
         working-directory: packages/n8n-nodes
         run: npm publish --access public --provenance
