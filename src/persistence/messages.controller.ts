@@ -95,4 +95,166 @@ export async function messagesController(
     });
     return { total };
   });
+
+  // --- Full-text search ---
+  fastify.get<{
+    Querystring: {
+      q?: string;
+      accountId?: string;
+      limit?: string;
+      offset?: string;
+    };
+  }>('/api/v1/messages/search', {
+    schema: {
+      description: 'Full-text search across stored messages. Requires STORAGE_ENABLED=true.',
+      tags: ['Messages'],
+      querystring: {
+        type: 'object' as const,
+        properties: {
+          q: { type: 'string' as const, description: 'Search query (FTS5 syntax)' },
+          accountId: { type: 'string' as const },
+          limit: { type: 'string' as const },
+          offset: { type: 'string' as const },
+        },
+        required: ['q'] as const,
+      },
+    },
+  }, async (request, reply) => {
+    const q = request.query;
+    if (!q.q) {
+      return reply.status(400).send({ error: 'Bad Request', code: 'MISSING_QUERY', message: 'Query parameter "q" is required' });
+    }
+    return deps.messageStore.search(q.q, {
+      accountId: q.accountId,
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+    });
+  });
+
+  // --- Analytics ---
+  fastify.get<{
+    Querystring: {
+      accountId?: string;
+      since?: string;
+      until?: string;
+    };
+  }>('/api/v1/messages/analytics', {
+    schema: {
+      description: 'Returns aggregated message statistics. Requires STORAGE_ENABLED=true.',
+      tags: ['Messages'],
+      querystring: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string' as const },
+          since: { type: 'string' as const, format: 'date-time' },
+          until: { type: 'string' as const, format: 'date-time' },
+        },
+      },
+    },
+  }, async (request) => {
+    const q = request.query;
+    return deps.messageStore.getStats({
+      accountId: q.accountId,
+      since: q.since ? new Date(q.since) : undefined,
+      until: q.until ? new Date(q.until) : undefined,
+    });
+  });
+
+  // --- Export (CSV / JSON) ---
+  fastify.get<{
+    Querystring: {
+      accountId?: string;
+      since?: string;
+      until?: string;
+      format?: string;
+      limit?: string;
+      offset?: string;
+    };
+  }>('/api/v1/messages/export', {
+    schema: {
+      description: 'Export messages in CSV or JSON format. Requires STORAGE_ENABLED=true.',
+      tags: ['Messages'],
+      querystring: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string' as const },
+          since: { type: 'string' as const, format: 'date-time' },
+          until: { type: 'string' as const, format: 'date-time' },
+          format: { type: 'string' as const, enum: ['csv', 'json'], default: 'json' },
+          limit: { type: 'string' as const },
+          offset: { type: 'string' as const },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const q = request.query;
+    const result = await deps.messageStore.query({
+      accountId: q.accountId,
+      since: q.since ? new Date(q.since) : undefined,
+      until: q.until ? new Date(q.until) : undefined,
+      limit: q.limit ? parseInt(q.limit, 10) : 1000,
+      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+    });
+
+    if (q.format === 'csv') {
+      const headers = ['id', 'timestamp', 'channel', 'direction', 'sender', 'conversation', 'type', 'preview'];
+      const csvRows = result.messages.map((m) => {
+        const preview = m.content.type === 'text' ? (m.content as any).body?.substring(0, 200) : `[${m.content.type}]`;
+        return [
+          m.id,
+          m.timestamp,
+          m.channel,
+          m.direction,
+          m.sender.displayName,
+          m.conversationId,
+          m.content.type,
+          preview,
+        ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
+      });
+      const csv = [headers.join(','), ...csvRows].join('\n');
+
+      return reply
+        .header('Content-Type', 'text/csv; charset=utf-8')
+        .header('Content-Disposition', 'attachment; filename="messages.csv"')
+        .send(csv);
+    }
+
+    return result;
+  });
+
+  // GET /api/v1/conversations/:conversationId/context — AI-ready conversation context
+  fastify.get<{
+    Params: { conversationId: string };
+    Querystring: { limit?: string; since?: string; accountId?: string; format?: string; includeMedia?: string };
+  }>('/api/v1/conversations/:conversationId/context', {
+    schema: {
+      description: 'Get conversation history formatted for AI consumption. Returns messages in chronological order with participant info. Use format=openai for ChatGPT-compatible output, format=raw for full envelopes.',
+      tags: ['Messages'],
+      params: {
+        type: 'object' as const,
+        properties: { conversationId: { type: 'string' as const, description: 'Conversation/group/chat ID' } },
+        required: ['conversationId'],
+      },
+      querystring: {
+        type: 'object' as const,
+        properties: {
+          limit: { type: 'string' as const, description: 'Max messages to return (default: 50)' },
+          since: { type: 'string' as const, format: 'date-time', description: 'Only messages after this UTC timestamp' },
+          accountId: { type: 'string' as const, description: 'Filter by account' },
+          format: { type: 'string' as const, enum: ['openai', 'raw'], description: 'Output format (default: openai)' },
+          includeMedia: { type: 'string' as const, description: 'Include media descriptions (default: true)' },
+        },
+      },
+    },
+  }, async (request) => {
+    const { conversationId } = request.params;
+    const q = request.query;
+    return deps.messageStore.getConversationContext(conversationId, {
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      since: q.since ? new Date(q.since) : undefined,
+      accountId: q.accountId,
+      format: (q.format as 'openai' | 'raw') ?? 'openai',
+      includeMedia: q.includeMedia !== 'false',
+    });
+  });
 }

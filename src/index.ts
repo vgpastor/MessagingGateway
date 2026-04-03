@@ -16,6 +16,7 @@ import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { Events, createEvent } from './core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
+import { messagesTotal, connectionStatus } from './infrastructure/metrics/prometheus.js';
 import { WebhookForwarder } from './connections/webhooks/webhook-forwarder.js';
 import { FileWebhookConfigStore } from './connections/webhooks/file-webhook-config.store.js';
 import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js';
@@ -51,7 +52,14 @@ function wireEventBus(
   messageRouter: MessageRouterService,
 ): WebSocketBroadcaster {
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
-    await webhookForwarder.forward(event.data.envelope);
+    const env = event.data.envelope;
+    messagesTotal.inc({
+      direction: 'inbound',
+      channel: env.channel,
+      account: env.accountId,
+      content_type: env.content.type,
+    });
+    await webhookForwarder.forward(env);
   });
 
   eventBus.on<ConnectionUpdatePayload>(Events.CONNECTION_UPDATE, async (event) => {
@@ -59,6 +67,11 @@ function wireEventBus(
     if (!accountId) return;
     const account = await accountRepository.findById(accountId);
     if (!account) return;
+
+    connectionStatus.set(
+      { account: accountId, provider: account.provider },
+      status === 'connected' ? 1 : 0,
+    );
 
     const logger = getLogger();
     if (status === 'connected' && account.status !== 'active') {
@@ -95,6 +108,16 @@ function wireEventBus(
         ),
       );
     }
+  });
+
+  eventBus.on<MessageSendSuccessPayload>(Events.MESSAGE_SEND_SUCCESS, async (event) => {
+    const account = await accountRepository.findById(event.data.accountId);
+    messagesTotal.inc({
+      direction: 'outbound',
+      channel: account?.channel ?? 'unknown',
+      account: event.data.accountId,
+      content_type: 'unknown',
+    });
   });
 
   return new WebSocketBroadcaster(eventBus);
@@ -186,6 +209,7 @@ async function main() {
     webhookForwarder, wsBroadcaster, messageStore,
     apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
+    metricsEnabled: envConfig.metricsEnabled,
   });
 
   try {

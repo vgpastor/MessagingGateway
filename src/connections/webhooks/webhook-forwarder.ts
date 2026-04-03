@@ -4,6 +4,7 @@ import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
 import { matchesFilter } from '../../core/filters/envelope-filter.js';
+import { webhookForwardDuration } from '../../infrastructure/metrics/prometheus.js';
 
 export class WebhookForwarder {
   constructor(
@@ -75,6 +76,7 @@ export class WebhookForwarder {
       headers['X-UMG-Signature'] = `sha256=${signature}`;
     }
 
+    const end = webhookForwardDuration.startTimer({ account: accountId, url });
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -82,11 +84,14 @@ export class WebhookForwarder {
         body: payload,
       });
 
+      end({ status: String(response.status) });
+
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         getLogger().error('Webhook forwarding failed', { accountId, url, httpStatus: response.status, response: text });
       }
     } catch (err) {
+      end({ status: 'error' });
       const message = err instanceof Error ? err.message : String(err);
       getLogger().error('Webhook forwarding error', { accountId, url, error: message });
     }

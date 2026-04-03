@@ -1,7 +1,8 @@
 import type {
   ClientConfig, Account, CreateAccountInput, UpdateAccountInput,
   SendMessageCommand, MessageResult, WebhookConfig, WebhookConfigInput,
-  HealthStatus, GatewayError,
+  HealthStatus, GatewayError, GroupInfo, MessageQuery, MessageQueryResult,
+  MessageStats, UnifiedEnvelope, ConversationContext,
 } from './types.js';
 
 export class GatewayApiError extends Error {
@@ -20,6 +21,8 @@ export class MessagingGatewayClient {
   private readonly headers: Record<string, string>;
   public readonly accounts: AccountsApi;
   public readonly webhooks: WebhooksApi;
+  public readonly groups: GroupsApi;
+  public readonly messages: MessagesApi;
 
   constructor(config: ClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
@@ -29,6 +32,8 @@ export class MessagingGatewayClient {
     }
     this.accounts = new AccountsApi(this);
     this.webhooks = new WebhooksApi(this);
+    this.groups = new GroupsApi(this);
+    this.messages = new MessagesApi(this);
   }
 
   /** Send a message through an account or via routing rules */
@@ -67,6 +72,20 @@ export class MessagingGatewayClient {
 
   async del<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
+  }
+
+  async getText(path: string): Promise<string> {
+    const url = `${this.baseUrl}${path}`;
+    const response = await fetch(url, { method: 'GET', headers: this.headers });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        error: 'Unknown',
+        code: 'UNKNOWN',
+        message: `HTTP ${response.status}`,
+      })) as GatewayError;
+      throw new GatewayApiError(response.status, error.code, error.message);
+    }
+    return response.text();
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -162,5 +181,92 @@ class WebhooksApi {
 
   async delete(accountId: string): Promise<{ deleted: boolean; accountId: string }> {
     return this.client.del<{ deleted: boolean; accountId: string }>(`/api/v1/accounts/${accountId}/webhook`);
+  }
+}
+
+// ── Groups sub-API ───────────────────────────────────────────
+
+class GroupsApi {
+  constructor(private readonly client: MessagingGatewayClient) {}
+
+  async list(accountId: string): Promise<GroupInfo[]> {
+    return this.client.get<GroupInfo[]>(`/api/v1/accounts/${accountId}/groups`);
+  }
+
+  async get(accountId: string, groupId: string): Promise<GroupInfo> {
+    return this.client.get<GroupInfo>(`/api/v1/accounts/${accountId}/groups/${groupId}`);
+  }
+}
+
+// ── Messages sub-API ─────────────────────────────────────────
+
+class MessagesApi {
+  constructor(private readonly client: MessagingGatewayClient) {}
+
+  async query(filters?: MessageQuery): Promise<MessageQueryResult> {
+    const params = new URLSearchParams();
+    if (filters) {
+      if (filters.accountId) params.set('accountId', filters.accountId);
+      if (filters.channel) params.set('channel', filters.channel);
+      if (filters.conversationId) params.set('conversationId', filters.conversationId);
+      if (filters.senderId) params.set('senderId', filters.senderId);
+      if (filters.contentType) params.set('contentType', filters.contentType);
+      if (filters.direction) params.set('direction', filters.direction);
+      if (filters.since) params.set('since', filters.since);
+      if (filters.until) params.set('until', filters.until);
+      if (filters.limit !== undefined) params.set('limit', String(filters.limit));
+      if (filters.offset !== undefined) params.set('offset', String(filters.offset));
+    }
+    const qs = params.toString();
+    return this.client.get<MessageQueryResult>(`/api/v1/messages${qs ? `?${qs}` : ''}`);
+  }
+
+  async get(messageId: string): Promise<UnifiedEnvelope> {
+    return this.client.get<UnifiedEnvelope>(`/api/v1/messages/${messageId}`);
+  }
+
+  async search(query: string, options?: { accountId?: string; limit?: number }): Promise<MessageQueryResult> {
+    const params = new URLSearchParams({ q: query });
+    if (options?.accountId) params.set('accountId', options.accountId);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    return this.client.get<MessageQueryResult>(`/api/v1/messages/search?${params.toString()}`);
+  }
+
+  async analytics(options?: { accountId?: string; since?: string; until?: string }): Promise<MessageStats> {
+    const params = new URLSearchParams();
+    if (options?.accountId) params.set('accountId', options.accountId);
+    if (options?.since) params.set('since', options.since);
+    if (options?.until) params.set('until', options.until);
+    const qs = params.toString();
+    return this.client.get<MessageStats>(`/api/v1/messages/analytics${qs ? `?${qs}` : ''}`);
+  }
+
+  async export(options?: { accountId?: string; format?: 'csv' | 'json'; since?: string }): Promise<string | UnifiedEnvelope[]> {
+    const params = new URLSearchParams();
+    if (options?.accountId) params.set('accountId', options.accountId);
+    if (options?.format) params.set('format', options.format);
+    if (options?.since) params.set('since', options.since);
+    const qs = params.toString();
+    const url = `/api/v1/messages/export${qs ? `?${qs}` : ''}`;
+
+    if (options?.format === 'csv') {
+      return this.client.getText(url);
+    }
+
+    const result = await this.client.get<MessageQueryResult>(url);
+    return result.messages;
+  }
+
+  async conversationContext(
+    conversationId: string,
+    options?: { limit?: number; since?: string; accountId?: string; format?: 'openai' | 'raw' },
+  ): Promise<ConversationContext> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.since) params.set('since', options.since);
+    if (options?.accountId) params.set('accountId', options.accountId);
+    if (options?.format) params.set('format', options.format);
+    const qs = params.toString();
+    return this.client.get<ConversationContext>(`/api/v1/conversations/${conversationId}/context${qs ? `?${qs}` : ''}`);
   }
 }

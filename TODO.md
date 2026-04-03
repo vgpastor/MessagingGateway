@@ -2,55 +2,20 @@
 
 ## 🔴 Priority: High
 
-### Logger abstraction
-Replace all `console.log/error/warn` with a gateway-owned logger wrapper.
-Not tied to Fastify — a standalone `Logger` port in `core/` with a Pino implementation in `infrastructure/`.
-All layers use `Logger.info()`, `Logger.error()`, etc. Output is structured JSON in production, pretty in dev.
-
-### BaileysSocketManager injection
-Extract from module-level singleton to injectable dependency.
-Pass via constructor in BaileysAdapter, BaileysConnectionManager, BaileysHealthChecker.
-Makes Baileys fully testable without side effects.
-
 ### Rate limiting enforcement
 The `rateLimit` config field exists on accounts but is never enforced.
 Add `@fastify/rate-limit` for global API protection.
 Add per-account rate limiting in `MessageRouterService` using the account's `rateLimit.maxPerMinute`.
 
+### SDK auto-generation from OpenAPI (Orval)
+Replace hand-written SDK types and REST client with auto-generated code using [Orval](https://github.com/orval-labs/orval).
+- Source: `GET /openapi.json` from `@fastify/swagger`
+- Generate: TypeScript types + fetch client → `packages/sdk/src/generated/`
+- WebSocket client stays manual but imports generated types
+- CI step: regenerate on API changes, fail if out of sync
+- Covers REST only — WS events derived from same generated types
+
 ## 🟡 Priority: Medium
-
-### Storage plugin (new domain: `persistence/`)
-Optional plugin that stores messages in a database (SQLite default, Postgres for scale).
-- New domain: `src/persistence/` with its own EventBus subscriber
-- Activated via env var `STORAGE_ENABLED=true` + `DATABASE_URL`
-- Subscribes to `message.inbound` and `message.send.success` events
-- Provides query API: `GET /api/v1/messages?accountId=&from=&to=&since=&until=`
-- Tied to metrics: message counts, per-group stats, response times
-- Zero impact when disabled — the EventBus subscriber simply isn't registered
-
-### Metrics & observability
-Prometheus metrics endpoint (`GET /metrics`):
-- `umg_messages_total{direction, channel, account, status}`
-- `umg_webhook_forward_duration_seconds{account, url}`
-- `umg_ws_clients_connected`
-- `umg_baileys_connection_status{account}`
-Depends on the Logger abstraction for structured correlation.
-Can share storage with the persistence plugin for historical stats.
-
-### Telegram Bot API provider
-Implement full Telegram adapter:
-- `messaging`: sendMessage, sendPhoto, sendDocument, sendLocation
-- `inbound`: parse Telegram Bot API webhook updates
-- `health`: validate bot token via `getMe`
-- `connection`: long-polling or webhook registration
-The stubs already exist in `src/integrations/telegram/bot-api/`.
-
-### Groups API
-New endpoints for group management:
-- `GET /api/v1/accounts/:id/groups` — list all groups
-- `GET /api/v1/accounts/:id/groups/:groupId` — group info + members
-- `POST /api/v1/accounts/:id/groups/:groupId/send` — send to group
-Requires Baileys `groupMetadata` and `groupFetchAllParticipating`.
 
 ## 🟢 Priority: Low (nice to have)
 
@@ -60,13 +25,6 @@ Separate repo: `vgpastor/n8n-nodes-messaging-gateway`
 - Action node: send message, manage accounts, configure webhooks
 - Uses `@messaging-gateway/sdk` as dependency
 - Published to npm as `n8n-nodes-messaging-gateway`
-
-### Message search & analytics
-Extends the storage plugin:
-- Full-text search across message history
-- Per-group/per-contact message stats
-- Export to CSV/JSON
-- Dashboard-ready API
 
 ### Email provider (Brevo full implementation)
 Complete the Brevo adapter:
@@ -95,4 +53,11 @@ Complete SMS adapters:
 - [x] CI/CD: Docker GHCR + Docker Hub + npm OIDC
 - [x] Version-driven releases (package.json = source of truth)
 - [x] Zero DDD cross-layer violations
-- [x] 205 tests
+- [x] Logger abstraction (Pino, structured JSON)
+- [x] SocketManagerPort + BaileysSocketManager injection
+- [x] Persistence plugin (SQLite, optional)
+- [x] Prometheus metrics (GET /metrics)
+- [x] Groups API (list groups, group info, participants)
+- [x] Telegram Bot API provider (send, inbound, content mapper)
+- [x] Search & analytics (FTS5, stats, CSV/JSON export)
+- [x] 205+ tests

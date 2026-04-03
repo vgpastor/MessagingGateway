@@ -6,6 +6,8 @@
  * that require an interactive connection flow.
  */
 
+import type { GroupInfo } from '../groups/group.types.js';
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 export interface ConnectionInfo {
@@ -29,6 +31,12 @@ export interface ConnectionManagerPort {
 
   /** Disconnect and clear session */
   disconnect(accountId: string): Promise<void>;
+
+  /** List all groups the account participates in (optional capability) */
+  getGroups?(accountId: string): Promise<GroupInfo[]>;
+
+  /** Get metadata for a specific group (optional capability) */
+  getGroupInfo?(accountId: string, groupId: string): Promise<GroupInfo | undefined>;
 }
 
 export interface PairingCodeCapable {

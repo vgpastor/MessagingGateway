@@ -25,7 +25,9 @@ import { telegramWebhookController } from '../connections/api/inbound/telegram-w
 import { emailWebhookController } from '../connections/api/inbound/email-webhook.controller.js';
 import { smsWebhookController } from '../connections/api/inbound/sms-webhook.controller.js';
 import { webhookConfigController } from '../connections/api/webhook-config.controller.js';
+import { groupsController } from '../connections/api/groups.controller.js';
 import { websocketController } from '../connections/ws/websocket.controller.js';
+import { metricsController } from '../connections/api/metrics.controller.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
@@ -40,6 +42,7 @@ export interface ServerDeps {
   apiKey: string;
   port: number;
   logLevel: string;
+  metricsEnabled?: boolean;
 }
 
 export async function createServer(deps: ServerDeps) {
@@ -92,6 +95,7 @@ export async function createServer(deps: ServerDeps) {
         { name: 'Messaging', description: 'Unified message sending API' },
         { name: 'Webhooks', description: 'Inbound message webhooks from providers' },
         { name: 'Webhooks Config', description: 'Per-account webhook configuration management' },
+        { name: 'Groups', description: 'Group listing and metadata' },
         { name: 'WebSocket', description: 'Real-time bidirectional event streaming' },
       ],
     },
@@ -115,6 +119,10 @@ export async function createServer(deps: ServerDeps) {
 
   await fastify.register(healthController);
 
+  if (deps.metricsEnabled !== false) {
+    await fastify.register(metricsController);
+  }
+
   // ── Inbound webhooks (provider-to-gateway, own signature validation) ──
 
   await fastify.register(
@@ -129,6 +137,7 @@ export async function createServer(deps: ServerDeps) {
     async (instance) => telegramWebhookController(instance, {
       accountRepository: deps.accountRepository,
       webhookForwarder: deps.webhookForwarder,
+      providerRegistry: deps.providerRegistry,
     }),
   );
 
@@ -177,6 +186,13 @@ export async function createServer(deps: ServerDeps) {
       async (instance) => webhookConfigController(instance, {
         accountRepository: deps.accountRepository,
         webhookConfigRepo: deps.webhookConfigRepo,
+      }),
+    );
+
+    await authenticated.register(
+      async (instance) => groupsController(instance, {
+        accountRepository: deps.accountRepository,
+        providerRegistry: deps.providerRegistry,
       }),
     );
 

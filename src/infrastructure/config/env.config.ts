@@ -17,6 +17,7 @@ export interface EnvConfig {
   healthCheckIntervalMs: number;
   storageEnabled: boolean;
   databasePath: string;
+  metricsEnabled: boolean;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -34,6 +35,7 @@ export function loadEnvConfig(): EnvConfig {
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
     storageEnabled: process.env['STORAGE_ENABLED'] === 'true',
     databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
+    metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
   };
 }
 

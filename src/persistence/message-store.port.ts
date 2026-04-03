@@ -17,6 +17,15 @@ export interface MessageStorePort {
   /** Get message count (for metrics) */
   count(filters?: Partial<MessageQuery>): Promise<number>;
 
+  /** Full-text search across stored messages */
+  search(query: string, options?: { accountId?: string; limit?: number; offset?: number }): Promise<MessageQueryResult>;
+
+  /** Get aggregated message statistics */
+  getStats(options?: { accountId?: string; since?: Date; until?: Date }): Promise<MessageStats>;
+
+  /** Get conversation context formatted for AI consumption */
+  getConversationContext(conversationId: string, options?: ConversationContextOptions): Promise<ConversationContext>;
+
   /** Initialize the store (create tables, etc.) */
   init(): Promise<void>;
 
@@ -42,4 +51,53 @@ export interface MessageQueryResult {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface ConversationContextOptions {
+  /** Max messages to include (default: 50) */
+  limit?: number;
+  /** Only include messages after this date */
+  since?: Date;
+  /** Include media descriptions (default: true) */
+  includeMedia?: boolean;
+  /** Account ID filter (required for multi-account setups) */
+  accountId?: string;
+  /** Format: 'openai' for ChatGPT-compatible, 'raw' for full envelopes */
+  format?: 'openai' | 'raw';
+}
+
+export interface ConversationContext {
+  conversationId: string;
+  /** Group name if available */
+  groupName?: string;
+  /** Number of participants seen in this conversation */
+  participantCount: number;
+  /** Unique participants with their display names */
+  participants: Array<{ id: string; name: string; messageCount: number }>;
+  /** Total messages in this conversation */
+  totalMessages: number;
+  /** Messages formatted for AI consumption */
+  messages: ConversationMessage[];
+  /** Full envelopes (only when format='raw') */
+  envelopes?: UnifiedEnvelope[];
+}
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant' | 'system';
+  name: string;
+  content: string;
+  timestamp: string;
+  /** Original message type for context */
+  type: string;
+  /** Message ID for reference */
+  id: string;
+}
+
+export interface MessageStats {
+  totalMessages: number;
+  byChannel: Record<string, number>;
+  byContentType: Record<string, number>;
+  byDirection: Record<string, number>;
+  topConversations: Array<{ conversationId: string; count: number; lastMessage?: string }>;
+  byHour: number[]; // 24 elements, messages per hour of day
 }
