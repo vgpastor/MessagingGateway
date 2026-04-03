@@ -1,84 +1,24 @@
-// Client classes
-export { MessagingGatewayClient, GatewayApiError } from './client.js';
+// ── Auto-generated REST client and types (from OpenAPI via Orval) ──
+export * from './generated/api.js';
+
+// ── Configuration (must call before using generated client) ──
+export { configure } from './fetch-mutator.js';
+
+// ── WebSocket client (manual — not covered by OpenAPI) ──
 export { MessagingGatewayEvents } from './events.js';
 
-// All types
+// ── Legacy REST client (prefer generated functions above) ──
+export { MessagingGatewayClient, GatewayApiError } from './client.js';
+
+// ── Manual types (WebSocket events + filters, not in OpenAPI) ──
 export type {
-  // Config
   ClientConfig,
   EventsConfig,
-
-  // Channels & Providers
-  ChannelType,
-  ProviderType,
-  AccountStatus,
-
-  // Content model
-  MessageContent,
-  TextContent,
-  ImageContent,
-  AudioContent,
-  VideoContent,
-  DocumentContent,
-  StickerContent,
-  LocationContent,
-  ContactContent,
-  ReactionContent,
-  PollContent,
-  InteractiveResponseContent,
-  SystemContent,
-  UnknownContent,
-  MediaInfo,
-
-  // Envelope
-  UnifiedEnvelope,
-  GatewayMetadata,
-  MessageContext,
-  ChannelDetails,
-  ContactRef,
-
-  // Send
-  SendMessageCommand,
-  SendContent,
-  RoutingCriteria,
-  MessageResult,
-
-  // Accounts
-  Account,
-  AccountMetadata,
-  CreateAccountInput,
-  UpdateAccountInput,
-
-  // Webhooks
-  WebhookConfig,
-  WebhookConfigInput,
-  WebhookEventType,
-  EnvelopeFilter,
-  FilterValue,
-
-  // Health
-  HealthStatus,
-
-  // Errors
-  GatewayError,
-
-  // WebSocket
   WsEventType,
   WsEvent,
   ConnectionUpdateData,
   MessageSentData,
   MessageSendFailedData,
-
-  // Groups
-  GroupInfo,
-  GroupParticipant,
-
-  // Message queries & analytics
-  MessageQuery,
-  MessageQueryResult,
-  MessageStats,
-
-  // Conversation context
-  ConversationContext,
-  ConversationMessage,
+  EnvelopeFilter,
+  FilterValue,
 } from './types.js';

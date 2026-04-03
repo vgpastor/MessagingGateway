@@ -11,3 +11,4 @@ qr-*.png
 coverage/
 .idea/
 .claude/
+.tmp-webhooks.json

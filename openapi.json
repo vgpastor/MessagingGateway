@@ -1,0 +1,3699 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Unified Messaging Gateway",
+    "description": "Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.",
+    "version": "0.2.2"
+  },
+  "components": {
+    "schemas": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "description": "Health check endpoint",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "error"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "uptime": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "timestamp"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/whatsapp/{accountId}/inbound": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive inbound WhatsApp messages from external HTTP providers",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "direction": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    },
+                    "recipient": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    },
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "text",
+                            "image",
+                            "audio",
+                            "video",
+                            "document",
+                            "location",
+                            "contact",
+                            "sticker",
+                            "reaction",
+                            "poll",
+                            "interactive_response",
+                            "system",
+                            "unknown"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "context": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "quotedMessageId": {
+                          "type": "string"
+                        },
+                        "isForwarded": {
+                          "type": "boolean"
+                        },
+                        "mentions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "platform": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "platform"
+                      ]
+                    },
+                    "gateway": {
+                      "type": "object",
+                      "properties": {
+                        "receivedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "adapterId": {
+                          "type": "string"
+                        },
+                        "rawPayloadRef": {
+                          "type": "string"
+                        },
+                        "account": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "alias": {
+                              "type": "string"
+                            },
+                            "owner": {
+                              "type": "string"
+                            },
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "alias",
+                            "owner",
+                            "tags"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "receivedAt",
+                        "adapterId",
+                        "account"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "accountId",
+                    "channel",
+                    "direction",
+                    "timestamp",
+                    "conversationId",
+                    "sender",
+                    "recipient",
+                    "content",
+                    "gateway"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/whatsapp/{accountId}/status": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive WhatsApp message status updates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "messageId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "received"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/telegram/{accountId}/update": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive Telegram Bot API updates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "direction": {
+                      "type": "string",
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "conversationId": {
+                      "type": "string"
+                    },
+                    "sender": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    },
+                    "recipient": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "displayName": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    },
+                    "content": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "text",
+                            "image",
+                            "audio",
+                            "video",
+                            "document",
+                            "location",
+                            "contact",
+                            "sticker",
+                            "reaction",
+                            "poll",
+                            "interactive_response",
+                            "system",
+                            "unknown"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "context": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "quotedMessageId": {
+                          "type": "string"
+                        },
+                        "isForwarded": {
+                          "type": "boolean"
+                        },
+                        "mentions": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "channelDetails": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "platform": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "platform"
+                      ]
+                    },
+                    "gateway": {
+                      "type": "object",
+                      "properties": {
+                        "receivedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "adapterId": {
+                          "type": "string"
+                        },
+                        "rawPayloadRef": {
+                          "type": "string"
+                        },
+                        "account": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "alias": {
+                              "type": "string"
+                            },
+                            "owner": {
+                              "type": "string"
+                            },
+                            "tags": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "alias",
+                            "owner",
+                            "tags"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "receivedAt",
+                        "adapterId",
+                        "account"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "accountId",
+                    "channel",
+                    "direction",
+                    "timestamp",
+                    "conversationId",
+                    "sender",
+                    "recipient",
+                    "content",
+                    "gateway"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/email/{accountId}/inbound": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive inbound email webhooks (Brevo/SES)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "received"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/sms/{accountId}/inbound": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive inbound SMS messages",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "received"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/sms/{accountId}/status": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "description": "Receive SMS delivery status updates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "accountId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "received"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "List all configured messaging accounts",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "whatsapp",
+                "telegram",
+                "email",
+                "sms"
+              ]
+            },
+            "in": "query",
+            "name": "channel",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "alias": {
+                        "type": "string"
+                      },
+                      "channel": {
+                        "type": "string",
+                        "enum": [
+                          "whatsapp",
+                          "telegram",
+                          "email",
+                          "sms"
+                        ]
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "active",
+                          "suspended",
+                          "auth_expired",
+                          "error",
+                          "unchecked"
+                        ]
+                      },
+                      "identity": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "connection": {
+                        "type": "object",
+                        "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
+                        "properties": {
+                          "managed": {
+                            "type": "boolean",
+                            "description": "Whether this provider uses managed connections"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "disconnected",
+                              "connecting",
+                              "connected"
+                            ]
+                          },
+                          "qr": {
+                            "type": "string",
+                            "description": "QR code data string (render with a QR library to scan)"
+                          }
+                        },
+                        "required": [
+                          "managed",
+                          "status"
+                        ]
+                      },
+                      "metadata": {
+                        "type": "object",
+                        "properties": {
+                          "owner": {
+                            "type": "string"
+                          },
+                          "environment": {
+                            "type": "string"
+                          },
+                          "webhookPath": {
+                            "type": "string"
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "alias",
+                      "channel",
+                      "provider",
+                      "status"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Create a new messaging account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Unique account identifier (e.g. \"wa-acme\")"
+                  },
+                  "alias": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Human-readable name"
+                  },
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "whatsapp",
+                      "telegram",
+                      "email",
+                      "sms"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "wwebjs-api",
+                      "evolution-api",
+                      "meta-cloud-api",
+                      "baileys",
+                      "telegram-bot-api",
+                      "brevo",
+                      "ses",
+                      "twilio",
+                      "messagebird"
+                    ]
+                  },
+                  "identity": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Channel-specific identity (e.g. phoneNumber for WhatsApp)"
+                  },
+                  "credentialsRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reference to credentials in env vars (optional if credentials is provided)"
+                  },
+                  "credentials": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Inline credential string (e.g. \"user:apiKey@host:port\"). Stored in YAML, used when env vars are not available."
+                  },
+                  "providerConfig": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "properties": {
+                      "owner": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "environment": {
+                        "type": "string",
+                        "enum": [
+                          "production",
+                          "staging"
+                        ]
+                      },
+                      "webhookPath": {
+                        "type": "string"
+                      },
+                      "rateLimit": {
+                        "type": "object",
+                        "properties": {
+                          "maxPerMinute": {
+                            "type": "number"
+                          },
+                          "maxPerDay": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "owner"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "alias",
+                  "channel",
+                  "provider",
+                  "metadata"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "auth_expired",
+                        "error",
+                        "unchecked"
+                      ]
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "connection": {
+                      "type": "object",
+                      "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
+                      "properties": {
+                        "managed": {
+                          "type": "boolean",
+                          "description": "Whether this provider uses managed connections"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "disconnected",
+                            "connecting",
+                            "connected"
+                          ]
+                        },
+                        "qr": {
+                          "type": "string",
+                          "description": "QR code data string (render with a QR library to scan)"
+                        }
+                      },
+                      "required": [
+                        "managed",
+                        "status"
+                      ]
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "environment": {
+                          "type": "string"
+                        },
+                        "webhookPath": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "alias",
+                    "channel",
+                    "provider",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}": {
+      "get": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Get details of a specific account, including live connection status and QR code for self-auth providers",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "auth_expired",
+                        "error",
+                        "unchecked"
+                      ]
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "connection": {
+                      "type": "object",
+                      "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
+                      "properties": {
+                        "managed": {
+                          "type": "boolean",
+                          "description": "Whether this provider uses managed connections"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "disconnected",
+                            "connecting",
+                            "connected"
+                          ]
+                        },
+                        "qr": {
+                          "type": "string",
+                          "description": "QR code data string (render with a QR library to scan)"
+                        }
+                      },
+                      "required": [
+                        "managed",
+                        "status"
+                      ]
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "environment": {
+                          "type": "string"
+                        },
+                        "webhookPath": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "alias",
+                    "channel",
+                    "provider",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Update an existing messaging account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "alias": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "wwebjs-api",
+                      "evolution-api",
+                      "meta-cloud-api",
+                      "baileys",
+                      "telegram-bot-api",
+                      "brevo",
+                      "ses",
+                      "twilio",
+                      "messagebird"
+                    ]
+                  },
+                  "identity": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "credentialsRef": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "credentials": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "providerConfig": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "auth_expired",
+                      "error",
+                      "unchecked"
+                    ]
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "properties": {
+                      "owner": {
+                        "type": "string"
+                      },
+                      "environment": {
+                        "type": "string",
+                        "enum": [
+                          "production",
+                          "staging"
+                        ]
+                      },
+                      "webhookPath": {
+                        "type": "string"
+                      },
+                      "rateLimit": {
+                        "type": "object",
+                        "properties": {
+                          "maxPerMinute": {
+                            "type": "number"
+                          },
+                          "maxPerDay": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "auth_expired",
+                        "error",
+                        "unchecked"
+                      ]
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "connection": {
+                      "type": "object",
+                      "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
+                      "properties": {
+                        "managed": {
+                          "type": "boolean",
+                          "description": "Whether this provider uses managed connections"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "disconnected",
+                            "connecting",
+                            "connected"
+                          ]
+                        },
+                        "qr": {
+                          "type": "string",
+                          "description": "QR code data string (render with a QR library to scan)"
+                        }
+                      },
+                      "required": [
+                        "managed",
+                        "status"
+                      ]
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "environment": {
+                          "type": "string"
+                        },
+                        "webhookPath": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "alias",
+                    "channel",
+                    "provider",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Delete a messaging account",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "deleted",
+                    "accountId"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/health": {
+      "get": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Check the connection status of a specific account",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "auth_expired",
+                        "error",
+                        "unchecked"
+                      ]
+                    },
+                    "credentialsConfigured": {
+                      "type": "boolean"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "lastChecked": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "status",
+                    "credentialsConfigured",
+                    "lastChecked"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/connect": {
+      "post": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Start the connection process for a self-auth provider (e.g. Baileys). After calling this, poll GET /api/v1/accounts/:id to retrieve the QR code.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "whatsapp",
+                        "telegram",
+                        "email",
+                        "sms"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "auth_expired",
+                        "error",
+                        "unchecked"
+                      ]
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "connection": {
+                      "type": "object",
+                      "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
+                      "properties": {
+                        "managed": {
+                          "type": "boolean",
+                          "description": "Whether this provider uses managed connections"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "disconnected",
+                            "connecting",
+                            "connected"
+                          ]
+                        },
+                        "qr": {
+                          "type": "string",
+                          "description": "QR code data string (render with a QR library to scan)"
+                        }
+                      },
+                      "required": [
+                        "managed",
+                        "status"
+                      ]
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "environment": {
+                          "type": "string"
+                        },
+                        "webhookPath": {
+                          "type": "string"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "alias",
+                    "channel",
+                    "provider",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/pair": {
+      "post": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Request a pairing code for authentication. Enter this code in WhatsApp > Linked Devices > Link with phone number.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phoneNumber": {
+                    "type": "string",
+                    "description": "Phone number with country code (e.g. \"+34600000001\"). If omitted, uses the number from account identity."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "pairingCode": {
+                      "type": "string",
+                      "description": "Enter this code in the messaging app to link"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "pairingCode"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/disconnect": {
+      "post": {
+        "tags": [
+          "Accounts"
+        ],
+        "description": "Disconnect a self-auth provider account and clear its session",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages/send": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "description": "Send a message through a specific account or via routing rules",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "description": "Account ID to send from (e.g. \"wa-acme\")"
+                  },
+                  "routing": {
+                    "type": "object",
+                    "properties": {
+                      "channel": {
+                        "type": "string"
+                      },
+                      "owner": {
+                        "type": "string"
+                      },
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "description": "Routing criteria (used if \"from\" is not provided)"
+                  },
+                  "to": {
+                    "type": "string",
+                    "description": "Recipient identifier (phone number, email, chat ID, etc.)"
+                  },
+                  "content": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "image",
+                          "audio",
+                          "video",
+                          "document",
+                          "sticker",
+                          "location",
+                          "contact",
+                          "reaction",
+                          "poll"
+                        ]
+                      },
+                      "body": {
+                        "type": "string"
+                      },
+                      "mediaUrl": {
+                        "type": "string"
+                      },
+                      "mimeType": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "caption": {
+                        "type": "string"
+                      },
+                      "latitude": {
+                        "type": "number"
+                      },
+                      "longitude": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  "replyToMessageId": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "source": {
+                        "type": "string"
+                      },
+                      "correlationId": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "to",
+                  "content"
+                ]
+              },
+              "example": {
+                "from": "wa-acme",
+                "to": "+34612345678",
+                "content": {
+                  "type": "text",
+                  "body": "Alerta: nuevo DEA registrado en tu zona"
+                },
+                "metadata": {
+                  "source": "alerts",
+                  "correlationId": "abc-123"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messageId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "sent",
+                        "delivered",
+                        "read",
+                        "played",
+                        "failed",
+                        "unknown"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "providerMessageId": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "status",
+                    "timestamp"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages/{id}/status": {
+      "get": {
+        "tags": [
+          "Messaging"
+        ],
+        "description": "Get the delivery status of a sent message",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "accountId",
+            "required": true,
+            "description": "Account ID that sent the message"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messageId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "queued",
+                        "sent",
+                        "delivered",
+                        "read",
+                        "played",
+                        "failed",
+                        "unknown"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "providerMessageId": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "messageId",
+                    "status",
+                    "timestamp"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages/{id}/read": {
+      "post": {
+        "tags": [
+          "Messaging"
+        ],
+        "description": "Mark a message as read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "accountId": {
+                    "type": "string",
+                    "description": "Account ID that received the message"
+                  }
+                },
+                "required": [
+                  "accountId"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks": {
+      "get": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "List all webhook configurations across all accounts",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "accountId": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "secret": {
+                        "type": "string"
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "accountId",
+                      "url",
+                      "events",
+                      "enabled",
+                      "createdAt",
+                      "updatedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/webhooks": {
+      "get": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "List all webhook configurations for a specific account",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "accountId": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "secret": {
+                        "type": "string"
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "accountId",
+                      "url",
+                      "events",
+                      "enabled",
+                      "createdAt",
+                      "updatedAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "Add a new webhook to an account. Multiple webhooks per account are supported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Callback URL to receive webhooks"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "description": "HMAC-SHA256 secret for signature verification"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "message.inbound",
+                        "message.status",
+                        "message.sent",
+                        "*"
+                      ]
+                    },
+                    "description": "Event types to forward. Defaults to [\"*\"]"
+                  },
+                  "filters": {
+                    "type": "object",
+                    "properties": {
+                      "include": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "maxItems": 50
+                            }
+                          ]
+                        },
+                        "maxProperties": 20
+                      },
+                      "exclude": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "maxItems": 50
+                            }
+                          ]
+                        },
+                        "maxProperties": 20
+                      },
+                      "fromMe": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether this webhook is active. Defaults to true"
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "secret": {
+                      "type": "string"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "accountId",
+                    "url",
+                    "events",
+                    "enabled",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "Remove all webhook configurations for an account (falls back to global webhook)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removed": {
+                      "type": "number"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/{webhookId}": {
+      "put": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "Update an existing webhook configuration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Callback URL to receive webhooks"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "description": "HMAC-SHA256 secret for signature verification"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "message.inbound",
+                        "message.status",
+                        "message.sent",
+                        "*"
+                      ]
+                    },
+                    "description": "Event types to forward. Defaults to [\"*\"]"
+                  },
+                  "filters": {
+                    "type": "object",
+                    "properties": {
+                      "include": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "maxItems": 50
+                            }
+                          ]
+                        },
+                        "maxProperties": 20
+                      },
+                      "exclude": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "maxItems": 50
+                            }
+                          ]
+                        },
+                        "maxProperties": 20
+                      },
+                      "fromMe": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether this webhook is active. Defaults to true"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "webhookId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "secret": {
+                      "type": "string"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "accountId",
+                    "url",
+                    "events",
+                    "enabled",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Webhooks Config"
+        ],
+        "description": "Remove a specific webhook configuration",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "webhookId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    },
+                    "webhookId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/groups": {
+      "get": {
+        "tags": [
+          "Groups"
+        ],
+        "description": "List all groups for a connected account",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "participants": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "isAdmin": {
+                              "type": "boolean"
+                            },
+                            "isSuperAdmin": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "isAdmin",
+                            "isSuperAdmin"
+                          ]
+                        }
+                      },
+                      "createdAt": {
+                        "type": "string"
+                      },
+                      "createdBy": {
+                        "type": "string"
+                      },
+                      "isAnnouncement": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "participants",
+                      "isAnnouncement"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{id}/groups/{groupId}": {
+      "get": {
+        "tags": [
+          "Groups"
+        ],
+        "description": "Get detailed info for a specific group including participants",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "groupId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "participants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "isAdmin": {
+                            "type": "boolean"
+                          },
+                          "isSuperAdmin": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "isAdmin",
+                          "isSuperAdmin"
+                        ]
+                      }
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "createdBy": {
+                      "type": "string"
+                    },
+                    "isAnnouncement": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "participants",
+                    "isAnnouncement"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health check endpoints"
+    },
+    {
+      "name": "Accounts",
+      "description": "Account management and status"
+    },
+    {
+      "name": "Messaging",
+      "description": "Unified message sending API"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Inbound message webhooks from providers"
+    },
+    {
+      "name": "Webhooks Config",
+      "description": "Per-account webhook configuration management"
+    },
+    {
+      "name": "Groups",
+      "description": "Group listing and metadata"
+    },
+    {
+      "name": "WebSocket",
+      "description": "Real-time bidirectional event streaming"
+    }
+  ]
+}
