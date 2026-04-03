@@ -115,10 +115,6 @@ jobs:
           cache: npm
           cache-dependency-path: packages/sdk/package-lock.json
 
-      - name: Install latest npm
-        run: npm install -g npm@latest
-
-      - name: Configure npm registry
         run: npm config set registry https://registry.npmjs.org/
 
       - name: Install dependencies

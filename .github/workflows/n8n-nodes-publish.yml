@@ -37,10 +37,6 @@ jobs:
           cache: npm
           cache-dependency-path: packages/n8n-nodes/package-lock.json
 
-      - name: Install latest npm (OIDC requires >= 11.5.1)
-        if: steps.check.outputs.changed == 'true'
-        run: npm install -g npm@latest
-
       - name: Configure npm registry
         if: steps.check.outputs.changed == 'true'
         run: npm config set registry https://registry.npmjs.org/
