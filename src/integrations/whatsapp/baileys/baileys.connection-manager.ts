@@ -1,34 +1,36 @@
 import type { ConnectionManagerPort, ConnectionInfo, PairingCodeCapable } from '../../../core/accounts/connection-manager.port.js';
-import { baileysSocketManager } from './baileys-socket.manager.js';
+import type { BaileysSocketManager } from './baileys-socket.manager.js';
 import { parseBaileysConfig } from './baileys.types.js';
 
 export class BaileysConnectionManager implements ConnectionManagerPort, PairingCodeCapable {
+  constructor(private readonly socketManager: BaileysSocketManager) {}
+
   supports(provider: string): boolean {
     return provider === 'baileys';
   }
 
   async connect(accountId: string, providerConfig: Record<string, unknown>): Promise<void> {
-    if (baileysSocketManager.hasSocket(accountId)) return;
+    if (this.socketManager.hasSocket(accountId)) return;
     const config = parseBaileysConfig(providerConfig);
-    await baileysSocketManager.connect(accountId, config);
+    await this.socketManager.connect(accountId, config);
   }
 
   getConnectionInfo(accountId: string): ConnectionInfo {
     return {
-      status: baileysSocketManager.getConnectionStatus(accountId),
-      qr: baileysSocketManager.getLastQr(accountId),
+      status: this.socketManager.getConnectionStatus(accountId),
+      qr: this.socketManager.getLastQr(accountId),
     };
   }
 
   hasConnection(accountId: string): boolean {
-    return baileysSocketManager.hasSocket(accountId);
+    return this.socketManager.hasSocket(accountId);
   }
 
   async requestPairingCode(accountId: string, phoneNumber: string): Promise<string> {
-    return baileysSocketManager.requestPairingCode(accountId, phoneNumber);
+    return this.socketManager.requestPairingCode(accountId, phoneNumber);
   }
 
   async disconnect(accountId: string): Promise<void> {
-    await baileysSocketManager.disconnect(accountId);
+    await this.socketManager.disconnect(accountId);
   }
 }

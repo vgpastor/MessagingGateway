@@ -1,6 +1,7 @@
 import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
 import type { AccountIdentity } from '../core/accounts/account-identity.js';
 import type { CredentialValidator } from './credential-validator.js';
+import { getLogger } from '../core/logger/logger.port.js';
 
 export interface HealthCheckSchedulerConfig {
   intervalMs: number;
@@ -21,7 +22,7 @@ export class HealthCheckScheduler {
   start(): void {
     if (this.timer) return;
 
-    console.log(`Health check scheduler started (every ${this.config.intervalMs / 1000}s)`);
+    getLogger().info('Health check scheduler started', { intervalSeconds: this.config.intervalMs / 1000 });
     this.timer = setInterval(() => {
       void this.runAll();
     }, this.config.intervalMs);
@@ -31,7 +32,7 @@ export class HealthCheckScheduler {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
-      console.log('Health check scheduler stopped');
+      getLogger().info('Health check scheduler stopped');
     }
   }
 
@@ -69,10 +70,10 @@ export class HealthCheckScheduler {
 
       const failed = results.filter((r) => r.status === 'rejected').length;
       if (failed > 0) {
-        console.warn(`Periodic health check: ${failed}/${accounts.length} checks failed`);
+        getLogger().warn('Periodic health check: some checks failed', { failed, total: accounts.length });
       }
     } catch (err) {
-      console.warn(`Periodic health check error: ${(err as Error).message}`);
+      getLogger().warn('Periodic health check error', { error: (err as Error).message });
     } finally {
       this.running = false;
     }

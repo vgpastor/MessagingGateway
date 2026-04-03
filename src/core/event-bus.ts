@@ -1,3 +1,5 @@
+import { getLogger } from './logger/logger.port.js';
+
 export interface DomainEvent<T = unknown> {
   id: string;
   type: string;
@@ -31,7 +33,7 @@ export class EventBus {
       try {
         return Promise.resolve(handler(event as DomainEvent));
       } catch (err) {
-        console.error(`[event-bus] Sync error in handler for '${event.type}':`, err);
+        getLogger().error('Sync error in event handler', { module: 'event-bus', eventType: event.type, error: err instanceof Error ? err.message : String(err) });
         return Promise.resolve();
       }
     });

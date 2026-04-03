@@ -36,6 +36,7 @@ export interface ServerDeps {
   healthCheckScheduler?: HealthCheckScheduler;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
+  messageStore?: import('../persistence/message-store.port.js').MessageStorePort;
   apiKey: string;
   port: number;
   logLevel: string;
@@ -178,6 +179,16 @@ export async function createServer(deps: ServerDeps) {
         webhookConfigRepo: deps.webhookConfigRepo,
       }),
     );
+
+    // Messages query API (only when persistence is enabled)
+    if (deps.messageStore) {
+      const { messagesController } = await import('../persistence/messages.controller.js');
+      await authenticated.register(
+        async (instance) => messagesController(instance, {
+          messageStore: deps.messageStore!,
+        }),
+      );
+    }
   });
 
   // ── WebSocket (token-based auth handled inside controller) ──

@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { getLogger } from '../../core/logger/logger.port.js';
 import type { WebhookConfig, WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
 import { createWebhookId } from '../../core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
@@ -93,7 +94,7 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
         id: c.id || createWebhookId(),
       }));
     } catch {
-      console.warn(`Failed to load webhook configs from ${this.filePath}, starting fresh`);
+      getLogger().warn('Failed to load webhook configs, starting fresh', { filePath: this.filePath });
     }
   }
 

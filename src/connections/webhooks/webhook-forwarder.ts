@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { getLogger } from '../../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
@@ -83,11 +84,11 @@ export class WebhookForwarder {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        console.error(`Webhook forwarding failed for ${accountId} → ${url}: HTTP ${response.status} - ${text}`);
+        getLogger().error('Webhook forwarding failed', { accountId, url, httpStatus: response.status, response: text });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`Webhook forwarding error for ${accountId} → ${url}: ${message}`);
+      getLogger().error('Webhook forwarding error', { accountId, url, error: message });
     }
   }
 }

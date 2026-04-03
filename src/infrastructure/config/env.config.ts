@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
+import { getLogger } from '../../core/logger/logger.port.js';
 
 config({ path: resolve(process.cwd(), '.env.local') });
 
@@ -14,6 +15,8 @@ export interface EnvConfig {
   webhookCallbackSecret?: string;
   accountsConfigPath?: string;
   healthCheckIntervalMs: number;
+  storageEnabled: boolean;
+  databasePath: string;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -29,6 +32,8 @@ export function loadEnvConfig(): EnvConfig {
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
+    storageEnabled: process.env['STORAGE_ENABLED'] === 'true',
+    databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
   };
 }
 
@@ -47,12 +52,10 @@ function resolveApiKey(nodeEnv: string): string {
 
   // No API_KEY configured
   if (nodeEnv === 'development') {
-    console.warn('');
-    console.warn('⚠️  WARNING: No API_KEY configured. Using default development key.');
-    console.warn(`   API_KEY: ${DEV_API_KEY}`);
-    console.warn('   This key ONLY works when NODE_ENV=development.');
-    console.warn('   Set a unique API_KEY environment variable before deploying.');
-    console.warn('');
+    getLogger().warn('No API_KEY configured, using default development key', {
+      apiKey: DEV_API_KEY,
+      note: 'This key ONLY works when NODE_ENV=development. Set a unique API_KEY before deploying.',
+    });
     return DEV_API_KEY;
   }
 

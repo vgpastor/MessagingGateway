@@ -1,4 +1,6 @@
 import { resolve } from 'node:path';
+import { setGlobalLogger, getLogger } from './core/logger/logger.port.js';
+import { createPinoLogger } from './infrastructure/logger/pino-logger.js';
 import { DomainError } from './core/errors.js';
 import { loadEnvConfig, resolveProviderCredential } from './infrastructure/config/env.config.js';
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
@@ -33,7 +35,11 @@ function createProviderRegistry(): ProviderRegistry {
   providerRegistry.register(messagebirdProvider);
   providerRegistry.setCredentialResolver(resolveProviderCredential);
 
-  console.log(`Registered ${providerRegistry.listProviders().length} provider(s): ${providerRegistry.listProviders().map((p) => p.id).join(', ')}`);
+  const logger = getLogger();
+  logger.info('Provider registry initialized', {
+    count: providerRegistry.listProviders().length,
+    providers: providerRegistry.listProviders().map((p) => p.id),
+  });
   return providerRegistry;
 }
 
@@ -54,12 +60,13 @@ function wireEventBus(
     const account = await accountRepository.findById(accountId);
     if (!account) return;
 
+    const logger = getLogger();
     if (status === 'connected' && account.status !== 'active') {
       await accountRepository.update(accountId, { status: 'active' });
-      console.log(`[${accountId}] Status auto-updated to active (connected)`);
+      logger.info('Status auto-updated to active (connected)', { accountId });
     } else if (status === 'disconnected' && account.status === 'active') {
       await accountRepository.update(accountId, { status: 'auth_expired' });
-      console.log(`[${accountId}] Status auto-updated to auth_expired (disconnected)`);
+      logger.info('Status auto-updated to auth_expired (disconnected)', { accountId });
     }
   });
 
@@ -99,6 +106,7 @@ async function connectManagedProviders(
   providerRegistry: ProviderRegistry,
   eventBus: EventBus,
 ): Promise<void> {
+  const logger = getLogger();
   const managedAccounts = accounts.filter(
     (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
   );
@@ -113,15 +121,20 @@ async function connectManagedProviders(
         await bundle.wireEvents(account, eventBus);
       }
 
-      console.log(`[${account.provider}:${account.id}] Connected and listening for messages`);
+      logger.info('Connected and listening for messages', { provider: account.provider, accountId: account.id });
     } catch (err) {
-      console.error(`[${account.provider}:${account.id}] Failed to connect:`, err);
+      logger.error('Failed to connect', { provider: account.provider, accountId: account.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }
 
 async function main() {
   const envConfig = loadEnvConfig();
+  setGlobalLogger(createPinoLogger({
+    level: envConfig.logLevel,
+    pretty: envConfig.nodeEnv === 'development',
+  }));
+  const logger = getLogger();
   const yamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
   const rawAccounts = loadAccountsFromYaml(yamlPath);
 
@@ -130,12 +143,12 @@ async function main() {
 
   // Validate credentials
   const credentialValidator = new CredentialValidator(providerRegistry);
-  console.log(`Loaded ${rawAccounts.length} account(s) from configuration, validating credentials...`);
+  logger.info('Loaded accounts from configuration, validating credentials', { count: rawAccounts.length });
   const accounts = await credentialValidator.validateAll(rawAccounts);
 
   const counts = { active: 0, auth_expired: 0, unchecked: 0, error: 0 };
   for (const a of accounts) counts[a.status as keyof typeof counts]++;
-  console.log(`Validation complete: ${counts.active} active, ${counts.auth_expired} auth_expired, ${counts.unchecked} unchecked, ${counts.error} error`);
+  logger.info('Validation complete', counts);
 
   // Core services
   const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
@@ -144,10 +157,22 @@ async function main() {
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
-  console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
+  logger.info('Loaded per-account webhook configs', { count: webhookConfigs.length });
 
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
+
+  // Optional: persistence plugin
+  let messageStore: import('./persistence/message-store.port.js').MessageStorePort | undefined;
+  if (envConfig.storageEnabled) {
+    const { SqliteMessageStore } = await import('./persistence/sqlite-message-store.js');
+    const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
+    const dbPath = resolve(process.cwd(), envConfig.databasePath);
+    messageStore = new SqliteMessageStore(dbPath);
+    await messageStore.init();
+    subscribePersistence(eventBus, messageStore);
+    logger.info('Persistence enabled', { database: dbPath });
+  }
 
   // Health check scheduler
   const healthCheckScheduler = new HealthCheckScheduler(
@@ -158,21 +183,21 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
-    webhookForwarder, wsBroadcaster,
+    webhookForwarder, wsBroadcaster, messageStore,
     apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
   });
 
   try {
     await server.listen({ port: envConfig.port, host: '0.0.0.0' });
-    console.log(`Unified Messaging Gateway listening on port ${envConfig.port}`);
-    console.log(`Swagger UI available at http://localhost:${envConfig.port}/docs`);
+    logger.info('Unified Messaging Gateway listening', { port: envConfig.port });
+    logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
     await connectManagedProviders(accounts, providerRegistry, eventBus);
     healthCheckScheduler.start();
 
     const shutdown = async () => {
-      console.log('Shutting down gracefully...');
+      logger.info('Shutting down gracefully...');
       healthCheckScheduler.stop();
       await server.close();
       process.exit(0);
@@ -186,11 +211,11 @@ async function main() {
 }
 
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled rejection:', err);
+  getLogger().error('Unhandled rejection', { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });
 
 main().catch((err) => {
-  console.error('Fatal startup error:', err);
+  getLogger().error('Fatal startup error', { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

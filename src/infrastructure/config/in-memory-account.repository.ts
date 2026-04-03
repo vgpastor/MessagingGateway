@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
+import { getLogger } from '../../core/logger/logger.port.js';
 import type { ChannelType } from '../../core/messaging/channel.types.js';
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
@@ -118,7 +119,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
     mkdir(dirname(path), { recursive: true })
       .then(() => writeFile(path, stringifyYaml(data), 'utf-8'))
       .catch((err) => {
-        console.warn(`Failed to persist accounts to ${path}: ${(err as Error).message}`);
+        getLogger().warn('Failed to persist accounts', { path, error: (err as Error).message });
       });
   }
 
