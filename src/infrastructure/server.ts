@@ -10,7 +10,7 @@ const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf
 import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
 import type { WebhookConfigRepository } from '../core/webhooks/webhook-config.repository.js';
 import type { MessageRouterService } from '../core/routing/message-router.service.js';
-import type { ProviderRegistry } from '../integrations/provider-registry.js';
+import type { ProviderLookupPort } from '../core/providers/provider-lookup.port.js';
 import type { WebhookForwarder } from '../connections/webhooks/webhook-forwarder.js';
 import type { CredentialValidator } from './credential-validator.js';
 import type { HealthCheckScheduler } from './health-check-scheduler.js';
@@ -30,7 +30,7 @@ import { websocketController } from '../connections/ws/websocket.controller.js';
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
   webhookConfigRepo: WebhookConfigRepository;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: ProviderLookupPort;
   messageRouter: MessageRouterService;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;

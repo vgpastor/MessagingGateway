@@ -9,8 +9,27 @@ interface WebhookConfigDeps {
   webhookConfigRepo: WebhookConfigRepository;
 }
 
+const filterValueSchema = {
+  anyOf: [
+    { type: 'boolean' as const },
+    { type: 'number' as const },
+    { type: 'string' as const },
+    { type: 'array' as const, items: { anyOf: [{ type: 'boolean' as const }, { type: 'number' as const }, { type: 'string' as const }] }, maxItems: 50 },
+  ],
+};
+
+const filtersSchema = {
+  type: 'object' as const,
+  properties: {
+    include: { type: 'object' as const, additionalProperties: filterValueSchema, maxProperties: 20 },
+    exclude: { type: 'object' as const, additionalProperties: filterValueSchema, maxProperties: 20 },
+    fromMe: { type: 'boolean' as const },
+  },
+};
+
 const webhookConfigSchema = {
   type: 'object' as const,
+  additionalProperties: true,
   properties: {
     id: { type: 'string' as const },
     accountId: { type: 'string' as const },
@@ -34,6 +53,7 @@ const webhookConfigInputSchema = {
       items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', '*'] },
       description: 'Event types to forward. Defaults to ["*"]',
     },
+    filters: filtersSchema,
     enabled: { type: 'boolean' as const, description: 'Whether this webhook is active. Defaults to true' },
   },
   required: ['url'] as const,

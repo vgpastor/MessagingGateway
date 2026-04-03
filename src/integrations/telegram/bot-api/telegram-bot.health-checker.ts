@@ -1,11 +1,10 @@
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
-import { resolveProviderCredential } from '../../../infrastructure/config/env.config.js';
 import { fetchWithTimeout } from '../../shared/http.js';
 
 export class TelegramBotHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const token = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
+    const token = account.credentials;
     if (!token) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing bot token' };
     }

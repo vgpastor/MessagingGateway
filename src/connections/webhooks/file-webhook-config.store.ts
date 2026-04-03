@@ -39,6 +39,7 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
       url: input.url,
       secret: input.secret,
       events: input.events?.length ? input.events : ['*'],
+      filters: input.filters,
       enabled: input.enabled ?? true,
       createdAt: now,
       updatedAt: now,
@@ -56,6 +57,7 @@ export class FileWebhookConfigStore implements WebhookConfigRepository {
     if (input.url !== undefined) config.url = input.url;
     if (input.secret !== undefined) config.secret = input.secret;
     if (input.events !== undefined) config.events = input.events.length ? input.events : ['*'];
+    if (input.filters !== undefined) config.filters = input.filters;
     if (input.enabled !== undefined) config.enabled = input.enabled;
     config.updatedAt = new Date().toISOString();
 

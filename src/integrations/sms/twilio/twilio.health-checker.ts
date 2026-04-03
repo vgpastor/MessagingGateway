@@ -1,12 +1,11 @@
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
-import { resolveProviderCredential, resolveCredential } from '../../../infrastructure/config/env.config.js';
 import { fetchWithTimeout } from '../../shared/http.js';
 
 export class TwilioHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const authToken = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
-    const accountSid = resolveCredential(account.credentialsRef, 'ACCOUNT_SID');
+    const authToken = account.credentials;
+    const accountSid = account.providerConfig['resolvedAccountSid'] as string | undefined;
     if (!authToken || !accountSid) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing account SID or auth token' };
     }

@@ -5,7 +5,7 @@ import type { ChannelType, ProviderType } from '../../core/messaging/channel.typ
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidator } from '../../infrastructure/credential-validator.js';
 import type { HealthCheckScheduler } from '../../infrastructure/health-check-scheduler.js';
-import type { ProviderRegistry } from '../../integrations/provider-registry.js';
+import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
 import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
 import { accountSchema } from '../../infrastructure/config/accounts.schema.js';
 import { buildDefaultIdentity } from '../../infrastructure/config/accounts.loader.js';
@@ -20,17 +20,17 @@ export interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
   credentialValidator: CredentialValidator;
   healthCheckScheduler?: HealthCheckScheduler;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: ProviderLookupPort;
 }
 
-function getConnectionInfo(account: ChannelAccount, registry: ProviderRegistry) {
+function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
   const manager = registry.getConnectionManager(account.provider);
   if (!manager) return { managed: false as const };
   const info = manager.getConnectionInfo(account.id);
   return { managed: true as const, status: info.status, qr: info.qr };
 }
 
-function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderRegistry) {
+function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderLookupPort) {
   const connectionInfo = getConnectionInfo(account, providerRegistry);
 
   return {

@@ -1,5 +1,6 @@
 import type { ChannelAccount } from '../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../core/messaging/provider-health.port.js';
+import { resolveProviderCredential, resolveCredential } from './config/env.config.js';
 
 /** Anything that can provide a health checker by provider ID */
 export interface HealthCheckerProvider {
@@ -15,8 +16,22 @@ export class CredentialValidator {
       return { status: 'unchecked', credentialsConfigured: false, detail: `No health checker for provider '${account.provider}'` };
     }
 
+    // Pre-resolve credentials so health checkers don't need infrastructure imports
+    const resolved = { ...account };
+    if (!resolved.credentials) {
+      resolved.credentials = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
+    }
+
+    // For Twilio, also resolve the account SID into providerConfig
+    if (account.provider === 'twilio' && account.credentialsRef) {
+      const accountSid = resolveCredential(account.credentialsRef, 'ACCOUNT_SID');
+      if (accountSid) {
+        resolved.providerConfig = { ...resolved.providerConfig, resolvedAccountSid: accountSid };
+      }
+    }
+
     try {
-      return await checker.validate(account);
+      return await checker.validate(resolved);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { status: 'error', credentialsConfigured: false, detail: message };

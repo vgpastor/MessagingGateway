@@ -2,13 +2,23 @@ import type { MessagingPort } from '../../../core/messaging/messaging.port.js';
 import type { OutboundMessage } from '../../../core/messaging/outbound-message.js';
 import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
 import { ProviderError } from '../../../core/errors.js';
-import { resolveProviderCredentialParsed } from '../../../infrastructure/config/env.config.js';
 import type {
   WwebjsSendMessageRequest,
   WwebjsSendResponse,
   WwebjsDownloadMediaResponse,
   WwebjsMessageInfoResponse,
 } from './wwebjs.types.js';
+
+/** Parse a credential string that may contain connection info (apiKey or apiKey@host:port) */
+function parseCredential(raw: string): { apiKey: string; baseUrl?: string } {
+  const atIndex = raw.lastIndexOf('@');
+  if (atIndex === -1) return { apiKey: raw };
+  const apiKey = raw.substring(0, atIndex);
+  const hostPort = raw.substring(atIndex + 1);
+  if (!apiKey || !hostPort) return { apiKey: raw };
+  const baseUrl = hostPort.startsWith('http') ? hostPort : `http://${hostPort}`;
+  return { apiKey, baseUrl };
+}
 
 export class WwebjsApiAdapter implements MessagingPort {
   private readonly baseUrl: string;
@@ -22,7 +32,8 @@ export class WwebjsApiAdapter implements MessagingPort {
   ) {
     const configBaseUrl = (providerConfig['baseUrl'] as string | undefined) ?? 'http://localhost:3001';
     const configSessionId = providerConfig['sessionId'] as string | undefined;
-    const parsed = resolveProviderCredentialParsed(credentialsRef, 'wwebjs-api', inlineCredential);
+    const raw = inlineCredential ?? '';
+    const parsed = raw ? parseCredential(raw) : undefined;
 
     const rawApiKey = parsed?.apiKey ?? '';
 

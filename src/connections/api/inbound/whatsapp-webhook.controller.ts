@@ -1,13 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../../core/accounts/channel-account.repository.js';
-import type { ProviderRegistry } from '../../../integrations/provider-registry.js';
+import type { ProviderLookupPort } from '../../../core/providers/provider-lookup.port.js';
 import type { WebhookForwarder } from '../../webhooks/webhook-forwarder.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from '../schemas.js';
 
 interface WhatsAppWebhookDeps {
   accountRepository: ChannelAccountRepository;
   webhookForwarder: WebhookForwarder;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: ProviderLookupPort;
 }
 
 export async function whatsappWebhookController(
@@ -52,7 +52,7 @@ export async function whatsappWebhookController(
       }
 
       // Managed providers (Baileys) receive messages internally, not via HTTP webhooks
-      if (deps.providerRegistry.get(account.provider)?.connection) {
+      if (deps.providerRegistry.getConnectionManager(account.provider)) {
         return reply.status(400).send({
           error: 'Bad Request', code: 'INTERNAL_PROVIDER',
           message: `Account '${accountId}' uses a managed provider that receives messages internally.`,

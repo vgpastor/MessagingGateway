@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { EnvelopeFilter } from '../filters/envelope-filter.js';
 
 export type WebhookEventType =
   | 'message.inbound'
@@ -12,6 +13,7 @@ export interface WebhookConfig {
   url: string;
   secret?: string;
   events: WebhookEventType[];
+  filters?: EnvelopeFilter;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -21,6 +23,7 @@ export interface WebhookConfigInput {
   url: string;
   secret?: string;
   events?: WebhookEventType[];
+  filters?: EnvelopeFilter;
   enabled?: boolean;
 }
 

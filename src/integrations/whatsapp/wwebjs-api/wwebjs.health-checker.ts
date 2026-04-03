@@ -1,14 +1,26 @@
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
-import { resolveProviderCredentialParsed } from '../../../infrastructure/config/env.config.js';
 import { fetchWithTimeout } from '../../shared/http.js';
+
+/** Parse a credential string that may contain connection info (apiKey or apiKey@host:port) */
+function parseCredential(raw: string): { apiKey: string; baseUrl?: string } {
+  const atIndex = raw.lastIndexOf('@');
+  if (atIndex === -1) return { apiKey: raw };
+  const apiKey = raw.substring(0, atIndex);
+  const hostPort = raw.substring(atIndex + 1);
+  if (!apiKey || !hostPort) return { apiKey: raw };
+  const baseUrl = hostPort.startsWith('http') ? hostPort : `http://${hostPort}`;
+  return { apiKey, baseUrl };
+}
 
 export class WwebjsHealthChecker implements ProviderHealthChecker {
   async validate(account: ChannelAccount): Promise<ValidationResult> {
-    const parsed = resolveProviderCredentialParsed(account.credentialsRef, account.provider, account.credentials);
-    if (!parsed) {
+    const raw = account.credentials;
+    if (!raw) {
       return { status: 'unchecked', credentialsConfigured: false, detail: 'Missing API key' };
     }
+
+    const parsed = parseCredential(raw);
 
     // Extract actual API key (strip sessionId: prefix if present)
     const rawApiKey = parsed.apiKey;
