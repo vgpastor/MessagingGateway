@@ -28,7 +28,7 @@ class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
     const config: WebhookConfig = {
       id: createWebhookId(),
       accountId, url: input.url, secret: input.secret,
-      events: input.events ?? ['*'], enabled: input.enabled ?? true,
+      events: input.events ?? ['*'], filters: input.filters, enabled: input.enabled ?? true,
       createdAt: now, updatedAt: now,
     };
     this.configs.push(config);
@@ -41,6 +41,7 @@ class InMemoryWebhookConfigRepo implements WebhookConfigRepository {
     if (input.secret !== undefined) config.secret = input.secret;
     if (input.events !== undefined) config.events = input.events.length ? input.events : ['*'];
     if (input.enabled !== undefined) config.enabled = input.enabled;
+    if (input.filters !== undefined) config.filters = input.filters;
     config.updatedAt = new Date().toISOString();
     return config;
   }
@@ -443,6 +444,28 @@ describe('Webhook Config API', () => {
     });
     expect(getResponse.statusCode).toBe(200);
     expect(getResponse.json()).toEqual([]);
+  });
+
+  it('should create webhook with filters', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      headers: { 'x-api-key': 'test-api-key' },
+      url: '/api/v1/accounts/wa-acme/webhooks',
+      payload: {
+        url: 'https://filtered.example.com/hook',
+        filters: {
+          include: { 'content.type': ['text', 'image'] },
+          exclude: { 'channelDetails.isBroadcast': true },
+          fromMe: false,
+        },
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    const config = response.json();
+    expect(config.filters).toBeDefined();
+    expect(config.filters.include['content.type']).toEqual(['text', 'image']);
+    expect(config.filters.exclude['channelDetails.isBroadcast']).toBe(true);
+    expect(config.filters.fromMe).toBe(false);
   });
 
   it('should return 404 for unknown account on POST', async () => {

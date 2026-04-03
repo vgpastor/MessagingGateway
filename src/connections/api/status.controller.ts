@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { ProviderRegistry } from '../../integrations/provider-registry.js';
+import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
 import { messageResultSchema, errorResponseSchema } from './schemas.js';
 
 interface StatusControllerDeps {
   accountRepository: ChannelAccountRepository;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: ProviderLookupPort;
 }
 
 export async function statusController(

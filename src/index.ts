@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { DomainError } from './core/errors.js';
-import { loadEnvConfig } from './infrastructure/config/env.config.js';
+import { loadEnvConfig, resolveProviderCredential } from './infrastructure/config/env.config.js';
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
@@ -20,16 +20,10 @@ import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js'
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
+import type { ChannelAccount } from './core/accounts/channel-account.js';
 
-async function main() {
-  const envConfig = loadEnvConfig();
-  const yamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
-  const rawAccounts = loadAccountsFromYaml(yamlPath);
-
-  // Event Bus — backbone of inter-domain communication
-  const eventBus = new EventBus();
-
-  // Provider Registry — single place to register all providers
+/** Register all supported providers and inject the credential resolver */
+function createProviderRegistry(): ProviderRegistry {
   const providerRegistry = new ProviderRegistry();
   providerRegistry.register(baileysProvider);
   providerRegistry.register(wwebjsProvider);
@@ -37,35 +31,23 @@ async function main() {
   providerRegistry.register(brevoProvider);
   providerRegistry.register(twilioProvider);
   providerRegistry.register(messagebirdProvider);
+  providerRegistry.setCredentialResolver(resolveProviderCredential);
 
   console.log(`Registered ${providerRegistry.listProviders().length} provider(s): ${providerRegistry.listProviders().map((p) => p.id).join(', ')}`);
+  return providerRegistry;
+}
 
-  // Validate credentials
-  const credentialValidator = new CredentialValidator(providerRegistry);
-  console.log(`Loaded ${rawAccounts.length} account(s) from configuration, validating credentials...`);
-  const accounts = await credentialValidator.validateAll(rawAccounts);
-
-  const counts = { active: 0, auth_expired: 0, unchecked: 0, error: 0 };
-  for (const a of accounts) counts[a.status as keyof typeof counts]++;
-  console.log(`Validation complete: ${counts.active} active, ${counts.auth_expired} auth_expired, ${counts.unchecked} unchecked, ${counts.error} error`);
-
-  // Repository
-  const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
-
-  // Core services
-  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
-  const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
-  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
-
-  const webhookConfigs = await webhookConfigRepo.findAll();
-  console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
-
-  // Subscribe connections to event bus
+/** Subscribe event handlers to the event bus */
+function wireEventBus(
+  eventBus: EventBus,
+  webhookForwarder: WebhookForwarder,
+  accountRepository: InMemoryAccountRepository,
+  messageRouter: MessageRouterService,
+): WebSocketBroadcaster {
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
     await webhookForwarder.forward(event.data.envelope);
   });
 
-  // Auto-update account status when connection state changes
   eventBus.on<ConnectionUpdatePayload>(Events.CONNECTION_UPDATE, async (event) => {
     const { accountId, status } = event.data;
     if (!accountId) return;
@@ -108,12 +90,68 @@ async function main() {
     }
   });
 
-  const wsBroadcaster = new WebSocketBroadcaster(eventBus);
+  return new WebSocketBroadcaster(eventBus);
+}
+
+/** Connect managed providers (e.g. Baileys) and wire their inbound events */
+async function connectManagedProviders(
+  accounts: ChannelAccount[],
+  providerRegistry: ProviderRegistry,
+  eventBus: EventBus,
+): Promise<void> {
+  const managedAccounts = accounts.filter(
+    (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
+  );
+
+  for (const account of managedAccounts) {
+    const bundle = providerRegistry.getOrThrow(account.provider);
+    try {
+      const connectionManager = bundle.connection!();
+      await connectionManager.connect(account.id, account.providerConfig);
+
+      if (bundle.wireEvents) {
+        await bundle.wireEvents(account, eventBus);
+      }
+
+      console.log(`[${account.provider}:${account.id}] Connected and listening for messages`);
+    } catch (err) {
+      console.error(`[${account.provider}:${account.id}] Failed to connect:`, err);
+    }
+  }
+}
+
+async function main() {
+  const envConfig = loadEnvConfig();
+  const yamlPath = envConfig.accountsConfigPath ?? resolve(process.cwd(), 'data/accounts.yaml');
+  const rawAccounts = loadAccountsFromYaml(yamlPath);
+
+  const eventBus = new EventBus();
+  const providerRegistry = createProviderRegistry();
+
+  // Validate credentials
+  const credentialValidator = new CredentialValidator(providerRegistry);
+  console.log(`Loaded ${rawAccounts.length} account(s) from configuration, validating credentials...`);
+  const accounts = await credentialValidator.validateAll(rawAccounts);
+
+  const counts = { active: 0, auth_expired: 0, unchecked: 0, error: 0 };
+  for (const a of accounts) counts[a.status as keyof typeof counts]++;
+  console.log(`Validation complete: ${counts.active} active, ${counts.auth_expired} auth_expired, ${counts.unchecked} unchecked, ${counts.error} error`);
+
+  // Core services
+  const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
+  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
+  const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
+  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
+
+  const webhookConfigs = await webhookConfigRepo.findAll();
+  console.log(`Loaded ${webhookConfigs.length} per-account webhook config(s)`);
+
+  // Wire event bus
+  const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
 
   // Health check scheduler
-  const healthCheckIntervalMs = envConfig.healthCheckIntervalMs;
   const healthCheckScheduler = new HealthCheckScheduler(
-    accountRepository, credentialValidator, { intervalMs: healthCheckIntervalMs },
+    accountRepository, credentialValidator, { intervalMs: envConfig.healthCheckIntervalMs },
   );
 
   // Server
@@ -130,27 +168,7 @@ async function main() {
     console.log(`Unified Messaging Gateway listening on port ${envConfig.port}`);
     console.log(`Swagger UI available at http://localhost:${envConfig.port}/docs`);
 
-    // Connect managed providers and wire inbound events — NO provider-specific code here
-    const managedAccounts = accounts.filter(
-      (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
-    );
-
-    for (const account of managedAccounts) {
-      const bundle = providerRegistry.getOrThrow(account.provider);
-      try {
-        const connectionManager = bundle.connection!();
-        await connectionManager.connect(account.id, account.providerConfig);
-
-        if (bundle.wireEvents) {
-          await bundle.wireEvents(account, eventBus);
-        }
-
-        console.log(`[${account.provider}:${account.id}] Connected and listening for messages`);
-      } catch (err) {
-        console.error(`[${account.provider}:${account.id}] Failed to connect:`, err);
-      }
-    }
-
+    await connectManagedProviders(accounts, providerRegistry, eventBus);
     healthCheckScheduler.start();
 
     const shutdown = async () => {

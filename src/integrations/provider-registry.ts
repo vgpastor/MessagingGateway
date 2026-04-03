@@ -1,7 +1,7 @@
 import type { ChannelAccount } from '../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../core/messaging/channel.types.js';
 import type { MessagingPort } from '../core/messaging/messaging.port.js';
-import type { MessagingAdapterFactory } from '../core/messaging/ports/messaging-adapter.port.js';
+import type { ProviderLookupPort } from '../core/providers/provider-lookup.port.js';
 import type { ProviderHealthChecker } from '../core/messaging/provider-health.port.js';
 import type { InboundWebhookPort } from '../core/messaging/inbound-webhook.port.js';
 import type { ConnectionManagerPort } from '../core/accounts/connection-manager.port.js';
@@ -38,11 +38,24 @@ export interface ProviderBundle {
 
 // ── ProviderRegistry ────────────────────────────────────────────
 
-export class ProviderRegistry implements MessagingAdapterFactory {
+/** Resolves a raw credential string from credentialsRef + provider, respecting inline overrides */
+export type CredentialResolverFn = (
+  credentialsRef: string | undefined,
+  provider: string,
+  inlineCredential?: string,
+) => string | undefined;
+
+export class ProviderRegistry implements ProviderLookupPort {
   private providers = new Map<ProviderType, ProviderBundle>();
+  private credentialResolver?: CredentialResolverFn;
 
   register(bundle: ProviderBundle): void {
     this.providers.set(bundle.id, bundle);
+  }
+
+  /** Inject a credential resolver so adapters don't import infrastructure directly */
+  setCredentialResolver(resolver: CredentialResolverFn): void {
+    this.credentialResolver = resolver;
   }
 
   get(providerId: ProviderType): ProviderBundle | undefined {
@@ -60,7 +73,11 @@ export class ProviderRegistry implements MessagingAdapterFactory {
   create(account: ChannelAccount): MessagingPort {
     const bundle = this.getOrThrow(account.provider);
     const providerConfig = { ...account.providerConfig, accountId: account.id };
-    return bundle.messaging(providerConfig, account.credentialsRef, account.credentials);
+    // Pre-resolve credentials so adapters don't need infrastructure imports
+    const resolved = this.credentialResolver
+      ? this.credentialResolver(account.credentialsRef, account.provider, account.credentials)
+      : account.credentials;
+    return bundle.messaging(providerConfig, account.credentialsRef, resolved);
   }
 
   has(providerId: string): boolean {

@@ -10,11 +10,11 @@ interface WebhookConfigDeps {
 }
 
 const filterValueSchema = {
-  oneOf: [
-    { type: 'string' },
-    { type: 'number' },
-    { type: 'boolean' },
-    { type: 'array', items: { type: ['string', 'number', 'boolean'] }, maxItems: 50 },
+  anyOf: [
+    { type: 'boolean' as const },
+    { type: 'number' as const },
+    { type: 'string' as const },
+    { type: 'array' as const, items: { anyOf: [{ type: 'boolean' as const }, { type: 'number' as const }, { type: 'string' as const }] }, maxItems: 50 },
   ],
 };
 
@@ -29,13 +29,13 @@ const filtersSchema = {
 
 const webhookConfigSchema = {
   type: 'object' as const,
+  additionalProperties: true,
   properties: {
     id: { type: 'string' as const },
     accountId: { type: 'string' as const },
     url: { type: 'string' as const },
     secret: { type: 'string' as const },
     events: { type: 'array' as const, items: { type: 'string' as const } },
-    filters: filtersSchema,
     enabled: { type: 'boolean' as const },
     createdAt: { type: 'string' as const, format: 'date-time' },
     updatedAt: { type: 'string' as const, format: 'date-time' },
