@@ -1,0 +1,67 @@
+name: SDK Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/sdk/package.json'
+
+jobs:
+  detect-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if version changed
+        id: check
+        run: |
+          CURRENT=$(node -p "require('./packages/sdk/package.json').version")
+          PREVIOUS=$(git show HEAD~1:packages/sdk/package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "")
+          if [ "$CURRENT" != "$PREVIOUS" ] && [ -n "$PREVIOUS" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: $PREVIOUS → $CURRENT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.changed == 'true'
+        with:
+          node-version: 23
+          cache: npm
+          cache-dependency-path: packages/sdk/package-lock.json
+
+      - name: Check npm version
+        if: steps.check.outputs.changed == 'true'
+        run: echo "npm $(npm -v)"
+
+      - name: Configure npm registry
+        if: steps.check.outputs.changed == 'true'
+        run: npm config set registry https://registry.npmjs.org/
+
+      - name: Install dependencies
+        if: steps.check.outputs.changed == 'true'
+        working-directory: packages/sdk
+        run: npm ci
+
+      - name: Build
+        if: steps.check.outputs.changed == 'true'
+        working-directory: packages/sdk
+        run: npm run build
+
+      - name: Publish to npm (OIDC)
+        if: steps.check.outputs.changed == 'true'
+        working-directory: packages/sdk
+        run: npm publish --provenance --access public
+
+      - name: Create Git tag
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git tag "sdk-v${{ steps.check.outputs.version }}"
+          git push origin "sdk-v${{ steps.check.outputs.version }}"

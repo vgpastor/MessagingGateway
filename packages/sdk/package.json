@@ -1,6 +1,6 @@
 {
   "name": "@messaging-gateway/sdk",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "TypeScript SDK for Unified Messaging Gateway — REST client, WebSocket events, and full type definitions",
   "type": "module",
   "main": "dist/index.js",
