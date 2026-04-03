@@ -14,6 +14,26 @@ import { downloadBaileysMedia } from './baileys-media.js';
 
 const socketManager = new BaileysSocketManager();
 
+// Cache group names to avoid API calls on every message (TTL: 5 min)
+const groupNameCache = new Map<string, { name: string; expires: number }>();
+const GROUP_CACHE_TTL = 5 * 60 * 1000;
+
+async function resolveGroupName(accountId: string, groupId: string): Promise<string | undefined> {
+  const cached = groupNameCache.get(groupId);
+  if (cached && cached.expires > Date.now()) return cached.name;
+
+  try {
+    const info = await socketManager.getGroupInfo(accountId, groupId);
+    if (info) {
+      groupNameCache.set(groupId, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
+      return info.name;
+    }
+  } catch {
+    // Non-blocking
+  }
+  return undefined;
+}
+
 export const baileysProvider: ProviderBundle = {
   id: 'baileys',
   channel: 'whatsapp',
@@ -33,6 +53,14 @@ export const baileysProvider: ProviderBundle = {
         try {
           const waEvent = mapBaileysToWhatsAppEvent(msg);
           const envelope = inboundAdapter.toEnvelope(waEvent, account);
+
+          // Resolve group name for group messages (cached, 5 min TTL)
+          if (envelope.channelDetails && envelope.conversationId.endsWith('@g.us')) {
+            const groupName = await resolveGroupName(account.id, envelope.conversationId);
+            if (groupName) {
+              (envelope.channelDetails as Record<string, unknown>).groupName = groupName;
+            }
+          }
 
           // Download media if present (non-blocking: continues without media on failure)
           if ('media' in envelope.content && envelope.content.media) {
