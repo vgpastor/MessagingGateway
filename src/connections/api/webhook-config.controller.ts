@@ -9,6 +9,16 @@ interface WebhookConfigDeps {
   webhookConfigRepo: WebhookConfigRepository;
 }
 
+const filtersSchema = {
+  type: 'object' as const,
+  description: 'Filter rules for this webhook. Include = must match (AND between fields, OR within arrays). Exclude = reject if matches (OR). fromMe = true/false/omit.',
+  properties: {
+    include: { type: 'object' as const, additionalProperties: true, description: 'All fields must match. Values can be primitives or arrays. Dot notation supported (e.g. "content.type", "channelDetails.isGroup").' },
+    exclude: { type: 'object' as const, additionalProperties: true, description: 'Any field match rejects the message.' },
+    fromMe: { type: 'boolean' as const, description: 'true = only own messages, false = only others, omit = all' },
+  },
+};
+
 const webhookConfigSchema = {
   type: 'object' as const,
   properties: {
@@ -17,6 +27,7 @@ const webhookConfigSchema = {
     url: { type: 'string' as const },
     secret: { type: 'string' as const },
     events: { type: 'array' as const, items: { type: 'string' as const } },
+    filters: filtersSchema,
     enabled: { type: 'boolean' as const },
     createdAt: { type: 'string' as const, format: 'date-time' },
     updatedAt: { type: 'string' as const, format: 'date-time' },
@@ -34,6 +45,7 @@ const webhookConfigInputSchema = {
       items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', '*'] },
       description: 'Event types to forward. Defaults to ["*"]',
     },
+    filters: filtersSchema,
     enabled: { type: 'boolean' as const, description: 'Whether this webhook is active. Defaults to true' },
   },
   required: ['url'] as const,

@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
+import { matchesFilter } from '../../core/filters/envelope-filter.js';
 
 export class WebhookForwarder {
   constructor(
@@ -22,9 +23,12 @@ export class WebhookForwarder {
   ): Promise<void> {
     const accountConfigs = await this.webhookConfigRepo.findByAccountId(accountId);
 
-    // Filter enabled configs that match the event type
+    // Filter: enabled + event type match + envelope filter match
+    const payloadObj = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>;
     const matching = accountConfigs.filter((c) =>
-      c.enabled && (c.events.includes('*') || c.events.includes(eventType)),
+      c.enabled
+      && (c.events.includes('*') || c.events.includes(eventType))
+      && matchesFilter(payloadObj, c.filters),
     );
 
     if (matching.length > 0) {
