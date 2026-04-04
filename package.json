@@ -1,6 +1,6 @@
 {
   "name": "unified-messaging-gateway",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Unified Messaging Gateway - Single point of contact for all messaging integrations",
   "main": "dist/index.js",
   "scripts": {
