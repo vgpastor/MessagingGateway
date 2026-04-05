@@ -183,7 +183,7 @@ export async function createServer(deps: ServerDeps) {
               error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
             };
           }
-          return { success: true, data: parsed.data as Record<string, unknown> };
+          return { success: true, data: parsed.data as import('../connections/api/accounts.controller.js').ValidatedAccountData };
         },
       }),
     );

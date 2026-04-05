@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { ChannelAccount } from '../../core/accounts/channel-account.js';
+import type { ChannelAccount, AccountStatus } from '../../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
@@ -15,10 +15,30 @@ import {
   updateAccountBodySchema,
 } from './schemas.js';
 
+/** Validated account data shape returned by the validator */
+export interface ValidatedAccountData {
+  id: string;
+  alias: string;
+  channel: string;
+  provider: string;
+  status: string;
+  identity?: Record<string, unknown>;
+  credentialsRef?: string;
+  credentials?: string;
+  providerConfig: Record<string, unknown>;
+  metadata: {
+    owner: string;
+    environment: 'production' | 'staging';
+    webhookPath?: string;
+    rateLimit?: { maxPerMinute: number; maxPerDay: number };
+    tags: string[];
+  };
+}
+
 /** Result of validating a create-account request body */
 export interface AccountValidationResult {
   success: boolean;
-  data?: Record<string, unknown>;
+  data?: ValidatedAccountData;
   error?: string;
 }
 
@@ -222,7 +242,7 @@ export async function accountsController(
       alias: data.alias,
       channel,
       provider: data.provider as ProviderType,
-      status: data.status,
+      status: data.status as AccountStatus,
       identity: data.identity
         ? ({ channel, ...data.identity } as AccountIdentity)
         : buildDefaultIdentity(channel),
