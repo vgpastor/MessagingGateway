@@ -29,8 +29,19 @@ export class SqliteMessageStore implements MessageStorePort {
       this.db.pragma('journal_mode = WAL');
       // Force UTC for all datetime functions (strftime, etc.)
       this.db.pragma('timezone = UTC');
-      this.createTables();
-      getLogger().info('Message store initialized', { path: this.dbPath });
+
+      // Run migrations
+      const { MigrationRunner } = await import('./migrations/migration-runner.js');
+      const { SqliteMigrationAdapter } = await import('./migrations/adapters/sqlite-migration.adapter.js');
+      const { resolveMigrationScriptsDir } = await import('./migrations/resolve-scripts-dir.js');
+      const runner = new MigrationRunner({
+        scriptsDir: resolveMigrationScriptsDir('sqlite'),
+        adapter: new SqliteMigrationAdapter(this.db),
+        logger: getLogger().child({ module: 'migrations:sqlite' }),
+      });
+      await runner.run();
+
+      getLogger().info('Message store initialized', { path: this.dbPath, driver: 'sqlite' });
     } catch (err) {
       getLogger().error('Failed to initialize message store', {
         path: this.dbPath,
@@ -300,46 +311,6 @@ export class SqliteMessageStore implements MessageStorePort {
       this.db.close();
       this.db = null;
     }
-  }
-
-  private createTables(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        sender_id TEXT NOT NULL,
-        sender_name TEXT,
-        recipient_id TEXT NOT NULL,
-        content_type TEXT NOT NULL,
-        content_preview TEXT,
-        content_json TEXT NOT NULL,
-        context_json TEXT,
-        channel_details_json TEXT,
-        gateway_json TEXT NOT NULL,
-        timestamp TEXT NOT NULL,  -- ISO 8601 UTC (e.g. 2026-04-01T12:00:00.000Z)
-        created_at TEXT NOT NULL  -- ISO 8601 UTC
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_messages_account ON messages(account_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(content_type);
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        id, content_preview, sender_name,
-        content='messages',
-        content_rowid='rowid'
-      );
-
-      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-        INSERT INTO messages_fts(id, content_preview, sender_name)
-        VALUES (new.id, new.content_preview, new.sender_name);
-      END;
-    `);
   }
 
   private extractPreview(envelope: UnifiedEnvelope): string | null {
