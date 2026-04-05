@@ -91,19 +91,55 @@ events.unsubscribe(['my-whatsapp']);
 events.disconnect();
 ```
 
+## Message Queries & Analytics
+
+When `STORAGE_ENABLED=true`, query stored messages via the REST client:
+
+```typescript
+// Query messages with filters
+const result = await client.get('/api/v1/messages', {
+  params: { conversationId: '34600000001@s.whatsapp.net', limit: 20 },
+});
+
+// Full-text search
+const search = await client.get('/api/v1/messages/search', {
+  params: { q: 'order refund', accountId: 'my-whatsapp' },
+});
+
+// Analytics
+const stats = await client.get('/api/v1/messages/analytics', {
+  params: { since: '2026-04-01T00:00:00Z' },
+});
+
+// AI-ready conversation context
+const context = await client.get('/api/v1/conversations/34600000001@s.whatsapp.net/context', {
+  params: { format: 'openai', limit: 50 },
+});
+// context.messages: [{ role: 'user', content: '...', ... }, { role: 'assistant', ... }]
+```
+
 ## Types
 
 All types are exported for TypeScript consumers:
 
 ```typescript
 import type {
+  // Core messaging
   UnifiedEnvelope,
   MessageContent,
   TextContent,
   ImageContent,
   SendMessageCommand,
+  // Accounts & webhooks
   Account,
   WebhookConfig,
+  // Persistence & analytics (requires STORAGE_ENABLED)
+  MessageQuery,
+  MessageQueryResult,
+  MessageStats,
+  ConversationContext,
+  ConversationMessage,
+  ConversationContextOptions,
 } from '@messaging-gateway/sdk';
 ```
 

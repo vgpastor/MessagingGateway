@@ -17,17 +17,24 @@ npm run build
 
 ```
 src/
-  core/           # Domain logic: accounts, messaging, routing, auth, events
-  integrations/   # Provider adapters: Baileys, wwebjs, Telegram, Brevo, etc.
-  connections/    # I/O transports: REST API, WebSocket, webhooks
-  infrastructure/ # Framework: Fastify server, env config, persistence
+  core/              # Domain logic & ports (accounts, messaging, routing, auth, persistence ports)
+    persistence/     #   Message store ports (CRUD, search, analytics, history), AI context service
+  integrations/      # Provider adapters: Baileys, wwebjs, Telegram, Brevo, etc.
+  connections/       # I/O transports: REST API, WebSocket, webhooks
+    api/             #   All Fastify controllers (messages, accounts, send, groups, etc.)
+  persistence/       # Storage adapters: SQLite, PostgreSQL, migration system
+  infrastructure/    # Framework: Fastify server, env config, metrics
 packages/
-  sdk/            # @messaging-gateway/sdk TypeScript client library
+  sdk/               # @messaging-gateway/sdk TypeScript client library
+tests/
+  unit/              # Unit tests (adapters, core, infrastructure, persistence)
+  integration/       # Integration tests (API, SQLite store, persistence flow)
 ```
 
 **Import rules:**
-- `core/` must NOT import from `integrations/`, `connections/`, or `infrastructure/`
+- `core/` must NOT import from `integrations/`, `connections/`, `persistence/`, or `infrastructure/`
 - `integrations/` and `connections/` can import from `core/`
+- `persistence/` adapters import from `core/persistence/` (ports) — never the reverse
 - `infrastructure/` wires everything together
 
 ## Adding a New Provider

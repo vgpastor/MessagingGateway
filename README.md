@@ -50,6 +50,10 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 
 - **Multi-channel**: WhatsApp (Baileys, wwebjs-api), Telegram, Email (Brevo), SMS (Twilio, MessageBird)
 - **Unified API**: One endpoint to send, one format for all inbound messages
+- **Message persistence**: Store all inbound and outbound messages (SQLite or PostgreSQL)
+- **Full-text search**: Search across stored messages (FTS5 / TSVECTOR)
+- **Analytics**: Message statistics by channel, direction, content type, hourly distribution
+- **Conversation context**: AI-ready conversation history (`format=openai` or `format=raw`)
 - **Real-time**: WebSocket server for live events (messages, connection status, QR codes)
 - **Webhooks**: Forward events to any URL (n8n, Make, custom backend)
 - **Event-driven**: Internal EventBus decouples all components
@@ -72,6 +76,11 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `HEALTH_CHECK_INTERVAL_MS` | `300000` | Health check interval (ms) |
 | `CORS_ORIGIN` | `*` in dev | Allowed CORS origin in production |
 | `SWAGGER_ENABLED` | `false` | Enable Swagger UI in production |
+| `STORAGE_ENABLED` | `false` | Enable message persistence |
+| `STORAGE_DRIVER` | `sqlite` | Storage backend: `sqlite` or `postgres` |
+| `DATABASE_PATH` | `data/messages.db` | SQLite database file path |
+| `DATABASE_URL` | _(none)_ | PostgreSQL connection URL (required when driver=postgres) |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` |
 
 Create a `.env.local` file to override defaults:
 
@@ -118,6 +127,7 @@ curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | No | Health check |
+| `GET` | `/metrics` | No | Prometheus metrics |
 | `GET` | `/api/v1/accounts` | Yes | List all accounts |
 | `GET` | `/api/v1/accounts/:id` | Yes | Get account (includes QR code if connecting) |
 | `POST` | `/api/v1/accounts` | Yes | Create account |
@@ -126,6 +136,14 @@ curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 | `POST` | `/api/v1/accounts/:id/connect` | Yes | Initiate connection (generates QR) |
 | `POST` | `/api/v1/accounts/:id/disconnect` | Yes | Disconnect |
 | `POST` | `/api/v1/messages/send` | Yes | Send a message |
+| `GET` | `/api/v1/messages` | Yes | Query stored messages (requires `STORAGE_ENABLED`) |
+| `GET` | `/api/v1/messages/:id` | Yes | Get a stored message by ID |
+| `GET` | `/api/v1/messages/search?q=` | Yes | Full-text search across messages |
+| `GET` | `/api/v1/messages/stats` | Yes | Message count with filters |
+| `GET` | `/api/v1/messages/analytics` | Yes | Aggregated statistics (by channel, direction, hourly) |
+| `GET` | `/api/v1/messages/export` | Yes | Export messages as CSV or JSON |
+| `GET` | `/api/v1/conversations/:id/context` | Yes | AI-ready conversation history |
+| `GET` | `/api/v1/accounts/:id/groups` | Yes | List groups for an account |
 | `GET` | `/api/v1/accounts/:id/webhook` | Yes | Get webhook config |
 | `PUT` | `/api/v1/accounts/:id/webhook` | Yes | Set webhook config |
 | `DELETE` | `/api/v1/accounts/:id/webhook` | Yes | Remove webhook config |
@@ -218,6 +236,73 @@ curl -X PUT http://localhost:3123/api/v1/accounts/my-whatsapp/webhook \
 
 Webhook headers: `X-UMG-Event`, `X-UMG-Account`, `X-UMG-Channel`, `X-UMG-Signature` (HMAC-SHA256).
 
+### Message Persistence
+
+Enable message storage to query, search, and analyze your messaging history:
+
+```bash
+# .env.local
+STORAGE_ENABLED=true
+STORAGE_DRIVER=sqlite          # or postgres
+DATABASE_PATH=data/messages.db # SQLite only
+DATABASE_URL=postgres://user:pass@localhost:5432/messaging # PostgreSQL only
+```
+
+#### Query messages
+
+```bash
+# List messages with filters
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages?conversationId=34600000001@s.whatsapp.net&limit=20"
+
+# Full-text search
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages/search?q=order+refund"
+
+# Analytics
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages/analytics?since=2026-04-01T00:00:00Z"
+
+# Export to CSV
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages/export?format=csv" -o messages.csv
+```
+
+#### AI-ready conversation context
+
+```bash
+# Get conversation history formatted for LLMs
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/conversations/34600000001@s.whatsapp.net/context?format=openai&limit=50"
+```
+
+Response:
+
+```json
+{
+  "conversationId": "34600000001@s.whatsapp.net",
+  "participantCount": 2,
+  "participants": [
+    { "id": "34600000001@s.whatsapp.net", "name": "Customer", "messageCount": 5 },
+    { "id": "+34600000002", "name": "Agent", "messageCount": 3 }
+  ],
+  "totalMessages": 8,
+  "messages": [
+    { "role": "user", "name": "Customer", "content": "Hi, I need help", "timestamp": "2026-04-05T10:00:00Z", "type": "text", "id": "msg_001" },
+    { "role": "assistant", "name": "Agent", "content": "Sure, how can I help?", "timestamp": "2026-04-05T10:01:00Z", "type": "text", "id": "msg_002" }
+  ]
+}
+```
+
+#### PostgreSQL with Docker Compose
+
+The included `docker-compose.yml` provides a `postgres` profile for testing:
+
+```bash
+docker compose --profile postgres up -d
+# Gateway with PostgreSQL on port 3202
+```
+
 ## Using with n8n
 
 ### Option 1: Webhook Trigger (recommended)
@@ -232,14 +317,19 @@ See [docker-compose.example.yml](docker-compose.example.yml) for a ready-to-use 
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design, and [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ```
 src/
-├── core/           # Domain logic (accounts, messaging, routing, auth)
-├── integrations/   # Provider adapters (Baileys, wwebjs, Telegram, etc.)
-├── connections/    # I/O transports (REST API, WebSocket, webhooks)
-└── infrastructure/ # Framework config (Fastify, env, persistence)
+├── core/              # Domain logic & ports
+│   ├── accounts/      #   Account identity, connection manager port
+│   ├── messaging/     #   Content model, unified envelope, routing
+│   ├── persistence/   #   Message store ports (CRUD, search, analytics, history)
+│   └── ...            #   Auth, events, filters, groups, logger
+├── integrations/      # Provider adapters (Baileys, wwebjs, Telegram, etc.)
+├── connections/       # I/O transports (REST API, WebSocket, webhooks)
+├── persistence/       # Storage adapters (SQLite, PostgreSQL, migrations)
+└── infrastructure/    # Framework config (Fastify, env, metrics)
 ```
 
 ## SDK
@@ -270,7 +360,7 @@ See [packages/sdk/README.md](packages/sdk/README.md) for full documentation.
 ```bash
 npm install
 npm run build      # TypeScript -> dist/
-npm test           # Run all tests (vitest)
+npm test           # Run all tests (vitest, 241+ tests)
 npm run lint       # Type check (tsc --noEmit)
 ```
 

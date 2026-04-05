@@ -307,22 +307,40 @@ export interface MessageStats {
 
 // ── Conversation Context ───────────────────────────────────────
 
+export interface ConversationContextOptions {
+  /** Max messages to return (default: 50) */
+  limit?: number;
+  /** Only messages after this ISO 8601 timestamp */
+  since?: string;
+  /** Filter by account ID */
+  accountId?: string;
+  /** Output format: 'openai' maps direction→role, 'raw' includes full envelopes */
+  format?: 'openai' | 'raw';
+  /** Include media descriptions in AI format (default: true) */
+  includeMedia?: boolean;
+}
+
 export interface ConversationContext {
   conversationId: string;
   groupName?: string;
   participantCount: number;
   participants: Array<{ id: string; name: string; messageCount: number }>;
   totalMessages: number;
+  /** AI-formatted messages (always present) */
   messages: ConversationMessage[];
+  /** Full envelopes (only when format='raw') */
   envelopes?: UnifiedEnvelope[];
 }
 
 export interface ConversationMessage {
+  /** Mapped from direction: inbound→'user', outbound→'assistant' */
   role: 'user' | 'assistant' | 'system';
   name: string;
   content: string;
   timestamp: string;
+  /** Original message type (text, image, etc.) */
   type: string;
+  /** Message ID for reference */
   id: string;
 }
 
