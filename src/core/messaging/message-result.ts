@@ -13,6 +13,8 @@ export interface MessageResult {
   timestamp: Date;
   providerMessageId?: string;
   error?: string;
+  /** Remote JID returned by the provider (e.g. Baileys). Used to align outbound conversationId with inbound. */
+  remoteJid?: string;
 }
 
 export interface MessageStatus {

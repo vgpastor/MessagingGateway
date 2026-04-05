@@ -16,7 +16,9 @@ export interface EnvConfig {
   accountsConfigPath?: string;
   healthCheckIntervalMs: number;
   storageEnabled: boolean;
+  storageDriver: 'sqlite' | 'postgres';
   databasePath: string;
+  databaseUrl?: string;
   metricsEnabled: boolean;
 }
 
@@ -34,7 +36,9 @@ export function loadEnvConfig(): EnvConfig {
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
     storageEnabled: process.env['STORAGE_ENABLED'] === 'true',
+    storageDriver: (process.env['STORAGE_DRIVER'] === 'postgres' ? 'postgres' : 'sqlite') as 'sqlite' | 'postgres',
     databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
+    databaseUrl: process.env['DATABASE_URL'],
     metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
   };
 }

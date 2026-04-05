@@ -124,7 +124,7 @@ In-process implementation (TypeScript EventEmitter). No external broker needed f
 
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
-| `message.inbound` | `Envelope` | Integration adapters | WebhookForwarder, WebSocketBroadcaster, ConversationTracker |
+| `message.inbound` | `Envelope` | Integration adapters | WebhookForwarder, WebSocketBroadcaster, PersistenceSubscriber |
 | `message.status` | `{messageId, status, timestamp}` | Integration adapters | WebhookForwarder, WebSocketBroadcaster |
 | `connection.update` | `{accountId, status, qr?}` | Integration adapters | WebSocketBroadcaster, AccountManager |
 
@@ -133,6 +133,7 @@ In-process implementation (TypeScript EventEmitter). No external broker needed f
 | Event | Payload | Emitted by | Consumed by |
 |-------|---------|-----------|-------------|
 | `message.send.request` | `SendCommand` | REST API, WebSocket | MessageRouter |
+| `message.outbound` | `Envelope` | MessageRouter | PersistenceSubscriber |
 | `message.send.success` | `{messageId, accountId, ...}` | MessageRouter | WebhookForwarder, WebSocketBroadcaster |
 | `message.send.failure` | `{error, accountId, ...}` | MessageRouter | WebhookForwarder, WebSocketBroadcaster |
 
@@ -435,6 +436,10 @@ src/
 │   │       ├── health.adapter.ts          # Port: validate credentials
 │   │       ├── interaction.adapter.ts     # Port: polls, reactions
 │   │       └── media.adapter.ts           # Port: media up/download
+│   ├── persistence/                       # Message storage ports & services
+│   │   ├── message-store.port.ts          # Segregated ports: CRUD, Search, Analytics, History
+│   │   ├── message-store.utils.ts         # Shared utilities (toUTC, formatContentForAI, etc.)
+│   │   └── conversation-context.service.ts # Application service: raw history → AI format
 │   ├── routing/
 │   │   ├── message-router.service.ts      # Subscribes to message.send.request
 │   │   └── routing-rules.ts
@@ -490,7 +495,11 @@ src/
 │       ├── schemas.ts
 │       ├── accounts.controller.ts
 │       ├── send.controller.ts
+│       ├── messages.controller.ts         # Query, search, analytics, export, context
 │       ├── health.controller.ts
+│       ├── metrics.controller.ts          # Prometheus metrics
+│       ├── groups.controller.ts           # Group listing and metadata
+│       ├── status.controller.ts           # Provider connection status
 │       ├── webhook-config.controller.ts
 │       └── inbound/
 │           ├── whatsapp.inbound.controller.ts
@@ -498,7 +507,23 @@ src/
 │           ├── email.inbound.controller.ts
 │           └── sms.inbound.controller.ts
 │
-├── infrastructure/                        # Pure infra (framework, persistence)
+├── persistence/                           # Storage adapters (infra layer)
+│   ├── sqlite-message-store.ts            # SQLite adapter (better-sqlite3)
+│   ├── postgres-message-store.ts          # PostgreSQL adapter (pg)
+│   ├── message-store.factory.ts           # Driver selection + lifecycle orchestration
+│   ├── persistence-subscriber.ts          # EventBus listener → store.save()
+│   └── migrations/
+│       ├── migration-runner.ts            # Generic runner: load scripts → apply pending
+│       ├── migration.port.ts              # Adapter interface for DB-specific ops
+│       ├── resolve-scripts-dir.ts         # Probe dist/src/nearby paths
+│       ├── adapters/
+│       │   ├── sqlite-migration.adapter.ts
+│       │   └── postgres-migration.adapter.ts
+│       └── scripts/
+│           ├── sqlite/                    # 001_initial_schema.sql, 002_fts_delete_trigger.sql
+│           └── postgres/                  # 001_initial_schema.sql
+│
+├── infrastructure/                        # Pure infra (framework, config)
 │   ├── server.ts                          # Fastify setup
 │   ├── config/
 │   │   ├── env.config.ts
@@ -506,7 +531,11 @@ src/
 │   │   ├── accounts.schema.ts
 │   │   └── in-memory-account.repository.ts
 │   ├── credential-validator.ts
-│   └── health-check-scheduler.ts
+│   ├── health-check-scheduler.ts
+│   ├── logger/
+│   │   └── pino-logger.ts
+│   └── metrics/
+│       └── prometheus.ts
 │
 └── index.ts                               # Bootstrap: wire EventBus, register providers, start
 ```

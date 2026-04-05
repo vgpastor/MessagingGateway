@@ -214,9 +214,22 @@ export class TelegramBotInboundAdapter
     return mapRawToTelegramMessage(rawMsg);
   }
 
+  /**
+   * Validate the incoming webhook request.
+   *
+   * Telegram Bot API supports an optional `secret_token` parameter when
+   * configuring the webhook via `setWebhook`. When set, Telegram sends it
+   * in the `X-Telegram-Bot-Api-Secret-Token` header on every update.
+   *
+   * TODO: Once the adapter receives a `secretToken` config field (passed
+   * through ChannelAccount.providerConfig or constructor), implement
+   * timing-safe comparison here using `safeCompare` from
+   * `src/core/auth/api-key.guard.ts`. Until then, all requests are
+   * accepted for backwards compatibility.
+   */
   validateSignature(_req: RawRequest): boolean {
-    // Telegram Bot API webhooks don't have a built-in signature mechanism.
-    // The secret_token header check could be added here if configured.
+    // No secret_token configured yet — accept all requests.
+    // See TODO above for planned secret_token validation.
     return true;
   }
 

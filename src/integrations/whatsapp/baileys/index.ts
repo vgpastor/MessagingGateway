@@ -11,6 +11,7 @@ import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
 import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { downloadBaileysMedia } from './baileys-media.js';
+import { jidNormalizedUser } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
 
@@ -19,13 +20,14 @@ const groupNameCache = new Map<string, { name: string; expires: number }>();
 const GROUP_CACHE_TTL = 5 * 60 * 1000;
 
 async function resolveGroupName(accountId: string, groupId: string): Promise<string | undefined> {
-  const cached = groupNameCache.get(groupId);
+  const cacheKey = `${accountId}:${groupId}`;
+  const cached = groupNameCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.name;
 
   try {
     const info = await socketManager.getGroupInfo(accountId, groupId);
     if (info) {
-      groupNameCache.set(groupId, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
+      groupNameCache.set(cacheKey, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
       return info.name;
     }
   } catch {
@@ -53,6 +55,24 @@ export const baileysProvider: ProviderBundle = {
         try {
           const waEvent = mapBaileysToWhatsAppEvent(msg);
           const envelope = inboundAdapter.toEnvelope(waEvent, account);
+
+          // Resolve LID → phone number for DMs so conversationId matches outbound
+          if (envelope.conversationId.endsWith('@lid')) {
+            const originalLid = envelope.conversationId;
+            const phoneJid = await socketManager.resolveLidToPhone(account.id, originalLid);
+            if (phoneJid) {
+              // jidNormalizedUser strips the device suffix (e.g. ":0")
+              envelope.conversationId = jidNormalizedUser(phoneJid);
+              envelope.sender.id = jidNormalizedUser(phoneJid);
+            }
+            // Preserve original LID and resolved JID (with device) in channelDetails for future use
+            if (envelope.channelDetails) {
+              (envelope.channelDetails as Record<string, unknown>).senderLid = originalLid;
+              if (phoneJid) {
+                (envelope.channelDetails as Record<string, unknown>).senderPhoneJid = phoneJid;
+              }
+            }
+          }
 
           // Resolve group name for group messages (cached, 5 min TTL)
           if (envelope.channelDetails && envelope.conversationId.endsWith('@g.us')) {

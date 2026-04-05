@@ -21,3 +21,82 @@ services:
       start_period: 5s
       retries: 3
     restart: unless-stopped
+
+  # ── Local testing profiles ──────────────────────────────────────
+
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "${POSTGRES_PORT:-5499}:5432"
+    environment:
+      POSTGRES_DB: messaging
+      POSTGRES_USER: messaging
+      POSTGRES_PASSWORD: messaging
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messaging"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles: [postgres, test]
+
+  # Gateway with SQLite storage (for local testing)
+  gateway-sqlite:
+    build: .
+    ports:
+      - "3201:3000"
+    env_file:
+      - path: .env
+        required: true
+      - path: .env.local
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
+      STORAGE_ENABLED: "true"
+      STORAGE_DRIVER: sqlite
+      DATABASE_PATH: /app/data/messages.db
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    profiles: [sqlite, test]
+
+  # Gateway with PostgreSQL storage (for local testing)
+  gateway-postgres:
+    build: .
+    ports:
+      - "3202:3000"
+    env_file:
+      - path: .env
+        required: true
+      - path: .env.local
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
+      STORAGE_ENABLED: "true"
+      STORAGE_DRIVER: postgres
+      DATABASE_URL: postgres://messaging:messaging@postgres:5432/messaging
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    profiles: [postgres, test]
+
+volumes:
+  pgdata:

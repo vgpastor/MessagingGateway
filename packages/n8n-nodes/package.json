@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-messaging-gateway",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "n8n community nodes for Unified Messaging Gateway — send and receive messages across WhatsApp, Telegram, Email, and SMS",
   "license": "MIT",
   "homepage": "https://github.com/vgpastor/MessagingGateway",

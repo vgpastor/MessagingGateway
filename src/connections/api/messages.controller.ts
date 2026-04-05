@@ -1,15 +1,24 @@
 import type { FastifyInstance } from 'fastify';
-import type { MessageStorePort } from './message-store.port.js';
-import { errorResponseSchema } from '../connections/api/schemas.js';
+import type { FullMessageStorePort } from '../../core/persistence/message-store.port.js';
+import type { ConversationContextService } from '../../core/persistence/conversation-context.service.js';
+import type { ConversationContextOptions } from '../../core/persistence/conversation-context.service.js';
+import { errorResponseSchema } from './schemas.js';
+
+/** Default limit for paginated queries */
+const DEFAULT_QUERY_LIMIT = 50;
+/** Default limit for export endpoints (higher to allow bulk downloads) */
+const DEFAULT_EXPORT_LIMIT = 1000;
 
 interface MessagesControllerDeps {
-  messageStore: MessageStorePort;
+  messageStore: FullMessageStorePort;
+  contextService: ConversationContextService;
 }
 
 export async function messagesController(
   fastify: FastifyInstance,
   deps: MessagesControllerDeps,
 ): Promise<void> {
+  const { contextService } = deps;
 
   fastify.get<{
     Querystring: {
@@ -172,7 +181,7 @@ export async function messagesController(
     };
   }>('/api/v1/messages/export', {
     schema: {
-      description: 'Export messages in CSV or JSON format. Requires STORAGE_ENABLED=true.',
+      description: `Export messages in CSV or JSON format. Default limit: ${DEFAULT_EXPORT_LIMIT}. Requires STORAGE_ENABLED=true.`,
       tags: ['Messages'],
       querystring: {
         type: 'object' as const,
@@ -181,7 +190,7 @@ export async function messagesController(
           since: { type: 'string' as const, format: 'date-time' },
           until: { type: 'string' as const, format: 'date-time' },
           format: { type: 'string' as const, enum: ['csv', 'json'], default: 'json' },
-          limit: { type: 'string' as const },
+          limit: { type: 'string' as const, description: `Max messages to export (default: ${DEFAULT_EXPORT_LIMIT})` },
           offset: { type: 'string' as const },
         },
       },
@@ -192,14 +201,14 @@ export async function messagesController(
       accountId: q.accountId,
       since: q.since ? new Date(q.since) : undefined,
       until: q.until ? new Date(q.until) : undefined,
-      limit: q.limit ? parseInt(q.limit, 10) : 1000,
+      limit: q.limit ? parseInt(q.limit, 10) : DEFAULT_EXPORT_LIMIT,
       offset: q.offset ? parseInt(q.offset, 10) : undefined,
     });
 
     if (q.format === 'csv') {
       const headers = ['id', 'timestamp', 'channel', 'direction', 'sender', 'conversation', 'type', 'preview'];
       const csvRows = result.messages.map((m) => {
-        const preview = m.content.type === 'text' ? (m.content as any).body?.substring(0, 200) : `[${m.content.type}]`;
+        const preview = m.content.type === 'text' ? m.content.body.substring(0, 200) : `[${m.content.type}]`;
         return [
           m.id,
           m.timestamp,
@@ -238,7 +247,7 @@ export async function messagesController(
       querystring: {
         type: 'object' as const,
         properties: {
-          limit: { type: 'string' as const, description: 'Max messages to return (default: 50)' },
+          limit: { type: 'string' as const, description: `Max messages to return (default: ${DEFAULT_QUERY_LIMIT})` },
           since: { type: 'string' as const, format: 'date-time', description: 'Only messages after this UTC timestamp' },
           accountId: { type: 'string' as const, description: 'Filter by account' },
           format: { type: 'string' as const, enum: ['openai', 'raw'], description: 'Output format (default: openai)' },
@@ -249,12 +258,13 @@ export async function messagesController(
   }, async (request) => {
     const { conversationId } = request.params;
     const q = request.query;
-    return deps.messageStore.getConversationContext(conversationId, {
+    const opts: ConversationContextOptions = {
       limit: q.limit ? parseInt(q.limit, 10) : undefined,
       since: q.since ? new Date(q.since) : undefined,
       accountId: q.accountId,
       format: (q.format as 'openai' | 'raw') ?? 'openai',
       includeMedia: q.includeMedia !== 'false',
-    });
+    };
+    return contextService.getContext(conversationId, opts);
   });
 }

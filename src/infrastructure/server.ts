@@ -12,8 +12,8 @@ import type { WebhookConfigRepository } from '../core/webhooks/webhook-config.re
 import type { MessageRouterService } from '../core/routing/message-router.service.js';
 import type { ProviderLookupPort } from '../core/providers/provider-lookup.port.js';
 import type { WebhookForwarder } from '../connections/webhooks/webhook-forwarder.js';
-import type { CredentialValidator } from './credential-validator.js';
-import type { HealthCheckScheduler } from './health-check-scheduler.js';
+import type { CredentialValidatorPort } from '../core/accounts/credential-validator.port.js';
+import type { HealthCheckSchedulerPort } from '../core/accounts/health-check-scheduler.port.js';
 import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
 import { createApiKeyGuard } from '../core/auth/api-key.guard.js';
 import { healthController } from '../connections/api/health.controller.js';
@@ -28,17 +28,18 @@ import { webhookConfigController } from '../connections/api/webhook-config.contr
 import { groupsController } from '../connections/api/groups.controller.js';
 import { websocketController } from '../connections/ws/websocket.controller.js';
 import { metricsController } from '../connections/api/metrics.controller.js';
+import { accountSchema } from './config/accounts.schema.js';
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
   webhookConfigRepo: WebhookConfigRepository;
   providerRegistry: ProviderLookupPort;
   messageRouter: MessageRouterService;
-  credentialValidator: CredentialValidator;
-  healthCheckScheduler?: HealthCheckScheduler;
+  credentialValidator: CredentialValidatorPort;
+  healthCheckScheduler?: HealthCheckSchedulerPort;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
-  messageStore?: import('../persistence/message-store.port.js').MessageStorePort;
+  messageStore?: import('../core/persistence/message-store.port.js').FullMessageStorePort;
   apiKey: string;
   port: number;
   logLevel: string;
@@ -120,7 +121,13 @@ export async function createServer(deps: ServerDeps) {
   await fastify.register(healthController);
 
   if (deps.metricsEnabled !== false) {
-    await fastify.register(metricsController);
+    const { registry } = await import('./metrics/prometheus.js');
+    await fastify.register(
+      async (instance) => metricsController(instance, {
+        getMetrics: () => registry.metrics(),
+        contentType: registry.contentType,
+      }),
+    );
   }
 
   // ── Inbound webhooks (provider-to-gateway, own signature validation) ──
@@ -168,6 +175,16 @@ export async function createServer(deps: ServerDeps) {
         credentialValidator: deps.credentialValidator,
         healthCheckScheduler: deps.healthCheckScheduler,
         providerRegistry: deps.providerRegistry,
+        validateAccountBody: (body: unknown) => {
+          const parsed = accountSchema.safeParse(body);
+          if (!parsed.success) {
+            return {
+              success: false,
+              error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+            };
+          }
+          return { success: true, data: parsed.data as import('../connections/api/accounts.controller.js').ValidatedAccountData };
+        },
       }),
     );
 
@@ -198,10 +215,13 @@ export async function createServer(deps: ServerDeps) {
 
     // Messages query API (only when persistence is enabled)
     if (deps.messageStore) {
-      const { messagesController } = await import('../persistence/messages.controller.js');
+      const { messagesController } = await import('../connections/api/messages.controller.js');
+      const { ConversationContextService } = await import('../core/persistence/conversation-context.service.js');
+      const contextService = new ConversationContextService(deps.messageStore);
       await authenticated.register(
         async (instance) => messagesController(instance, {
           messageStore: deps.messageStore!,
+          contextService,
         }),
       );
     }

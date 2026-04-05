@@ -1,13 +1,17 @@
 import type { FastifyInstance } from 'fastify';
-import { registry } from '../../infrastructure/metrics/prometheus.js';
 
-export async function metricsController(fastify: FastifyInstance): Promise<void> {
+export interface MetricsControllerDeps {
+  getMetrics: () => Promise<string>;
+  contentType: string;
+}
+
+export async function metricsController(fastify: FastifyInstance, deps: MetricsControllerDeps): Promise<void> {
   fastify.get('/metrics', {
     schema: { hide: true },
   }, async (_request, reply) => {
-    const metrics = await registry.metrics();
+    const metrics = await deps.getMetrics();
     return reply
-      .header('content-type', registry.contentType)
+      .header('content-type', deps.contentType)
       .send(metrics);
   });
 }

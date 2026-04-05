@@ -3,7 +3,11 @@ import type { EventBus } from '../../core/event-bus.js';
 import type { SendMessageCommand } from '../../core/messaging/outbound-message.js';
 import { Events, createEvent } from '../../core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendSuccessPayload, MessageSendFailurePayload, MessageSendRequestPayload } from '../../core/events.js';
-import { wsClientsConnected } from '../../infrastructure/metrics/prometheus.js';
+import type { MetricsPort } from '../../core/metrics/metrics.port.js';
+import { noopMetrics } from '../../core/metrics/metrics.port.js';
+
+/** WebSocket readyState value for OPEN connection */
+const WS_OPEN = 1;
 
 interface WsClient {
   socket: WebSocket;
@@ -13,7 +17,10 @@ interface WsClient {
 export class WebSocketBroadcaster {
   private clients = new Set<WsClient>();
 
-  constructor(private readonly eventBus: EventBus) {
+  constructor(
+    private readonly eventBus: EventBus,
+    private readonly metrics: MetricsPort = noopMetrics,
+  ) {
     this.subscribe();
   }
 
@@ -23,7 +30,7 @@ export class WebSocketBroadcaster {
       accountFilter: accounts?.length ? new Set(accounts) : null,
     };
     this.clients.add(client);
-    wsClientsConnected.inc();
+    this.metrics.incGauge('umg_ws_clients_connected');
 
     socket.on('message', (raw: Buffer | string) => {
       try {
@@ -49,12 +56,12 @@ export class WebSocketBroadcaster {
 
     socket.on('close', () => {
       this.clients.delete(client);
-      wsClientsConnected.dec();
+      this.metrics.decGauge('umg_ws_clients_connected');
     });
 
     socket.on('error', () => {
       this.clients.delete(client);
-      wsClientsConnected.dec();
+      this.metrics.decGauge('umg_ws_clients_connected');
     });
 
     this.sendTo(socket, {
@@ -115,7 +122,7 @@ export class WebSocketBroadcaster {
     const message = JSON.stringify({ event: eventType, timestamp: timestamp.toISOString(), data });
 
     for (const client of this.clients) {
-      if (client.socket.readyState !== 1) continue; // OPEN
+      if (client.socket.readyState !== WS_OPEN) continue;
       if (accountId && client.accountFilter && !client.accountFilter.has(accountId)) continue;
 
       try {
@@ -127,7 +134,7 @@ export class WebSocketBroadcaster {
   }
 
   private sendTo(socket: WebSocket, data: unknown): void {
-    if (socket.readyState === 1) {
+    if (socket.readyState === WS_OPEN) {
       socket.send(JSON.stringify(data));
     }
   }

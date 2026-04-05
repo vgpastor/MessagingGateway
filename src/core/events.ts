@@ -13,6 +13,7 @@ export const Events = {
   CONNECTION_UPDATE: 'connection.update',
 
   // Outbound (Connections → Core → Integration)
+  MESSAGE_OUTBOUND: 'message.outbound',
   MESSAGE_SEND_REQUEST: 'message.send.request',
   MESSAGE_SEND_SUCCESS: 'message.send.success',
   MESSAGE_SEND_FAILURE: 'message.send.failure',
@@ -24,6 +25,10 @@ export const Events = {
 // ── Event payloads ──────────────────────────────────────────────
 
 export interface MessageInboundPayload {
+  envelope: UnifiedEnvelope;
+}
+
+export interface MessageOutboundPayload {
   envelope: UnifiedEnvelope;
 }
 

@@ -51,6 +51,11 @@ export class MessagingGateway implements INodeType {
 				options: [
 					{ name: 'Send', value: 'send', description: 'Send a message', action: 'Send a message' },
 					{ name: 'Get Status', value: 'getStatus', description: 'Get message delivery status', action: 'Get message status' },
+					{ name: 'Query', value: 'query', description: 'Query stored messages (requires STORAGE_ENABLED)', action: 'Query messages' },
+					{ name: 'Search', value: 'search', description: 'Full-text search messages (requires STORAGE_ENABLED)', action: 'Search messages' },
+					{ name: 'Analytics', value: 'analytics', description: 'Get message analytics (requires STORAGE_ENABLED)', action: 'Get message analytics' },
+					{ name: 'Export', value: 'export', description: 'Export messages as CSV or JSON (requires STORAGE_ENABLED)', action: 'Export messages' },
+					{ name: 'Conversation Context', value: 'conversationContext', description: 'Get AI-ready conversation context (requires STORAGE_ENABLED)', action: 'Get conversation context' },
 				],
 				default: 'send',
 			},
@@ -228,6 +233,16 @@ export class MessagingGateway implements INodeType {
 
 			// ── Message: Get Status fields ──
 			{
+				displayName: 'Account ID',
+				name: 'accountId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'wa-main',
+				description: 'The account ID that sent the message',
+				displayOptions: { show: { resource: ['message'], operation: ['getStatus'] } },
+			},
+			{
 				displayName: 'Message ID',
 				name: 'messageId',
 				type: 'string',
@@ -235,6 +250,240 @@ export class MessagingGateway implements INodeType {
 				default: '',
 				description: 'The ID of the message to check status for',
 				displayOptions: { show: { resource: ['message'], operation: ['getStatus'] } },
+			},
+
+			// ── Message: Query fields ──
+			{
+				displayName: 'Query Filters',
+				name: 'queryFilters',
+				type: 'collection',
+				placeholder: 'Add Filter',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['query'] } },
+				options: [
+					{
+						displayName: 'Account ID',
+						name: 'accountId',
+						type: 'string',
+						default: '',
+						description: 'Filter by account ID',
+					},
+					{
+						displayName: 'Conversation ID',
+						name: 'conversationId',
+						type: 'string',
+						default: '',
+						description: 'Filter by conversation ID (e.g. 34600000001@s.whatsapp.net)',
+					},
+					{
+						displayName: 'Direction',
+						name: 'direction',
+						type: 'options',
+						options: [
+							{ name: 'All', value: '' },
+							{ name: 'Inbound', value: 'inbound' },
+							{ name: 'Outbound', value: 'outbound' },
+						],
+						default: '',
+						description: 'Filter by message direction',
+					},
+					{
+						displayName: 'Content Type',
+						name: 'contentType',
+						type: 'string',
+						default: '',
+						description: 'Filter by content type (text, image, video, etc.)',
+					},
+					{
+						displayName: 'Since',
+						name: 'since',
+						type: 'dateTime',
+						default: '',
+						description: 'Only messages after this timestamp',
+					},
+					{
+						displayName: 'Until',
+						name: 'until',
+						type: 'dateTime',
+						default: '',
+						description: 'Only messages before this timestamp',
+					},
+					{
+						displayName: 'Limit',
+						name: 'limit',
+						type: 'number',
+						default: 50,
+						description: 'Max number of messages to return',
+					},
+					{
+						displayName: 'Offset',
+						name: 'offset',
+						type: 'number',
+						default: 0,
+						description: 'Number of messages to skip',
+					},
+				],
+			},
+
+			// ── Message: Search fields ──
+			{
+				displayName: 'Search Query',
+				name: 'searchQuery',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'order refund',
+				description: 'Full-text search query',
+				displayOptions: { show: { resource: ['message'], operation: ['search'] } },
+			},
+			{
+				displayName: 'Search Options',
+				name: 'searchOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['search'] } },
+				options: [
+					{
+						displayName: 'Account ID',
+						name: 'accountId',
+						type: 'string',
+						default: '',
+						description: 'Filter search by account ID',
+					},
+					{
+						displayName: 'Limit',
+						name: 'limit',
+						type: 'number',
+						default: 50,
+						description: 'Max number of results',
+					},
+				],
+			},
+
+			// ── Message: Analytics fields ──
+			{
+				displayName: 'Analytics Options',
+				name: 'analyticsOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['analytics'] } },
+				options: [
+					{
+						displayName: 'Account ID',
+						name: 'accountId',
+						type: 'string',
+						default: '',
+						description: 'Filter analytics by account ID',
+					},
+					{
+						displayName: 'Since',
+						name: 'since',
+						type: 'dateTime',
+						default: '',
+						description: 'Start date for analytics period',
+					},
+					{
+						displayName: 'Until',
+						name: 'until',
+						type: 'dateTime',
+						default: '',
+						description: 'End date for analytics period',
+					},
+				],
+			},
+
+			// ── Message: Export fields ──
+			{
+				displayName: 'Export Format',
+				name: 'exportFormat',
+				type: 'options',
+				options: [
+					{ name: 'JSON', value: 'json' },
+					{ name: 'CSV', value: 'csv' },
+				],
+				default: 'json',
+				description: 'Export format',
+				displayOptions: { show: { resource: ['message'], operation: ['export'] } },
+			},
+			{
+				displayName: 'Export Options',
+				name: 'exportOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['export'] } },
+				options: [
+					{
+						displayName: 'Account ID',
+						name: 'accountId',
+						type: 'string',
+						default: '',
+						description: 'Filter export by account ID',
+					},
+					{
+						displayName: 'Since',
+						name: 'since',
+						type: 'dateTime',
+						default: '',
+						description: 'Only export messages after this date',
+					},
+				],
+			},
+
+			// ── Message: Conversation Context fields ──
+			{
+				displayName: 'Conversation ID',
+				name: 'conversationId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: '34600000001@s.whatsapp.net',
+				description: 'The conversation ID to retrieve context for',
+				displayOptions: { show: { resource: ['message'], operation: ['conversationContext'] } },
+			},
+			{
+				displayName: 'Context Options',
+				name: 'contextOptions',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['conversationContext'] } },
+				options: [
+					{
+						displayName: 'Format',
+						name: 'format',
+						type: 'options',
+						options: [
+							{ name: 'OpenAI (role-based)', value: 'openai' },
+							{ name: 'Raw (full envelopes)', value: 'raw' },
+						],
+						default: 'openai',
+						description: 'Output format for AI consumption',
+					},
+					{
+						displayName: 'Account ID',
+						name: 'accountId',
+						type: 'string',
+						default: '',
+						description: 'Filter by account ID',
+					},
+					{
+						displayName: 'Limit',
+						name: 'limit',
+						type: 'number',
+						default: 50,
+						description: 'Max number of messages to include',
+					},
+					{
+						displayName: 'Since',
+						name: 'since',
+						type: 'dateTime',
+						default: '',
+						description: 'Only messages after this timestamp',
+					},
+				],
 			},
 
 			// ── Account: shared Account ID field ──
@@ -386,9 +635,71 @@ export class MessagingGateway implements INodeType {
 						});
 					} else if (operation === 'getStatus') {
 						const messageId = this.getNodeParameter('messageId', i) as string;
+						const accountId = this.getNodeParameter('accountId', i) as string;
 						responseData = await this.helpers.httpRequest({
 							method: 'GET',
-							url: `${baseUrl}/api/v1/messages/${messageId}`,
+							url: `${baseUrl}/api/v1/messages/${messageId}/status?accountId=${accountId}`,
+							headers,
+						});
+					} else if (operation === 'query') {
+						const filters = this.getNodeParameter('queryFilters', i, {}) as Record<string, unknown>;
+						const params = new URLSearchParams();
+						for (const [key, value] of Object.entries(filters)) {
+							if (value !== undefined && value !== '') params.set(key, String(value));
+						}
+						const qs = params.toString();
+						responseData = await this.helpers.httpRequest({
+							method: 'GET',
+							url: `${baseUrl}/api/v1/messages${qs ? `?${qs}` : ''}`,
+							headers,
+						});
+					} else if (operation === 'search') {
+						const q = this.getNodeParameter('searchQuery', i) as string;
+						const opts = this.getNodeParameter('searchOptions', i, {}) as Record<string, unknown>;
+						const params = new URLSearchParams({ q });
+						if (opts.accountId) params.set('accountId', String(opts.accountId));
+						if (opts.limit !== undefined && opts.limit !== '') params.set('limit', String(opts.limit));
+						responseData = await this.helpers.httpRequest({
+							method: 'GET',
+							url: `${baseUrl}/api/v1/messages/search?${params.toString()}`,
+							headers,
+						});
+					} else if (operation === 'analytics') {
+						const opts = this.getNodeParameter('analyticsOptions', i, {}) as Record<string, unknown>;
+						const params = new URLSearchParams();
+						if (opts.accountId) params.set('accountId', String(opts.accountId));
+						if (opts.since) params.set('since', String(opts.since));
+						if (opts.until) params.set('until', String(opts.until));
+						const qs = params.toString();
+						responseData = await this.helpers.httpRequest({
+							method: 'GET',
+							url: `${baseUrl}/api/v1/messages/analytics${qs ? `?${qs}` : ''}`,
+							headers,
+						});
+					} else if (operation === 'export') {
+						const format = this.getNodeParameter('exportFormat', i) as string;
+						const opts = this.getNodeParameter('exportOptions', i, {}) as Record<string, unknown>;
+						const params = new URLSearchParams({ format });
+						if (opts.accountId) params.set('accountId', String(opts.accountId));
+						if (opts.since) params.set('since', String(opts.since));
+						const qs = params.toString();
+						responseData = await this.helpers.httpRequest({
+							method: 'GET',
+							url: `${baseUrl}/api/v1/messages/export${qs ? `?${qs}` : ''}`,
+							headers,
+						});
+					} else if (operation === 'conversationContext') {
+						const conversationId = this.getNodeParameter('conversationId', i) as string;
+						const opts = this.getNodeParameter('contextOptions', i, {}) as Record<string, unknown>;
+						const params = new URLSearchParams();
+						if (opts.format) params.set('format', String(opts.format));
+						if (opts.accountId) params.set('accountId', String(opts.accountId));
+						if (opts.limit !== undefined && opts.limit !== '') params.set('limit', String(opts.limit));
+						if (opts.since) params.set('since', String(opts.since));
+						const qs = params.toString();
+						responseData = await this.helpers.httpRequest({
+							method: 'GET',
+							url: `${baseUrl}/api/v1/conversations/${conversationId}/context${qs ? `?${qs}` : ''}`,
 							headers,
 						});
 					}

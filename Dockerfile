@@ -1,10 +1,13 @@
 # ── Stage 1: Install dependencies ────────────────────────────────
 FROM node:22-alpine AS deps
 
+# Native dependencies for better-sqlite3
+RUN apk add --no-cache python3 make g++
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN npm ci --omit=dev
 
 # ── Stage 2: Build TypeScript ────────────────────────────────────
 FROM node:22-alpine AS build

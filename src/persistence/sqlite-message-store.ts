@@ -1,16 +1,27 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type Database from 'better-sqlite3';
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
-import type { MessageStorePort, MessageQuery, MessageQueryResult, MessageStats } from './message-store.port.js';
+import type {
+  FullMessageStorePort,
+  MessageQuery,
+  MessageQueryResult,
+  MessageStats,
+  SearchOptions,
+  StatsOptions,
+  ConversationHistoryOptions,
+  RawConversationHistory,
+} from '../core/persistence/message-store.port.js';
+import { toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn } from '../core/persistence/message-store.utils.js';
 
 /**
  * SQLite-based message store using better-sqlite3.
  * Lazy-loads better-sqlite3 so it's only required when persistence is enabled.
  */
-export class SqliteMessageStore implements MessageStorePort {
-  private db: any; // better-sqlite3 Database (lazily loaded)
+export class SqliteMessageStore implements FullMessageStorePort {
+  private db: Database.Database | null = null;
   private readonly dbPath: string;
 
   constructor(dbPath: string) {
@@ -24,13 +35,12 @@ export class SqliteMessageStore implements MessageStorePort {
     }
 
     try {
-      const Database = (await import('better-sqlite3')).default;
-      this.db = new Database(this.dbPath);
+      const DatabaseConstructor = (await import('better-sqlite3')).default;
+      this.db = new DatabaseConstructor(this.dbPath);
       this.db.pragma('journal_mode = WAL');
-      // Force UTC for all datetime functions (strftime, etc.)
       this.db.pragma('timezone = UTC');
-      this.createTables();
-      getLogger().info('Message store initialized', { path: this.dbPath });
+
+      getLogger().info('Message store initialized', { path: this.dbPath, driver: 'sqlite' });
     } catch (err) {
       getLogger().error('Failed to initialize message store', {
         path: this.dbPath,
@@ -41,10 +51,24 @@ export class SqliteMessageStore implements MessageStorePort {
     }
   }
 
-  async save(envelope: UnifiedEnvelope): Promise<void> {
-    if (!this.db) return;
+  /** Run migrations — called externally by the factory after init() */
+  async runMigrations(): Promise<void> {
+    const db = this.requireDb();
+    const { MigrationRunner } = await import('./migrations/migration-runner.js');
+    const { SqliteMigrationAdapter } = await import('./migrations/adapters/sqlite-migration.adapter.js');
+    const { resolveMigrationScriptsDir } = await import('./migrations/resolve-scripts-dir.js');
+    const runner = new MigrationRunner({
+      scriptsDir: resolveMigrationScriptsDir('sqlite'),
+      adapter: new SqliteMigrationAdapter(db),
+      logger: getLogger().child({ module: 'migrations:sqlite' }),
+    });
+    await runner.run();
+  }
 
-    const stmt = this.db.prepare(`
+  async save(envelope: UnifiedEnvelope): Promise<void> {
+    const db = this.requireDb();
+
+    const stmt = db.prepare(`
       INSERT OR REPLACE INTO messages (
         id, account_id, channel, direction, conversation_id,
         sender_id, sender_name, recipient_id,
@@ -54,7 +78,7 @@ export class SqliteMessageStore implements MessageStorePort {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const preview = this.extractPreview(envelope);
+    const preview = extractPreview(envelope);
 
     stmt.run(
       envelope.id,
@@ -77,29 +101,17 @@ export class SqliteMessageStore implements MessageStorePort {
   }
 
   async query(filters: MessageQuery): Promise<MessageQueryResult> {
-    if (!this.db) return { messages: [], total: 0, limit: 50, offset: 0 };
+    const db = this.requireDb();
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (filters.accountId) { conditions.push('account_id = ?'); params.push(filters.accountId); }
-    if (filters.channel) { conditions.push('channel = ?'); params.push(filters.channel); }
-    if (filters.conversationId) { conditions.push('conversation_id = ?'); params.push(filters.conversationId); }
-    if (filters.senderId) { conditions.push('sender_id = ?'); params.push(filters.senderId); }
-    if (filters.contentType) { conditions.push('content_type = ?'); params.push(filters.contentType); }
-    if (filters.direction) { conditions.push('direction = ?'); params.push(filters.direction); }
-    if (filters.since) { conditions.push('timestamp >= ?'); params.push(toUTC(filters.since)); }
-    if (filters.until) { conditions.push('timestamp <= ?'); params.push(toUTC(filters.until)); }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { where, params } = this.buildWhere(filters);
     const limit = filters.limit ?? 50;
     const offset = filters.offset ?? 0;
 
-    const countRow = this.db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
-    const rows = this.db.prepare(`SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`).all(...params, limit, offset) as any[];
+    const countRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
+    const rows = db.prepare(`SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
     return {
-      messages: rows.map((r) => this.rowToEnvelope(r)),
+      messages: rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>)),
       total: countRow.total,
       limit,
       offset,
@@ -107,22 +119,22 @@ export class SqliteMessageStore implements MessageStorePort {
   }
 
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
-    if (!this.db) return undefined;
-    const row = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as any;
-    return row ? this.rowToEnvelope(row) : undefined;
+    const db = this.requireDb();
+    const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+    return row ? this.rowToEnvelope(row as Record<string, unknown>) : undefined;
   }
 
   async count(filters?: Partial<MessageQuery>): Promise<number> {
-    if (!this.db) return 0;
-    if (!filters) {
-      return (this.db.prepare('SELECT COUNT(*) as total FROM messages').get() as { total: number }).total;
+    const db = this.requireDb();
+    if (!filters || Object.keys(filters).length === 0) {
+      return (db.prepare('SELECT COUNT(*) as total FROM messages').get() as { total: number }).total;
     }
-    const result = await this.query({ ...filters, limit: 0 });
-    return result.total;
+    const { where, params } = this.buildWhere(filters as MessageQuery);
+    return (db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number }).total;
   }
 
-  async search(query: string, options?: { accountId?: string; limit?: number; offset?: number }): Promise<MessageQueryResult> {
-    if (!this.db) return { messages: [], total: 0, limit: 50, offset: 0 };
+  async search(query: string, options?: SearchOptions): Promise<MessageQueryResult> {
+    const db = this.requireDb();
 
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
@@ -135,26 +147,24 @@ export class SqliteMessageStore implements MessageStorePort {
       params.push(options.accountId);
     }
 
-    const countRow = this.db.prepare(
+    const countRow = db.prepare(
       `SELECT COUNT(*) as total FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where}`,
     ).get(...params) as { total: number };
 
-    const rows = this.db.prepare(
+    const rows = db.prepare(
       `SELECT m.* FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where} ORDER BY rank LIMIT ? OFFSET ?`,
-    ).all(...params, limit, offset) as any[];
+    ).all(...params, limit, offset);
 
     return {
-      messages: rows.map((r) => this.rowToEnvelope(r)),
+      messages: rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>)),
       total: countRow.total,
       limit,
       offset,
     };
   }
 
-  async getStats(options?: { accountId?: string; since?: Date; until?: Date }): Promise<MessageStats> {
-    if (!this.db) {
-      return { totalMessages: 0, byChannel: {}, byContentType: {}, byDirection: {}, topConversations: [], byHour: new Array<number>(24).fill(0) };
-    }
+  async getStats(options?: StatsOptions): Promise<MessageStats> {
+    const db = this.requireDb();
 
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -165,21 +175,21 @@ export class SqliteMessageStore implements MessageStorePort {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const totalRow = this.db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
+    const totalRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
 
-    const channelRows = this.db.prepare(`SELECT channel, COUNT(*) as cnt FROM messages ${where} GROUP BY channel`).all(...params) as Array<{ channel: string; cnt: number }>;
+    const channelRows = db.prepare(`SELECT channel, COUNT(*) as cnt FROM messages ${where} GROUP BY channel`).all(...params) as Array<{ channel: string; cnt: number }>;
     const byChannel: Record<string, number> = {};
     for (const r of channelRows) { byChannel[r.channel] = r.cnt; }
 
-    const typeRows = this.db.prepare(`SELECT content_type, COUNT(*) as cnt FROM messages ${where} GROUP BY content_type`).all(...params) as Array<{ content_type: string; cnt: number }>;
+    const typeRows = db.prepare(`SELECT content_type, COUNT(*) as cnt FROM messages ${where} GROUP BY content_type`).all(...params) as Array<{ content_type: string; cnt: number }>;
     const byContentType: Record<string, number> = {};
     for (const r of typeRows) { byContentType[r.content_type] = r.cnt; }
 
-    const dirRows = this.db.prepare(`SELECT direction, COUNT(*) as cnt FROM messages ${where} GROUP BY direction`).all(...params) as Array<{ direction: string; cnt: number }>;
+    const dirRows = db.prepare(`SELECT direction, COUNT(*) as cnt FROM messages ${where} GROUP BY direction`).all(...params) as Array<{ direction: string; cnt: number }>;
     const byDirection: Record<string, number> = {};
     for (const r of dirRows) { byDirection[r.direction] = r.cnt; }
 
-    const convRows = this.db.prepare(
+    const convRows = db.prepare(
       `SELECT conversation_id, COUNT(*) as cnt, MAX(content_preview) as last_preview FROM messages ${where} GROUP BY conversation_id ORDER BY cnt DESC LIMIT 10`,
     ).all(...params) as Array<{ conversation_id: string; cnt: number; last_preview: string | null }>;
     const topConversations = convRows.map((r) => ({
@@ -188,7 +198,7 @@ export class SqliteMessageStore implements MessageStorePort {
       lastMessage: r.last_preview ?? undefined,
     }));
 
-    const hourRows = this.db.prepare(
+    const hourRows = db.prepare(
       `SELECT CAST(strftime('%H', timestamp, 'utc') AS INTEGER) as hour, COUNT(*) as cnt FROM messages ${where} GROUP BY hour`,
     ).all(...params) as Array<{ hour: number; cnt: number }>;
     const byHour: number[] = new Array<number>(24).fill(0);
@@ -204,14 +214,13 @@ export class SqliteMessageStore implements MessageStorePort {
     };
   }
 
-  async getConversationContext(
+  async getConversationHistory(
     conversationId: string,
-    options?: import('./message-store.port.js').ConversationContextOptions,
-  ): Promise<import('./message-store.port.js').ConversationContext> {
-    const limit = options?.limit ?? 50;
-    const includeMedia = options?.includeMedia ?? true;
-    const format = options?.format ?? 'openai';
+    options?: ConversationHistoryOptions,
+  ): Promise<RawConversationHistory> {
+    const db = this.requireDb();
 
+    const limit = options?.limit ?? 50;
     const conditions = ['conversation_id = ?'];
     const params: unknown[] = [conversationId];
 
@@ -220,15 +229,9 @@ export class SqliteMessageStore implements MessageStorePort {
 
     const where = `WHERE ${conditions.join(' AND ')}`;
 
-    if (!this.db) {
-      return { conversationId, participantCount: 0, participants: [], totalMessages: 0, messages: [] };
-    }
+    const totalRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
 
-    // Total count
-    const totalRow = this.db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
-
-    // Participants summary
-    const participantRows = this.db.prepare(
+    const participantRows = db.prepare(
       `SELECT sender_id, sender_name, COUNT(*) as cnt FROM messages ${where} GROUP BY sender_id ORDER BY cnt DESC`,
     ).all(...params) as Array<{ sender_id: string; sender_name: string | null; cnt: number }>;
 
@@ -238,61 +241,29 @@ export class SqliteMessageStore implements MessageStorePort {
       messageCount: p.cnt,
     }));
 
-    // Get the last N messages (ordered chronologically)
-    const rows = this.db.prepare(
+    const rows = db.prepare(
       `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC`,
-    ).all(...params, limit) as any[];
+    ).all(...params, limit);
 
-    const envelopes = rows.map((r) => this.rowToEnvelope(r));
+    const envelopes = rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>));
 
-    // Format messages for AI consumption
-    const messages = envelopes.map((env) => ({
-      role: (env.direction === 'outbound' ? 'assistant' : 'user') as 'user' | 'assistant' | 'system',
-      name: env.sender.displayName ?? env.sender.id,
-      content: this.formatContentForAI(env, includeMedia),
-      timestamp: typeof env.timestamp === 'string' ? env.timestamp : new Date(env.timestamp).toISOString(),
-      type: env.content.type,
-      id: env.id,
-    }));
+    // Extract group name from last message's channel details
+    const lastRow = rows[rows.length - 1] as Record<string, unknown> | undefined;
+    let groupName: string | undefined;
+    if (lastRow?.channel_details_json) {
+      try {
+        groupName = parseJsonColumn<{ groupName?: string }>(lastRow.channel_details_json as string)?.groupName;
+      } catch { /* non-critical */ }
+    }
 
-    // Try to get group name from channel details
-    const groupName = rows.length > 0
-      ? (() => { try { const d = JSON.parse(rows[rows.length - 1].channel_details_json ?? '{}'); return d.groupName; } catch { return undefined; } })()
-      : undefined;
-
-    const result: import('./message-store.port.js').ConversationContext = {
+    return {
       conversationId,
       groupName,
       participantCount: participants.length,
       participants,
       totalMessages: totalRow.total,
-      messages,
+      envelopes,
     };
-
-    if (format === 'raw') {
-      result.envelopes = envelopes;
-    }
-
-    return result;
-  }
-
-  private formatContentForAI(env: UnifiedEnvelope, includeMedia: boolean): string {
-    const c = env.content;
-    switch (c.type) {
-      case 'text': return c.body;
-      case 'image': return includeMedia ? `[Image${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Image]');
-      case 'video': return includeMedia ? `[Video${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Video]');
-      case 'audio': return c.isVoiceNote ? '[Voice note]' : '[Audio]';
-      case 'document': return `[Document: ${c.fileName}${c.caption ? ` — ${c.caption}` : ''}]`;
-      case 'sticker': return '[Sticker]';
-      case 'location': return `[Location: ${c.latitude}, ${c.longitude}${c.name ? ` — ${c.name}` : ''}]`;
-      case 'contact': return `[Contact: ${c.contacts.map((ct) => ct.name).join(', ')}]`;
-      case 'reaction': return `[Reacted with ${c.emoji}]`;
-      case 'poll': return `[Poll: ${c.question}]`;
-      case 'interactive_response': return `[Selected: ${c.selectedText}]`;
-      case 'system': return `[System: ${c.body ?? c.eventType}]`;
-      default: return '[Unknown message type]';
-    }
   }
 
   async close(): Promise<void> {
@@ -302,92 +273,47 @@ export class SqliteMessageStore implements MessageStorePort {
     }
   }
 
-  private createTables(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        sender_id TEXT NOT NULL,
-        sender_name TEXT,
-        recipient_id TEXT NOT NULL,
-        content_type TEXT NOT NULL,
-        content_preview TEXT,
-        content_json TEXT NOT NULL,
-        context_json TEXT,
-        channel_details_json TEXT,
-        gateway_json TEXT NOT NULL,
-        timestamp TEXT NOT NULL,  -- ISO 8601 UTC (e.g. 2026-04-01T12:00:00.000Z)
-        created_at TEXT NOT NULL  -- ISO 8601 UTC
-      );
+  // ── Private helpers ────────────────────────────────────────────
 
-      CREATE INDEX IF NOT EXISTS idx_messages_account ON messages(account_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(content_type);
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        id, content_preview, sender_name,
-        content='messages',
-        content_rowid='rowid'
-      );
-
-      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-        INSERT INTO messages_fts(id, content_preview, sender_name)
-        VALUES (new.id, new.content_preview, new.sender_name);
-      END;
-    `);
-  }
-
-  private extractPreview(envelope: UnifiedEnvelope): string | null {
-    const c = envelope.content;
-    switch (c.type) {
-      case 'text': return c.body.substring(0, 200);
-      case 'image': return c.caption?.substring(0, 200) ?? '[Image]';
-      case 'video': return c.caption?.substring(0, 200) ?? '[Video]';
-      case 'audio': return c.isVoiceNote ? '[Voice Note]' : '[Audio]';
-      case 'document': return c.fileName;
-      case 'location': return `[Location: ${c.latitude},${c.longitude}]`;
-      case 'contact': return c.contacts.map((ct) => ct.name).join(', ');
-      case 'reaction': return c.emoji;
-      case 'poll': return c.question;
-      case 'sticker': return '[Sticker]';
-      default: return null;
+  /** Fail fast if the store was not initialized */
+  private requireDb(): Database.Database {
+    if (!this.db) {
+      throw new Error('SqliteMessageStore not initialized — call init() first');
     }
+    return this.db;
   }
 
-  private rowToEnvelope(row: any): UnifiedEnvelope {
+  private buildWhere(filters: MessageQuery): { where: string; params: unknown[] } {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filters.accountId) { conditions.push('account_id = ?'); params.push(filters.accountId); }
+    if (filters.channel) { conditions.push('channel = ?'); params.push(filters.channel); }
+    if (filters.conversationId) { conditions.push('conversation_id = ?'); params.push(filters.conversationId); }
+    if (filters.senderId) { conditions.push('sender_id = ?'); params.push(filters.senderId); }
+    if (filters.contentType) { conditions.push('content_type = ?'); params.push(filters.contentType); }
+    if (filters.direction) { conditions.push('direction = ?'); params.push(filters.direction); }
+    if (filters.since) { conditions.push('timestamp >= ?'); params.push(toUTC(filters.since)); }
+    if (filters.until) { conditions.push('timestamp <= ?'); params.push(toUTC(filters.until)); }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return { where, params };
+  }
+
+  private rowToEnvelope(row: Record<string, unknown>): UnifiedEnvelope {
     return {
-      id: row.id,
-      accountId: row.account_id,
+      id: row.id as string,
+      accountId: row.account_id as string,
       channel: row.channel,
       direction: row.direction,
-      timestamp: row.timestamp,
-      conversationId: row.conversation_id,
-      sender: { id: row.sender_id, displayName: row.sender_name },
-      recipient: { id: row.recipient_id },
-      content: JSON.parse(row.content_json),
-      context: row.context_json ? JSON.parse(row.context_json) : undefined,
-      channelDetails: row.channel_details_json ? JSON.parse(row.channel_details_json) : undefined,
-      gateway: JSON.parse(row.gateway_json),
-    };
+      timestamp: new Date(row.timestamp as string),
+      conversationId: row.conversation_id as string,
+      sender: { id: row.sender_id as string, displayName: row.sender_name as string | undefined },
+      recipient: { id: row.recipient_id as string },
+      content: parseJsonColumnRequired(row.content_json as string),
+      context: parseJsonColumn(row.context_json as string | null) ?? undefined,
+      channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
+      gateway: parseJsonColumnRequired(row.gateway_json as string),
+    } as UnifiedEnvelope;
   }
-}
-
-// ── UTC helpers ─────────────────────────────────────────────────
-// ALL dates stored as ISO 8601 with explicit Z suffix (UTC).
-// External systems handle timezone conversion.
-
-/** Convert any date-like value to ISO 8601 UTC string */
-function toUTC(value: string | Date | number): string {
-  const date = value instanceof Date ? value : new Date(value);
-  return date.toISOString(); // Always ends with Z (UTC)
-}
-
-/** Current time as ISO 8601 UTC string */
-function nowUTC(): string {
-  return new Date().toISOString();
 }

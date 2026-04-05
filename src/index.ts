@@ -175,7 +175,7 @@ async function main() {
 
   // Core services
   const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
-  const messageRouter = new MessageRouterService(accountRepository, providerRegistry);
+  const messageRouter = new MessageRouterService(accountRepository, providerRegistry, eventBus);
   const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
 
@@ -185,16 +185,17 @@ async function main() {
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
 
-  // Optional: persistence plugin
-  let messageStore: import('./persistence/message-store.port.js').MessageStorePort | undefined;
+  // Optional: persistence plugin (SQLite or PostgreSQL)
+  let messageStore: import('./core/persistence/message-store.port.js').FullMessageStorePort | undefined;
   if (envConfig.storageEnabled) {
-    const { SqliteMessageStore } = await import('./persistence/sqlite-message-store.js');
+    const { createMessageStore } = await import('./persistence/message-store.factory.js');
     const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
-    const dbPath = resolve(process.cwd(), envConfig.databasePath);
-    messageStore = new SqliteMessageStore(dbPath);
-    await messageStore.init();
+    messageStore = await createMessageStore(envConfig);
     subscribePersistence(eventBus, messageStore);
-    logger.info('Persistence enabled', { database: dbPath });
+    logger.info('Persistence enabled', {
+      driver: envConfig.storageDriver,
+      ...(envConfig.storageDriver === 'sqlite' ? { database: envConfig.databasePath } : {}),
+    });
   }
 
   // Health check scheduler

@@ -55,9 +55,16 @@ Complete SMS adapters:
 - [x] Zero DDD cross-layer violations
 - [x] Logger abstraction (Pino, structured JSON)
 - [x] SocketManagerPort + BaileysSocketManager injection
-- [x] Persistence plugin (SQLite, optional)
 - [x] Prometheus metrics (GET /metrics)
 - [x] Groups API (list groups, group info, participants)
 - [x] Telegram Bot API provider (send, inbound, content mapper)
-- [x] Search & analytics (FTS5, stats, CSV/JSON export)
-- [x] 205+ tests
+- [x] Bidirectional message persistence (SQLite + PostgreSQL) with migration system
+- [x] Full-text search (FTS5 / TSVECTOR) and analytics endpoints
+- [x] AI-ready conversation context endpoint (openai/raw formats)
+- [x] CSV/JSON export endpoint
+- [x] WhatsApp LID→phone resolution for bidirectional conversation tracking
+- [x] Outbound message persistence via EventBus (MESSAGE_OUTBOUND)
+- [x] DDD/SOLID/Clean Code refactoring: ISP (segregated ports), SRP (factory orchestrates migrations), fail-fast guards
+- [x] ConversationContextService application service (eliminates store duplication)
+- [x] Docker compose profiles for SQLite and PostgreSQL testing
+- [x] 241+ tests (20 test files)
