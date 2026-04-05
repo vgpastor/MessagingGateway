@@ -38,7 +38,7 @@ export interface ServerDeps {
   healthCheckScheduler?: HealthCheckScheduler;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
-  messageStore?: import('../persistence/message-store.port.js').MessageStorePort;
+  messageStore?: import('../core/persistence/message-store.port.js').FullMessageStorePort;
   apiKey: string;
   port: number;
   logLevel: string;
@@ -198,7 +198,7 @@ export async function createServer(deps: ServerDeps) {
 
     // Messages query API (only when persistence is enabled)
     if (deps.messageStore) {
-      const { messagesController } = await import('../persistence/messages.controller.js');
+      const { messagesController } = await import('../connections/api/messages.controller.js');
       await authenticated.register(
         async (instance) => messagesController(instance, {
           messageStore: deps.messageStore!,

@@ -2,7 +2,7 @@
  * Outside-in test: SQLite message store — complete use cases
  *
  * Tests the full persistence lifecycle with a real SQLite database:
- *   init (migrations) → save → query → search → conversation context → stats
+ *   init (migrations) → save → query → search → conversation history → stats
  *
  * Each test uses a fresh temporary database file, cleaned up after.
  */
@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rm } from 'node:fs/promises';
 import { SqliteMessageStore } from '../../src/persistence/sqlite-message-store.js';
+import { ConversationContextService } from '../../src/core/persistence/conversation-context.service.js';
 import type { UnifiedEnvelope } from '../../src/core/messaging/unified-envelope.js';
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -43,6 +44,7 @@ beforeEach(async () => {
   tmpDbPath = join(tmpdir(), `mg-store-test-${Date.now()}.db`);
   store = new SqliteMessageStore(tmpDbPath);
   await store.init();
+  await store.runMigrations();
 });
 
 afterEach(async () => {
@@ -171,7 +173,7 @@ describe('SQLite MessageStore — full-text search', () => {
   });
 });
 
-describe('SQLite MessageStore — conversation context (bidirectional)', () => {
+describe('SQLite MessageStore — conversation context (via ConversationContextService)', () => {
   it('should return bidirectional conversation with correct roles', async () => {
     const convId = '34600000099@s.whatsapp.net';
 
@@ -206,7 +208,9 @@ describe('SQLite MessageStore — conversation context (bidirectional)', () => {
       content: { type: 'text', body: 'What are your hours?' },
     }));
 
-    const ctx = await store.getConversationContext(convId);
+    // Use ConversationContextService to transform raw history to AI format
+    const contextService = new ConversationContextService(store);
+    const ctx = await contextService.getContext(convId);
 
     expect(ctx.conversationId).toBe(convId);
     expect(ctx.totalMessages).toBe(3);
@@ -223,7 +227,8 @@ describe('SQLite MessageStore — conversation context (bidirectional)', () => {
   });
 
   it('should return empty context for non-existent conversation', async () => {
-    const ctx = await store.getConversationContext('nonexistent-conv');
+    const contextService = new ConversationContextService(store);
+    const ctx = await contextService.getContext('nonexistent-conv');
     expect(ctx.totalMessages).toBe(0);
     expect(ctx.messages).toHaveLength(0);
     expect(ctx.participants).toHaveLength(0);
@@ -248,7 +253,8 @@ describe('SQLite MessageStore — conversation context (bidirectional)', () => {
       content: { type: 'text', body: 'Another from Alice' },
     }));
 
-    const ctx = await store.getConversationContext(convId);
+    const contextService = new ConversationContextService(store);
+    const ctx = await contextService.getContext(convId);
     expect(ctx.participantCount).toBe(2);
 
     const alice = ctx.participants.find((p) => p.name === 'Alice');
@@ -279,11 +285,12 @@ describe('SQLite MessageStore — statistics', () => {
 });
 
 describe('SQLite MessageStore — migration idempotency', () => {
-  it('should survive init() being called multiple times', async () => {
+  it('should survive init() + runMigrations() being called multiple times', async () => {
     await store.save(makeEnvelope({ id: 'msg_idem-1' }));
 
     // Re-init should not lose data or fail
     await store.init();
+    await store.runMigrations();
 
     const found = await store.findById('msg_idem-1');
     expect(found).toBeDefined();
@@ -291,5 +298,18 @@ describe('SQLite MessageStore — migration idempotency', () => {
 
     const count = await store.count();
     expect(count).toBe(1);
+  });
+});
+
+describe('SQLite MessageStore — initialization guard', () => {
+  it('should throw when methods are called before init()', async () => {
+    const uninitStore = new SqliteMessageStore('/tmp/nonexistent.db');
+    await expect(uninitStore.save(makeEnvelope({ id: 'msg_x' }))).rejects.toThrow('not initialized');
+    await expect(uninitStore.findById('x')).rejects.toThrow('not initialized');
+    await expect(uninitStore.count()).rejects.toThrow('not initialized');
+    await expect(uninitStore.query({ limit: 10, offset: 0 })).rejects.toThrow('not initialized');
+    await expect(uninitStore.search('test')).rejects.toThrow('not initialized');
+    await expect(uninitStore.getStats()).rejects.toThrow('not initialized');
+    await expect(uninitStore.getConversationHistory('conv')).rejects.toThrow('not initialized');
   });
 });

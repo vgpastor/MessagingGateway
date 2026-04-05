@@ -26,8 +26,7 @@ describe('createMessageStore', () => {
     const config = baseConfig({ storageDriver: 'sqlite' });
     const store = await createMessageStore(config);
 
-    // Verify it's a working store by calling init
-    await store.init();
+    // Verify it's a working store (factory runs init + migrations)
     const count = await store.count();
     expect(count).toBe(0);
     await store.close();
@@ -48,7 +47,6 @@ describe('createMessageStore', () => {
     delete (config as Record<string, unknown>).storageDriver;
     // Factory treats undefined/falsy storageDriver as sqlite (default path)
     const store = await createMessageStore(config);
-    await store.init();
     const count = await store.count();
     expect(count).toBe(0);
     await store.close();

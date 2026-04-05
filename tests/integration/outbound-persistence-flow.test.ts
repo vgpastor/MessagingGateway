@@ -16,7 +16,7 @@ import type { ChannelAccountRepository } from '../../src/core/accounts/channel-a
 import type { MessagingAdapterFactory } from '../../src/core/messaging/ports/messaging-adapter.port.js';
 import type { MessagingPort } from '../../src/core/messaging/messaging.port.js';
 import type { ChannelAccount } from '../../src/core/accounts/channel-account.js';
-import type { MessageStorePort } from '../../src/persistence/message-store.port.js';
+import type { MessageStorePort } from '../../src/core/persistence/message-store.port.js';
 import type { UnifiedEnvelope } from '../../src/core/messaging/unified-envelope.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -53,9 +53,6 @@ function createMockStore(): MessageStorePort & { saved: UnifiedEnvelope[] } {
     query: vi.fn(),
     findById: vi.fn(),
     count: vi.fn(),
-    search: vi.fn(),
-    getStats: vi.fn(),
-    getConversationContext: vi.fn(),
     init: vi.fn(),
     close: vi.fn(),
   };

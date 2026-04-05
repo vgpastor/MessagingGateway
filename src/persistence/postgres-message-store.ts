@@ -1,14 +1,16 @@
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 import type {
-  MessageStorePort,
+  FullMessageStorePort,
   MessageQuery,
   MessageQueryResult,
   MessageStats,
-  ConversationContextOptions,
-  ConversationContext,
-} from './message-store.port.js';
-import { toUTC, nowUTC, formatContentForAI, extractPreview, parseJsonColumnRequired, parseJsonColumn } from './message-store.utils.js';
+  SearchOptions,
+  StatsOptions,
+  ConversationHistoryOptions,
+  RawConversationHistory,
+} from '../core/persistence/message-store.port.js';
+import { toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn } from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
 
@@ -16,8 +18,8 @@ type PgPool = import('pg').Pool;
  * PostgreSQL-based message store using the `pg` driver.
  * Lazy-loads `pg` so it's only required when STORAGE_DRIVER=postgres.
  */
-export class PostgresMessageStore implements MessageStorePort {
-  private pool!: PgPool;
+export class PostgresMessageStore implements FullMessageStorePort {
+  private pool: PgPool | null = null;
   private readonly connectionString: string;
 
   constructor(connectionString: string) {
@@ -33,17 +35,6 @@ export class PostgresMessageStore implements MessageStorePort {
       const client = await this.pool.connect();
       client.release();
 
-      // Run migrations
-      const { MigrationRunner } = await import('./migrations/migration-runner.js');
-      const { PostgresMigrationAdapter } = await import('./migrations/adapters/postgres-migration.adapter.js');
-      const { resolveMigrationScriptsDir } = await import('./migrations/resolve-scripts-dir.js');
-      const runner = new MigrationRunner({
-        scriptsDir: resolveMigrationScriptsDir('postgres'),
-        adapter: new PostgresMigrationAdapter(this.pool),
-        logger: getLogger().child({ module: 'migrations:postgres' }),
-      });
-      await runner.run();
-
       getLogger().info('PostgreSQL message store initialized');
     } catch (err) {
       getLogger().error('Failed to initialize PostgreSQL message store', {
@@ -54,12 +45,25 @@ export class PostgresMessageStore implements MessageStorePort {
     }
   }
 
-  async save(envelope: UnifiedEnvelope): Promise<void> {
-    if (!this.pool) return;
+  /** Run migrations — called externally by the factory after init() */
+  async runMigrations(): Promise<void> {
+    const pool = this.requirePool();
+    const { MigrationRunner } = await import('./migrations/migration-runner.js');
+    const { PostgresMigrationAdapter } = await import('./migrations/adapters/postgres-migration.adapter.js');
+    const { resolveMigrationScriptsDir } = await import('./migrations/resolve-scripts-dir.js');
+    const runner = new MigrationRunner({
+      scriptsDir: resolveMigrationScriptsDir('postgres'),
+      adapter: new PostgresMigrationAdapter(pool),
+      logger: getLogger().child({ module: 'migrations:postgres' }),
+    });
+    await runner.run();
+  }
 
+  async save(envelope: UnifiedEnvelope): Promise<void> {
+    const pool = this.requirePool();
     const preview = extractPreview(envelope);
 
-    await this.pool.query(
+    await pool.query(
       `INSERT INTO messages (
         id, account_id, channel, direction, conversation_id,
         sender_id, sender_name, recipient_id,
@@ -95,17 +99,17 @@ export class PostgresMessageStore implements MessageStorePort {
   }
 
   async query(filters: MessageQuery): Promise<MessageQueryResult> {
-    if (!this.pool) return { messages: [], total: 0, limit: 50, offset: 0 };
+    const pool = this.requirePool();
 
     const { where, params } = this.buildWhere(filters);
     const limit = filters.limit ?? 50;
     const offset = filters.offset ?? 0;
 
-    const countRes = await this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
+    const countRes = await pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
     const total = countRes.rows[0].total;
 
     const idx = params.length;
-    const rows = await this.pool.query(
+    const rows = await pool.query(
       `SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${idx + 1} OFFSET $${idx + 2}`,
       [...params, limit, offset],
     );
@@ -119,45 +123,42 @@ export class PostgresMessageStore implements MessageStorePort {
   }
 
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
-    if (!this.pool) return undefined;
-    const res = await this.pool.query('SELECT * FROM messages WHERE id = $1', [messageId]);
+    const pool = this.requirePool();
+    const res = await pool.query('SELECT * FROM messages WHERE id = $1', [messageId]);
     return res.rows.length > 0 ? this.rowToEnvelope(res.rows[0]) : undefined;
   }
 
   async count(filters?: Partial<MessageQuery>): Promise<number> {
-    if (!this.pool) return 0;
+    const pool = this.requirePool();
     if (!filters || Object.keys(filters).length === 0) {
-      const res = await this.pool.query('SELECT COUNT(*)::int as total FROM messages');
+      const res = await pool.query('SELECT COUNT(*)::int as total FROM messages');
       return res.rows[0].total;
     }
     const { where, params } = this.buildWhere(filters as MessageQuery);
-    const res = await this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
+    const res = await pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
     return res.rows[0].total;
   }
 
-  async search(
-    query: string,
-    options?: { accountId?: string; limit?: number; offset?: number },
-  ): Promise<MessageQueryResult> {
-    if (!this.pool) return { messages: [], total: 0, limit: 50, offset: 0 };
+  async search(query: string, options?: SearchOptions): Promise<MessageQueryResult> {
+    const pool = this.requirePool();
 
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
 
-    let idx = 1;
-    let where = `WHERE search_vector @@ plainto_tsquery($${idx})`;
+    let paramIdx = 1;
+    let where = `WHERE search_vector @@ plainto_tsquery($${paramIdx})`;
     const params: unknown[] = [query];
 
     if (options?.accountId) {
-      where += ` AND account_id = $${++idx}`;
+      where += ` AND account_id = $${++paramIdx}`;
       params.push(options.accountId);
     }
 
-    const countRes = await this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
+    const countRes = await pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
     const total = countRes.rows[0].total;
 
     const limitIdx = params.length + 1;
-    const rows = await this.pool.query(
+    const rows = await pool.query(
       `SELECT *, ts_rank(search_vector, plainto_tsquery($1)) as rank FROM messages ${where} ORDER BY rank DESC LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
       [...params, limit, offset],
     );
@@ -170,10 +171,8 @@ export class PostgresMessageStore implements MessageStorePort {
     };
   }
 
-  async getStats(options?: { accountId?: string; since?: Date; until?: Date }): Promise<MessageStats> {
-    if (!this.pool) {
-      return { totalMessages: 0, byChannel: {}, byContentType: {}, byDirection: {}, topConversations: [], byHour: new Array<number>(24).fill(0) };
-    }
+  async getStats(options?: StatsOptions): Promise<MessageStats> {
+    const pool = this.requirePool();
 
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -186,15 +185,15 @@ export class PostgresMessageStore implements MessageStorePort {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const [totalRes, channelRes, typeRes, dirRes, convRes, hourRes] = await Promise.all([
-      this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
-      this.pool.query(`SELECT channel, COUNT(*)::int as cnt FROM messages ${where} GROUP BY channel`, params),
-      this.pool.query(`SELECT content_type, COUNT(*)::int as cnt FROM messages ${where} GROUP BY content_type`, params),
-      this.pool.query(`SELECT direction, COUNT(*)::int as cnt FROM messages ${where} GROUP BY direction`, params),
-      this.pool.query(
+      pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
+      pool.query(`SELECT channel, COUNT(*)::int as cnt FROM messages ${where} GROUP BY channel`, params),
+      pool.query(`SELECT content_type, COUNT(*)::int as cnt FROM messages ${where} GROUP BY content_type`, params),
+      pool.query(`SELECT direction, COUNT(*)::int as cnt FROM messages ${where} GROUP BY direction`, params),
+      pool.query(
         `SELECT conversation_id, COUNT(*)::int as cnt, MAX(content_preview) as last_preview FROM messages ${where} GROUP BY conversation_id ORDER BY cnt DESC LIMIT 10`,
         params,
       ),
-      this.pool.query(
+      pool.query(
         `SELECT EXTRACT(HOUR FROM timestamp::timestamptz AT TIME ZONE 'UTC')::int as hour, COUNT(*)::int as cnt FROM messages ${where} GROUP BY hour`,
         params,
       ),
@@ -228,18 +227,13 @@ export class PostgresMessageStore implements MessageStorePort {
     };
   }
 
-  async getConversationContext(
+  async getConversationHistory(
     conversationId: string,
-    options?: ConversationContextOptions,
-  ): Promise<ConversationContext> {
-    if (!this.pool) {
-      return { conversationId, participantCount: 0, participants: [], totalMessages: 0, messages: [] };
-    }
+    options?: ConversationHistoryOptions,
+  ): Promise<RawConversationHistory> {
+    const pool = this.requirePool();
 
     const limit = options?.limit ?? 50;
-    const includeMedia = options?.includeMedia ?? true;
-    const format = options?.format ?? 'openai';
-
     const conditions = ['conversation_id = $1'];
     const params: unknown[] = [conversationId];
     let idx = 1;
@@ -251,12 +245,12 @@ export class PostgresMessageStore implements MessageStorePort {
     const limitIdx = idx + 1;
 
     const [totalRes, participantRes, rowsRes] = await Promise.all([
-      this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
-      this.pool.query(
+      pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
+      pool.query(
         `SELECT sender_id, sender_name, COUNT(*)::int as cnt FROM messages ${where} GROUP BY sender_id, sender_name ORDER BY cnt DESC`,
         params,
       ),
-      this.pool.query(
+      pool.query(
         `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${limitIdx}) sub ORDER BY timestamp ASC`,
         [...params, limit],
       ),
@@ -270,45 +264,41 @@ export class PostgresMessageStore implements MessageStorePort {
 
     const envelopes = rowsRes.rows.map((r) => this.rowToEnvelope(r));
 
-    const messages = envelopes.map((env) => ({
-      role: (env.direction === 'outbound' ? 'assistant' : 'user') as 'user' | 'assistant' | 'system',
-      name: env.sender.displayName ?? env.sender.id,
-      content: formatContentForAI(env, includeMedia),
-      timestamp: typeof env.timestamp === 'string' ? env.timestamp : new Date(env.timestamp).toISOString(),
-      type: env.content.type,
-      id: env.id,
-    }));
-
-    // Try to get group name from channel details
+    // Extract group name from last message's channel details
     const lastRow = rowsRes.rows[rowsRes.rows.length - 1];
     let groupName: string | undefined;
     if (lastRow?.channel_details_json) {
-      try { groupName = (parseJsonColumn(lastRow.channel_details_json as string | null) as { groupName?: string } | undefined)?.groupName; } catch { /* */ }
+      try {
+        groupName = parseJsonColumn<{ groupName?: string }>(lastRow.channel_details_json)?.groupName;
+      } catch { /* non-critical */ }
     }
 
-    const result: ConversationContext = {
+    return {
       conversationId,
       groupName,
       participantCount: participants.length,
       participants,
       totalMessages: totalRes.rows[0].total,
-      messages,
+      envelopes,
     };
-
-    if (format === 'raw') {
-      result.envelopes = envelopes;
-    }
-
-    return result;
   }
 
   async close(): Promise<void> {
     if (this.pool) {
       await this.pool.end();
+      this.pool = null;
     }
   }
 
   // ── Private helpers ────────────────────────────────────────────
+
+  /** Fail fast if the store was not initialized */
+  private requirePool(): PgPool {
+    if (!this.pool) {
+      throw new Error('PostgresMessageStore not initialized — call init() first');
+    }
+    return this.pool;
+  }
 
   private buildWhere(filters: MessageQuery): { where: string; params: unknown[] } {
     const conditions: string[] = [];

@@ -30,6 +30,9 @@ export function resolveMigrationScriptsDir(driver: 'sqlite' | 'postgres'): strin
     return nearbyPath;
   }
 
-  // Last resort — return dist path and let the runner handle missing dir gracefully
-  return distPath;
+  // Fail fast — a missing scripts directory is a deployment misconfiguration
+  throw new Error(
+    `Migration scripts directory not found for driver '${driver}'. ` +
+    `Probed: ${distPath}, ${srcPath}, ${nearbyPath}`,
+  );
 }

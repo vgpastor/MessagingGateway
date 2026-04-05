@@ -2,7 +2,7 @@ import { getLogger } from '../core/logger/logger.port.js';
 import type { EventBus } from '../core/event-bus.js';
 import { Events } from '../core/events.js';
 import type { MessageInboundPayload, MessageOutboundPayload } from '../core/events.js';
-import type { MessageStorePort } from './message-store.port.js';
+import type { MessageStorePort } from '../core/persistence/message-store.port.js';
 
 /**
  * Subscribes to EventBus events and persists messages.

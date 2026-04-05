@@ -2,7 +2,7 @@
  * Shared utilities for message store implementations.
  * Extracted to avoid duplication between SQLite and PostgreSQL stores.
  */
-import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
+import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
 
 // ── UTC helpers ─────────────────────────────────────────────────
 
@@ -59,18 +59,15 @@ export function extractPreview(envelope: UnifiedEnvelope): string | null {
 
 // ── Row mapping ─────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type JsonParseable = string | Record<string, any> | null | undefined;
-
 /** Parse a JSON column that may already be an object (PostgreSQL JSONB) or a string (SQLite TEXT) */
-export function parseJsonColumn(value: JsonParseable): any {
+export function parseJsonColumn<T = unknown>(value: string | Record<string, unknown> | null | undefined): T | undefined {
   if (value == null) return undefined;
-  if (typeof value === 'string') return JSON.parse(value);
-  return value;
+  if (typeof value === 'string') return JSON.parse(value) as T;
+  return value as T;
 }
 
 /** Parse a required JSON column (never undefined) */
-export function parseJsonColumnRequired(value: JsonParseable): any {
-  if (typeof value === 'string') return JSON.parse(value);
-  return value;
+export function parseJsonColumnRequired<T = unknown>(value: string | Record<string, unknown>): T {
+  if (typeof value === 'string') return JSON.parse(value) as T;
+  return value as T;
 }

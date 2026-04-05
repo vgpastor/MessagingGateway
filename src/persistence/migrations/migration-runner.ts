@@ -3,13 +3,18 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { MigrationAdapter } from './migration.port.js';
 
+interface MigrationLogger {
+  info(msg: string, ctx?: Record<string, unknown>): void;
+  error(msg: string, ctx?: Record<string, unknown>): void;
+}
+
 export interface MigrationRunnerOptions {
   /** Absolute path to the directory containing .sql files for the active driver */
   scriptsDir: string;
   /** The adapter that knows how to talk to the specific database */
   adapter: MigrationAdapter;
   /** Optional logger (defaults to console) */
-  logger?: { info(msg: string, ctx?: Record<string, unknown>): void; error(msg: string, ctx?: Record<string, unknown>): void };
+  logger?: MigrationLogger;
 }
 
 /**
@@ -21,7 +26,7 @@ export interface MigrationRunnerOptions {
 export class MigrationRunner {
   private readonly scriptsDir: string;
   private readonly adapter: MigrationAdapter;
-  private readonly logger: MigrationRunnerOptions['logger'];
+  private readonly logger: MigrationLogger;
 
   constructor(opts: MigrationRunnerOptions) {
     this.scriptsDir = opts.scriptsDir;
@@ -39,7 +44,7 @@ export class MigrationRunner {
     const skipped = available.filter((s) => applied.has(s.name)).map((s) => s.name);
 
     if (pending.length === 0) {
-      this.logger!.info('Migrations up to date', { applied: applied.size });
+      this.logger.info('Migrations up to date', { applied: applied.size });
       return { applied: [], skipped };
     }
 
@@ -50,9 +55,9 @@ export class MigrationRunner {
         await this.adapter.executeSql(script.sql);
         await this.adapter.recordMigration(script.name, script.checksum);
         appliedNow.push(script.name);
-        this.logger!.info('Migration applied', { name: script.name });
+        this.logger.info('Migration applied', { name: script.name });
       } catch (err) {
-        this.logger!.error('Migration failed', {
+        this.logger.error('Migration failed', {
           name: script.name,
           error: err instanceof Error ? err.message : String(err),
         });

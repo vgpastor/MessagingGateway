@@ -186,12 +186,11 @@ async function main() {
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
 
   // Optional: persistence plugin (SQLite or PostgreSQL)
-  let messageStore: import('./persistence/message-store.port.js').MessageStorePort | undefined;
+  let messageStore: import('./core/persistence/message-store.port.js').FullMessageStorePort | undefined;
   if (envConfig.storageEnabled) {
     const { createMessageStore } = await import('./persistence/message-store.factory.js');
     const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
     messageStore = await createMessageStore(envConfig);
-    await messageStore.init();
     subscribePersistence(eventBus, messageStore);
     logger.info('Persistence enabled', {
       driver: envConfig.storageDriver,
