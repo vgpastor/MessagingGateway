@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import type { MigrationAdapter } from '../migration.port.js';
 
 /**
@@ -5,7 +6,7 @@ import type { MigrationAdapter } from '../migration.port.js';
  * Zero domain dependencies.
  */
 export class SqliteMigrationAdapter implements MigrationAdapter {
-  constructor(private readonly db: any /* better-sqlite3 Database */) {}
+  constructor(private readonly db: Database.Database) {}
 
   async ensureMigrationTable(): Promise<void> {
     this.db.exec(`

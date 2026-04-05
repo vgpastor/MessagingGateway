@@ -22,13 +22,12 @@ export function resolveMigrationScriptsDir(driver: 'sqlite' | 'postgres'): strin
     return srcPath;
   }
 
-  // Docker / custom layout: check relative to the main entry point
-  const mainDir = dirname(require.main?.filename ?? '');
-  if (mainDir) {
-    const entryPath = resolve(mainDir, 'persistence', 'migrations', 'scripts', driver);
-    if (existsSync(entryPath)) {
-      return entryPath;
-    }
+  // Docker / custom layout: check relative to this file's location
+  // Works in both CJS and ESM — __dirname equivalent via resolve trick
+  const thisDir = dirname(resolve(cwd, 'dist', 'persistence', 'migrations', 'resolve-scripts-dir.js'));
+  const nearbyPath = resolve(thisDir, 'scripts', driver);
+  if (nearbyPath !== distPath && existsSync(nearbyPath)) {
+    return nearbyPath;
   }
 
   // Last resort — return dist path and let the runner handle missing dir gracefully

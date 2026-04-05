@@ -20,13 +20,14 @@ const groupNameCache = new Map<string, { name: string; expires: number }>();
 const GROUP_CACHE_TTL = 5 * 60 * 1000;
 
 async function resolveGroupName(accountId: string, groupId: string): Promise<string | undefined> {
-  const cached = groupNameCache.get(groupId);
+  const cacheKey = `${accountId}:${groupId}`;
+  const cached = groupNameCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.name;
 
   try {
     const info = await socketManager.getGroupInfo(accountId, groupId);
     if (info) {
-      groupNameCache.set(groupId, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
+      groupNameCache.set(cacheKey, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
       return info.name;
     }
   } catch {

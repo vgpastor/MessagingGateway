@@ -8,6 +8,7 @@ import type {
   ConversationContextOptions,
   ConversationContext,
 } from './message-store.port.js';
+import { toUTC, nowUTC, formatContentForAI, extractPreview, parseJsonColumnRequired, parseJsonColumn } from './message-store.utils.js';
 
 type PgPool = import('pg').Pool;
 
@@ -56,7 +57,7 @@ export class PostgresMessageStore implements MessageStorePort {
   async save(envelope: UnifiedEnvelope): Promise<void> {
     if (!this.pool) return;
 
-    const preview = this.extractPreview(envelope);
+    const preview = extractPreview(envelope);
 
     await this.pool.query(
       `INSERT INTO messages (
@@ -125,12 +126,13 @@ export class PostgresMessageStore implements MessageStorePort {
 
   async count(filters?: Partial<MessageQuery>): Promise<number> {
     if (!this.pool) return 0;
-    if (!filters) {
+    if (!filters || Object.keys(filters).length === 0) {
       const res = await this.pool.query('SELECT COUNT(*)::int as total FROM messages');
       return res.rows[0].total;
     }
-    const result = await this.query({ ...filters, limit: 0 });
-    return result.total;
+    const { where, params } = this.buildWhere(filters as MessageQuery);
+    const res = await this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
+    return res.rows[0].total;
   }
 
   async search(
@@ -142,20 +144,21 @@ export class PostgresMessageStore implements MessageStorePort {
     const limit = options?.limit ?? 50;
     const offset = options?.offset ?? 0;
 
-    let where = 'WHERE search_vector @@ plainto_tsquery($1)';
+    let idx = 1;
+    let where = `WHERE search_vector @@ plainto_tsquery($${idx})`;
     const params: unknown[] = [query];
 
     if (options?.accountId) {
-      where += ' AND account_id = $2';
+      where += ` AND account_id = $${++idx}`;
       params.push(options.accountId);
     }
 
     const countRes = await this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
     const total = countRes.rows[0].total;
 
-    const idx = params.length;
+    const limitIdx = params.length + 1;
     const rows = await this.pool.query(
-      `SELECT *, ts_rank(search_vector, plainto_tsquery($1)) as rank FROM messages ${where} ORDER BY rank DESC LIMIT $${idx + 1} OFFSET $${idx + 2}`,
+      `SELECT *, ts_rank(search_vector, plainto_tsquery($1)) as rank FROM messages ${where} ORDER BY rank DESC LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
       [...params, limit, offset],
     );
 
@@ -245,6 +248,7 @@ export class PostgresMessageStore implements MessageStorePort {
     if (options?.since) { conditions.push(`timestamp >= $${++idx}`); params.push(toUTC(options.since)); }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
+    const limitIdx = idx + 1;
 
     const [totalRes, participantRes, rowsRes] = await Promise.all([
       this.pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
@@ -253,7 +257,7 @@ export class PostgresMessageStore implements MessageStorePort {
         params,
       ),
       this.pool.query(
-        `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${++idx}) sub ORDER BY timestamp ASC`,
+        `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${limitIdx}) sub ORDER BY timestamp ASC`,
         [...params, limit],
       ),
     ]);
@@ -269,7 +273,7 @@ export class PostgresMessageStore implements MessageStorePort {
     const messages = envelopes.map((env) => ({
       role: (env.direction === 'outbound' ? 'assistant' : 'user') as 'user' | 'assistant' | 'system',
       name: env.sender.displayName ?? env.sender.id,
-      content: this.formatContentForAI(env, includeMedia),
+      content: formatContentForAI(env, includeMedia),
       timestamp: typeof env.timestamp === 'string' ? env.timestamp : new Date(env.timestamp).toISOString(),
       type: env.content.type,
       id: env.id,
@@ -279,7 +283,7 @@ export class PostgresMessageStore implements MessageStorePort {
     const lastRow = rowsRes.rows[rowsRes.rows.length - 1];
     let groupName: string | undefined;
     if (lastRow?.channel_details_json) {
-      try { groupName = (typeof lastRow.channel_details_json === 'string' ? JSON.parse(lastRow.channel_details_json) : lastRow.channel_details_json).groupName; } catch { /* */ }
+      try { groupName = (parseJsonColumn(lastRow.channel_details_json as string | null) as { groupName?: string } | undefined)?.groupName; } catch { /* */ }
     }
 
     const result: ConversationContext = {
@@ -324,67 +328,21 @@ export class PostgresMessageStore implements MessageStorePort {
     return { where, params };
   }
 
-  private formatContentForAI(env: UnifiedEnvelope, includeMedia: boolean): string {
-    const c = env.content;
-    switch (c.type) {
-      case 'text': return c.body;
-      case 'image': return includeMedia ? `[Image${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Image]');
-      case 'video': return includeMedia ? `[Video${c.caption ? `: ${c.caption}` : ''}]` : (c.caption ?? '[Video]');
-      case 'audio': return c.isVoiceNote ? '[Voice note]' : '[Audio]';
-      case 'document': return `[Document: ${c.fileName}${c.caption ? ` — ${c.caption}` : ''}]`;
-      case 'sticker': return '[Sticker]';
-      case 'location': return `[Location: ${c.latitude}, ${c.longitude}${c.name ? ` — ${c.name}` : ''}]`;
-      case 'contact': return `[Contact: ${c.contacts.map((ct) => ct.name).join(', ')}]`;
-      case 'reaction': return `[Reacted with ${c.emoji}]`;
-      case 'poll': return `[Poll: ${c.question}]`;
-      case 'interactive_response': return `[Selected: ${c.selectedText}]`;
-      case 'system': return `[System: ${c.body ?? c.eventType}]`;
-      default: return '[Unknown message type]';
-    }
-  }
-
-  private extractPreview(envelope: UnifiedEnvelope): string | null {
-    const c = envelope.content;
-    switch (c.type) {
-      case 'text': return c.body.substring(0, 200);
-      case 'image': return c.caption?.substring(0, 200) ?? '[Image]';
-      case 'video': return c.caption?.substring(0, 200) ?? '[Video]';
-      case 'audio': return c.isVoiceNote ? '[Voice Note]' : '[Audio]';
-      case 'document': return c.fileName;
-      case 'location': return `[Location: ${c.latitude},${c.longitude}]`;
-      case 'contact': return c.contacts.map((ct) => ct.name).join(', ');
-      case 'reaction': return c.emoji;
-      case 'poll': return c.question;
-      case 'sticker': return '[Sticker]';
-      default: return null;
-    }
-  }
-
-  private rowToEnvelope(row: any): UnifiedEnvelope {
+  private rowToEnvelope(row: Record<string, unknown>): UnifiedEnvelope {
+    const ts = row.timestamp;
     return {
-      id: row.id,
-      accountId: row.account_id,
+      id: row.id as string,
+      accountId: row.account_id as string,
       channel: row.channel,
       direction: row.direction,
-      timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
-      conversationId: row.conversation_id,
-      sender: { id: row.sender_id, displayName: row.sender_name },
-      recipient: { id: row.recipient_id },
-      content: typeof row.content_json === 'string' ? JSON.parse(row.content_json) : row.content_json,
-      context: row.context_json ? (typeof row.context_json === 'string' ? JSON.parse(row.context_json) : row.context_json) : undefined,
-      channelDetails: row.channel_details_json ? (typeof row.channel_details_json === 'string' ? JSON.parse(row.channel_details_json) : row.channel_details_json) : undefined,
-      gateway: typeof row.gateway_json === 'string' ? JSON.parse(row.gateway_json) : row.gateway_json,
-    };
+      timestamp: ts instanceof Date ? ts : new Date(ts as string),
+      conversationId: row.conversation_id as string,
+      sender: { id: row.sender_id as string, displayName: row.sender_name as string | undefined },
+      recipient: { id: row.recipient_id as string },
+      content: parseJsonColumnRequired(row.content_json as string),
+      context: parseJsonColumn(row.context_json as string | null) ?? undefined,
+      channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
+      gateway: parseJsonColumnRequired(row.gateway_json as string),
+    } as UnifiedEnvelope;
   }
-}
-
-// ── UTC helpers ─────────────────────────────────────────────────
-
-function toUTC(value: string | Date | number): string {
-  const date = value instanceof Date ? value : new Date(value);
-  return date.toISOString();
-}
-
-function nowUTC(): string {
-  return new Date().toISOString();
 }

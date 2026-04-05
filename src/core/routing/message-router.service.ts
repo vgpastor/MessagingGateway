@@ -46,7 +46,7 @@ export class MessageRouterService {
 
     // Emit outbound event for persistence and webhooks
     if (this.eventBus && result.status !== 'failed') {
-      this.emitOutbound(account, command, result).catch((err) => {
+      this.emitOutbound(this.eventBus, account, command, result).catch((err) => {
         getLogger().error('Failed to emit outbound event', {
           accountId: account.id,
           error: err instanceof Error ? err.message : String(err),
@@ -58,6 +58,7 @@ export class MessageRouterService {
   }
 
   private async emitOutbound(
+    eventBus: EventBus,
     account: ChannelAccount,
     command: SendMessageCommand,
     result: MessageResult,
@@ -87,7 +88,7 @@ export class MessageRouterService {
       },
     };
 
-    await this.eventBus!.emit(
+    await eventBus.emit(
       createEvent<MessageOutboundPayload>(
         Events.MESSAGE_OUTBOUND,
         'router',
