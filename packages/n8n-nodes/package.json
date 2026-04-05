@@ -27,7 +27,7 @@
     "n8n-workflow": ">=1.0.0"
   },
   "devDependencies": {
-    "n8n-workflow": "^1.76.0",
+    "n8n-workflow": "^2.13.1",
     "typescript": "^5.7.0"
   },
   "files": ["dist", "README.md", "LICENSE"],
