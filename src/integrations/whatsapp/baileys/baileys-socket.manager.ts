@@ -255,4 +255,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 }
 
-export const baileysSocketManager = new BaileysSocketManager();
+/** Create a new BaileysSocketManager instance (useful for testing) */
+export function createBaileysSocketManager(): BaileysSocketManager {
+  return new BaileysSocketManager();
+}
+
+/** Default singleton instance */
+export const baileysSocketManager = createBaileysSocketManager();

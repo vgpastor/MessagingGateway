@@ -301,6 +301,142 @@ describe('SQLite MessageStore — migration idempotency', () => {
   });
 });
 
+describe('SQLite MessageStore — query filters', () => {
+  it('should filter by senderId', async () => {
+    await store.save(makeEnvelope({ id: 'msg_sid-1', sender: { id: 'sender-A', displayName: 'Alice' } }));
+    await store.save(makeEnvelope({ id: 'msg_sid-2', sender: { id: 'sender-B', displayName: 'Bob' } }));
+    await store.save(makeEnvelope({ id: 'msg_sid-3', sender: { id: 'sender-A', displayName: 'Alice' } }));
+
+    const result = await store.query({ senderId: 'sender-A', limit: 10, offset: 0 });
+    expect(result.messages).toHaveLength(2);
+    expect(result.total).toBe(2);
+    expect(result.messages.every((m) => m.sender.id === 'sender-A')).toBe(true);
+  });
+
+  it('should filter by contentType', async () => {
+    await store.save(makeEnvelope({ id: 'msg_ct-1', content: { type: 'text', body: 'Hello' } }));
+    await store.save(makeEnvelope({ id: 'msg_ct-2', content: { type: 'image', media: { mimeType: 'image/png' } } }));
+    await store.save(makeEnvelope({ id: 'msg_ct-3', content: { type: 'text', body: 'World' } }));
+
+    const result = await store.query({ contentType: 'text', limit: 10, offset: 0 });
+    expect(result.messages).toHaveLength(2);
+    expect(result.total).toBe(2);
+    expect(result.messages.every((m) => m.content.type === 'text')).toBe(true);
+  });
+
+  it('should filter by since', async () => {
+    await store.save(makeEnvelope({ id: 'msg_since-1', timestamp: new Date('2026-04-05T09:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_since-2', timestamp: new Date('2026-04-05T11:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_since-3', timestamp: new Date('2026-04-05T12:00:00Z') }));
+
+    const result = await store.query({ since: new Date('2026-04-05T11:00:00Z'), limit: 10, offset: 0 });
+    expect(result.messages).toHaveLength(2);
+    expect(result.total).toBe(2);
+    const ids = result.messages.map((m) => m.id);
+    expect(ids).toContain('msg_since-2');
+    expect(ids).toContain('msg_since-3');
+  });
+
+  it('should filter by until', async () => {
+    await store.save(makeEnvelope({ id: 'msg_until-1', timestamp: new Date('2026-04-05T09:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_until-2', timestamp: new Date('2026-04-05T11:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_until-3', timestamp: new Date('2026-04-05T12:00:00Z') }));
+
+    const result = await store.query({ until: new Date('2026-04-05T11:00:00Z'), limit: 10, offset: 0 });
+    expect(result.messages).toHaveLength(2);
+    expect(result.total).toBe(2);
+    const ids = result.messages.map((m) => m.id);
+    expect(ids).toContain('msg_until-1');
+    expect(ids).toContain('msg_until-2');
+  });
+
+  it('should filter by since + until range', async () => {
+    await store.save(makeEnvelope({ id: 'msg_range-1', timestamp: new Date('2026-04-05T08:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_range-2', timestamp: new Date('2026-04-05T10:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_range-3', timestamp: new Date('2026-04-05T12:00:00Z') }));
+    await store.save(makeEnvelope({ id: 'msg_range-4', timestamp: new Date('2026-04-05T14:00:00Z') }));
+
+    const result = await store.query({
+      since: new Date('2026-04-05T09:00:00Z'),
+      until: new Date('2026-04-05T13:00:00Z'),
+      limit: 10,
+      offset: 0,
+    });
+    expect(result.messages).toHaveLength(2);
+    expect(result.total).toBe(2);
+    const ids = result.messages.map((m) => m.id);
+    expect(ids).toContain('msg_range-2');
+    expect(ids).toContain('msg_range-3');
+  });
+});
+
+describe('SQLite MessageStore — search with accountId filter', () => {
+  it('should search with accountId filter', async () => {
+    await store.save(makeEnvelope({ id: 'msg_sa-1', accountId: 'wa-acct-1', content: { type: 'text', body: 'Important delivery update' } }));
+    await store.save(makeEnvelope({ id: 'msg_sa-2', accountId: 'wa-acct-2', content: { type: 'text', body: 'Another delivery notice' } }));
+    await store.save(makeEnvelope({ id: 'msg_sa-3', accountId: 'wa-acct-1', content: { type: 'text', body: 'Delivery confirmed' } }));
+
+    const result = await store.search('delivery', { accountId: 'wa-acct-1' });
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages.every((m) => m.accountId === 'wa-acct-1')).toBe(true);
+  });
+});
+
+describe('SQLite MessageStore — getConversationHistory with options', () => {
+  it('should filter by since option', async () => {
+    const convId = 'conv-hist-since';
+    await store.save(makeEnvelope({ id: 'msg_hs-1', conversationId: convId, timestamp: new Date('2026-04-05T08:00:00Z'), content: { type: 'text', body: 'Early msg' } }));
+    await store.save(makeEnvelope({ id: 'msg_hs-2', conversationId: convId, timestamp: new Date('2026-04-05T11:00:00Z'), content: { type: 'text', body: 'Late msg 1' } }));
+    await store.save(makeEnvelope({ id: 'msg_hs-3', conversationId: convId, timestamp: new Date('2026-04-05T12:00:00Z'), content: { type: 'text', body: 'Late msg 2' } }));
+
+    const history = await store.getConversationHistory(convId, { since: new Date('2026-04-05T10:00:00Z') });
+    expect(history.totalMessages).toBe(2);
+    expect(history.envelopes).toHaveLength(2);
+    const ids = history.envelopes.map((e) => e.id);
+    expect(ids).toContain('msg_hs-2');
+    expect(ids).toContain('msg_hs-3');
+  });
+
+  it('should filter by accountId option', async () => {
+    const convId = 'conv-hist-acct';
+    await store.save(makeEnvelope({ id: 'msg_ha-1', conversationId: convId, accountId: 'wa-alpha' }));
+    await store.save(makeEnvelope({ id: 'msg_ha-2', conversationId: convId, accountId: 'wa-beta' }));
+    await store.save(makeEnvelope({ id: 'msg_ha-3', conversationId: convId, accountId: 'wa-alpha' }));
+
+    const history = await store.getConversationHistory(convId, { accountId: 'wa-alpha' });
+    expect(history.totalMessages).toBe(2);
+    expect(history.envelopes).toHaveLength(2);
+    expect(history.envelopes.every((e) => e.accountId === 'wa-alpha')).toBe(true);
+  });
+
+  it('should extract groupName from channelDetails', async () => {
+    const convId = 'conv-hist-group';
+    await store.save(makeEnvelope({
+      id: 'msg_hg-1',
+      conversationId: convId,
+      channelDetails: { platform: 'whatsapp', groupName: 'Test Group' },
+    }));
+
+    const history = await store.getConversationHistory(convId);
+    expect(history.groupName).toBe('Test Group');
+  });
+});
+
+describe('SQLite MessageStore — count with filters', () => {
+  it('should count with accountId filter', async () => {
+    await store.save(makeEnvelope({ id: 'msg_cf-1', accountId: 'wa-count-a' }));
+    await store.save(makeEnvelope({ id: 'msg_cf-2', accountId: 'wa-count-b' }));
+    await store.save(makeEnvelope({ id: 'msg_cf-3', accountId: 'wa-count-a' }));
+    await store.save(makeEnvelope({ id: 'msg_cf-4', accountId: 'wa-count-a' }));
+
+    const total = await store.count();
+    expect(total).toBe(4);
+
+    const filtered = await store.count({ accountId: 'wa-count-a' });
+    expect(filtered).toBe(3);
+  });
+});
+
 describe('SQLite MessageStore — initialization guard', () => {
   it('should throw when methods are called before init()', async () => {
     const uninitStore = new SqliteMessageStore('/tmp/nonexistent.db');

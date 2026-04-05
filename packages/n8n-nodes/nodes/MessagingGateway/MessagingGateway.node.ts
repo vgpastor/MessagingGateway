@@ -233,6 +233,16 @@ export class MessagingGateway implements INodeType {
 
 			// ── Message: Get Status fields ──
 			{
+				displayName: 'Account ID',
+				name: 'accountId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'wa-main',
+				description: 'The account ID that sent the message',
+				displayOptions: { show: { resource: ['message'], operation: ['getStatus'] } },
+			},
+			{
 				displayName: 'Message ID',
 				name: 'messageId',
 				type: 'string',
@@ -625,9 +635,10 @@ export class MessagingGateway implements INodeType {
 						});
 					} else if (operation === 'getStatus') {
 						const messageId = this.getNodeParameter('messageId', i) as string;
+						const accountId = this.getNodeParameter('accountId', i) as string;
 						responseData = await this.helpers.httpRequest({
 							method: 'GET',
-							url: `${baseUrl}/api/v1/messages/${messageId}`,
+							url: `${baseUrl}/api/v1/messages/${messageId}/status?accountId=${accountId}`,
 							headers,
 						});
 					} else if (operation === 'query') {
