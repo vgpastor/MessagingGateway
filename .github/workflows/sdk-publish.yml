@@ -52,6 +52,8 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         working-directory: packages/sdk
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create Git tag
         if: steps.check.outputs.changed == 'true'
