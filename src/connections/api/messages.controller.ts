@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { FullMessageStorePort } from '../../core/persistence/message-store.port.js';
-import { ConversationContextService } from '../../core/persistence/conversation-context.service.js';
+import type { ConversationContextService } from '../../core/persistence/conversation-context.service.js';
 import type { ConversationContextOptions } from '../../core/persistence/conversation-context.service.js';
 import { errorResponseSchema } from './schemas.js';
 
@@ -11,13 +11,14 @@ const DEFAULT_EXPORT_LIMIT = 1000;
 
 interface MessagesControllerDeps {
   messageStore: FullMessageStorePort;
+  contextService: ConversationContextService;
 }
 
 export async function messagesController(
   fastify: FastifyInstance,
   deps: MessagesControllerDeps,
 ): Promise<void> {
-  const contextService = new ConversationContextService(deps.messageStore);
+  const { contextService } = deps;
 
   fastify.get<{
     Querystring: {

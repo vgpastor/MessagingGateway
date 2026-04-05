@@ -4,13 +4,15 @@ import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
 import { matchesFilter } from '../../core/filters/envelope-filter.js';
-import { webhookForwardDuration } from '../../infrastructure/metrics/prometheus.js';
+import type { MetricsPort } from '../../core/metrics/metrics.port.js';
+import { noopMetrics } from '../../core/metrics/metrics.port.js';
 
 export class WebhookForwarder {
   constructor(
     private readonly webhookConfigRepo: WebhookConfigRepository,
     private readonly globalCallbackUrl: string | undefined,
     private readonly globalSecret: string | undefined,
+    private readonly metrics: MetricsPort = noopMetrics,
   ) {}
 
   async forward(envelope: UnifiedEnvelope, eventType: WebhookEventType = 'message.inbound'): Promise<void> {
@@ -76,7 +78,7 @@ export class WebhookForwarder {
       headers['X-UMG-Signature'] = `sha256=${signature}`;
     }
 
-    const end = webhookForwardDuration.startTimer({ account: accountId, url });
+    const start = performance.now();
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -84,14 +86,16 @@ export class WebhookForwarder {
         body: payload,
       });
 
-      end({ status: String(response.status) });
+      const durationInSeconds = (performance.now() - start) / 1000;
+      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: String(response.status) });
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         getLogger().error('Webhook forwarding failed', { accountId, url, httpStatus: response.status, response: text });
       }
     } catch (err) {
-      end({ status: 'error' });
+      const durationInSeconds = (performance.now() - start) / 1000;
+      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: 'error' });
       const message = err instanceof Error ? err.message : String(err);
       getLogger().error('Webhook forwarding error', { accountId, url, error: message });
     }

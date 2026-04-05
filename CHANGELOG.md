@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Non-blocking: continues without media on download failure
   - Populates `content.media.base64` and `content.media.filename` on the envelope
 - **Docker compose profiles** for testing: `sqlite` (port 3201) and `postgres` (port 3202)
+- **SDK v0.3.0** — full type exports for persistence and analytics
+  - Exports all core messaging types (`UnifiedEnvelope`, `MessageContent`, `ContactRef`, etc.)
+  - Exports account and webhook types (`Account`, `WebhookConfig`, `CreateAccountInput`, etc.)
+  - Exports persistence types (`MessageQuery`, `MessageQueryResult`, `MessageStats`, `ConversationContext`, `ConversationMessage`, `ConversationContextOptions`)
+  - `MessagesApi` sub-client: `query()`, `search()`, `analytics()`, `export()`, `conversationContext()`
+- **n8n nodes v0.2.0** — message persistence operations
+  - Query: filter stored messages by account, conversation, direction, content type, date range
+  - Search: full-text search across stored messages
+  - Analytics: aggregated message statistics
+  - Export: bulk export messages as CSV or JSON
+  - Conversation Context: AI-ready conversation history with OpenAI/raw format support
 
 ### Changed
 

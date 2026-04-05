@@ -1,8 +1,18 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { FastifyRequest, FastifyReply } from 'fastify';
+
+/** Framework-agnostic request type for auth guard */
+export interface AuthRequest {
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/** Framework-agnostic reply type for auth guard */
+export interface AuthReply {
+  status(code: number): AuthReply;
+  send(data: unknown): unknown;
+}
 
 /**
- * API Key authentication guard for Fastify routes.
+ * API Key authentication guard.
  *
  * Accepts the key via:
  *   - Header: `Authorization: Bearer <key>`
@@ -11,20 +21,22 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
  * If no API key is configured (apiKey is undefined), all requests pass through (dev mode).
  */
 export function createApiKeyGuard(apiKey: string) {
-  return async function apiKeyGuard(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  return async function apiKeyGuard(request: AuthRequest, reply: AuthReply): Promise<void> {
     const provided = extractApiKey(request);
     if (!provided) {
-      return reply.status(401).send({
+      reply.status(401).send({
         error: 'Unauthorized',
         message: 'Missing API key. Provide via Authorization: Bearer <key> or X-API-Key header.',
       });
+      return;
     }
 
     if (!safeCompare(provided, apiKey)) {
-      return reply.status(401).send({
+      reply.status(401).send({
         error: 'Unauthorized',
         message: 'Invalid API key.',
       });
+      return;
     }
   };
 }
@@ -45,9 +57,9 @@ export function validateWebhookSignature(
   return safeCompare(signatureHeader, expected);
 }
 
-function extractApiKey(request: FastifyRequest): string | undefined {
+function extractApiKey(request: AuthRequest): string | undefined {
   const authHeader = request.headers['authorization'];
-  if (authHeader?.startsWith('Bearer ')) {
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
     return authHeader.slice(7);
   }
 

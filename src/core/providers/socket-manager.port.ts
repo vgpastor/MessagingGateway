@@ -8,8 +8,9 @@
  */
 
 import type { GroupInfo } from '../groups/group.types.js';
+import type { ConnectionStatus } from '../accounts/connection-manager.port.js';
 
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+export type { ConnectionStatus };
 
 export type MessageHandler<TEvent = unknown> = (event: TEvent) => Promise<void> | void;
 export type ConnectionHandler<TUpdate = unknown> = (update: TUpdate) => void;

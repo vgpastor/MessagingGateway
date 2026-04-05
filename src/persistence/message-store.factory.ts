@@ -1,6 +1,12 @@
 import type { FullMessageStorePort } from '../core/persistence/message-store.port.js';
-import type { EnvConfig } from '../infrastructure/config/env.config.js';
 import { resolve } from 'node:path';
+
+/** Configuration needed by the message store factory */
+interface StoreConfig {
+  storageDriver: 'sqlite' | 'postgres';
+  databasePath: string;
+  databaseUrl?: string;
+}
 
 /** Store with migration capability (internal detail, not part of the port) */
 interface MigratableStore extends FullMessageStorePort {
@@ -16,7 +22,7 @@ interface MigratableStore extends FullMessageStorePort {
  * STORAGE_DRIVER=sqlite (default) → SQLite with better-sqlite3
  * STORAGE_DRIVER=postgres         → PostgreSQL with pg
  */
-export async function createMessageStore(config: EnvConfig): Promise<FullMessageStorePort> {
+export async function createMessageStore(config: StoreConfig): Promise<FullMessageStorePort> {
   let store: MigratableStore;
 
   if (config.storageDriver === 'postgres') {

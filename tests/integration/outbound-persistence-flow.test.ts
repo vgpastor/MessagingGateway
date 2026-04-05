@@ -7,7 +7,7 @@
  * Uses real EventBus and a spy MessageStore to verify the full chain
  * without depending on external services (WhatsApp, SQLite, Postgres).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MessageRouterService } from '../../src/core/routing/message-router.service.js';
 import { EventBus } from '../../src/core/event-bus.js';
 import { Events } from '../../src/core/events.js';
@@ -68,6 +68,7 @@ describe('Outbound message persistence flow', () => {
   let mockAdapterFactory: MessagingAdapterFactory;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     eventBus = new EventBus();
     store = createMockStore();
     subscribePersistence(eventBus, store);
@@ -99,6 +100,10 @@ describe('Outbound message persistence flow', () => {
     };
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('should persist outbound text message after successful send', async () => {
     vi.mocked(mockRepository.findById).mockResolvedValue(whatsappAccount);
     const router = new MessageRouterService(mockRepository, mockAdapterFactory, eventBus);
@@ -110,7 +115,7 @@ describe('Outbound message persistence flow', () => {
     });
 
     // Wait for async event propagation
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(result.status).toBe('sent');
     expect(store.save).toHaveBeenCalledTimes(1);
@@ -145,7 +150,7 @@ describe('Outbound message persistence flow', () => {
       content: { type: 'text', body: 'Test remoteJid' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     const saved = store.saved[0];
     expect(saved.conversationId).toBe('34600000099@s.whatsapp.net');
@@ -167,7 +172,7 @@ describe('Outbound message persistence flow', () => {
       },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     const saved = store.saved[0];
     expect(saved.content.type).toBe('image');
@@ -194,7 +199,7 @@ describe('Outbound message persistence flow', () => {
       content: { type: 'text', body: 'This will fail' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(store.save).not.toHaveBeenCalled();
   });
@@ -209,7 +214,7 @@ describe('Outbound message persistence flow', () => {
       content: { type: 'text', body: 'No persistence' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(store.save).not.toHaveBeenCalled();
   });
@@ -225,7 +230,7 @@ describe('Outbound message persistence flow', () => {
       content: { type: 'text', body: 'Store will fail' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     // Send succeeds even though persistence failed
     expect(result.status).toBe('sent');
@@ -242,7 +247,7 @@ describe('Outbound message persistence flow', () => {
       content: { type: 'text', body: 'Hello from Telegram' },
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.advanceTimersByTimeAsync(0);
 
     const saved = store.saved[0];
     expect(saved.direction).toBe('outbound');

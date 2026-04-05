@@ -3,12 +3,11 @@ import type { ChannelAccountRepository } from '../../core/accounts/channel-accou
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
-import type { CredentialValidator } from '../../infrastructure/credential-validator.js';
-import type { HealthCheckScheduler } from '../../infrastructure/health-check-scheduler.js';
+import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
+import type { HealthCheckSchedulerPort } from '../../core/accounts/health-check-scheduler.port.js';
 import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
 import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
-import { accountSchema } from '../../infrastructure/config/accounts.schema.js';
-import { buildDefaultIdentity } from '../../infrastructure/config/accounts.loader.js';
+import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
@@ -16,11 +15,20 @@ import {
   updateAccountBodySchema,
 } from './schemas.js';
 
+/** Result of validating a create-account request body */
+export interface AccountValidationResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+}
+
 export interface AccountsControllerDeps {
   accountRepository: ChannelAccountRepository;
-  credentialValidator: CredentialValidator;
-  healthCheckScheduler?: HealthCheckScheduler;
+  credentialValidator: CredentialValidatorPort;
+  healthCheckScheduler?: HealthCheckSchedulerPort;
   providerRegistry: ProviderLookupPort;
+  /** Validate create-account request body (injected to avoid schema library coupling) */
+  validateAccountBody: (body: unknown) => AccountValidationResult;
 }
 
 function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
@@ -197,16 +205,16 @@ export async function accountsController(
   }, async (request, reply) => {
     const body = request.body as Record<string, unknown>;
 
-    const parsed = accountSchema.safeParse(body);
+    const parsed = deps.validateAccountBody(body);
     if (!parsed.success) {
       return reply.status(400).send({
         error: 'Bad Request',
         code: 'INVALID_PAYLOAD',
-        message: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+        message: parsed.error ?? 'Invalid account payload',
       });
     }
 
-    const data = parsed.data;
+    const data = parsed.data!;
     const channel = data.channel as ChannelType;
 
     const account: ChannelAccount = {

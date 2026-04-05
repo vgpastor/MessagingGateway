@@ -5,6 +5,7 @@ import { getLogger } from '../../core/logger/logger.port.js';
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
+import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 import { accountsConfigSchema } from './accounts.schema.js';
 
 export function loadAccountsFromYaml(filePath?: string): ChannelAccount[] {
@@ -53,14 +54,8 @@ function mapToChannelAccount(
   };
 }
 
-export function buildDefaultIdentity(channel: ChannelType): AccountIdentity {
-  switch (channel) {
-    case 'whatsapp': return { channel: 'whatsapp', phoneNumber: '' };
-    case 'telegram': return { channel: 'telegram', botUsername: '' };
-    case 'email': return { channel: 'email', address: '' };
-    case 'sms': return { channel: 'sms', phoneNumber: '' };
-  }
-}
+// Re-export for backwards compatibility
+export { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 
 function buildIdentity(
   channel: ChannelType,
