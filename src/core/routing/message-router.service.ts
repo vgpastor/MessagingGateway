@@ -68,7 +68,7 @@ export class MessageRouterService {
       channel: account.channel,
       direction: 'outbound',
       timestamp: result.timestamp,
-      conversationId: command.to,
+      conversationId: result.remoteJid ?? command.to,
       sender: {
         id: 'phoneNumber' in account.identity ? account.identity.phoneNumber : account.id,
         displayName: account.alias,

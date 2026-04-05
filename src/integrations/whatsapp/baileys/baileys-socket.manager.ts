@@ -230,6 +230,23 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     }
   }
 
+  /**
+   * Resolve a WhatsApp LID (e.g. "266563471069327@lid") to a phone-number JID
+   * (e.g. "34643506783@s.whatsapp.net") using Baileys' built-in LID mapping store.
+   * Returns undefined if the mapping is not found.
+   */
+  async resolveLidToPhone(accountId: string, lid: string): Promise<string | undefined> {
+    const socket = this.getSocket(accountId);
+    if (!socket) return undefined;
+    try {
+      const pn = await (socket as unknown as { signalRepository: { lidMapping: { getPNForLID(lid: string): Promise<string | null> } } })
+        .signalRepository.lidMapping.getPNForLID(lid);
+      return pn ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   resolveAuthDir(accountId: string, config: BaileysProviderConfig): string {
     if (config.authDir) {
       return resolve(process.cwd(), config.authDir);

@@ -1,4 +1,4 @@
-import type { WASocket } from '@whiskeysockets/baileys';
+import { type WASocket, jidNormalizedUser } from '@whiskeysockets/baileys';
 import type { MessagingPort } from '../../../core/messaging/messaging.port.js';
 import type { OutboundMessage } from '../../../core/messaging/outbound-message.js';
 import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
@@ -40,6 +40,7 @@ export class BaileysAdapter implements MessagingPort {
         status: 'sent',
         timestamp: new Date(),
         providerMessageId: messageId,
+        remoteJid: response?.key?.remoteJid ? jidNormalizedUser(response.key.remoteJid) : undefined,
       };
     } catch (error) {
       throw new ProviderError(
