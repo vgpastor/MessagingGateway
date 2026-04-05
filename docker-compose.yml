@@ -27,7 +27,7 @@ services:
   postgres:
     image: postgres:17-alpine
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5499}:5432"
     environment:
       POSTGRES_DB: messaging
       POSTGRES_USER: messaging
@@ -45,7 +45,7 @@ services:
   gateway-sqlite:
     build: .
     ports:
-      - "3001:3000"
+      - "3201:3000"
     env_file:
       - path: .env
         required: true
@@ -72,7 +72,7 @@ services:
   gateway-postgres:
     build: .
     ports:
-      - "3002:3000"
+      - "3202:3000"
     env_file:
       - path: .env
         required: true
