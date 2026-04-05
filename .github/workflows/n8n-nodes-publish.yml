@@ -33,19 +33,19 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.check.outputs.changed == 'true'
         with:
-          node-version: 23
+          node-version: 22
           registry-url: 'https://registry.npmjs.org'
-          cache: npm
-          cache-dependency-path: packages/n8n-nodes/package-lock.json
+
+      - name: Upgrade npm for OIDC trusted publishing
+        if: steps.check.outputs.changed == 'true'
+        run: npm install npm -g
 
       - name: Install and build
         if: steps.check.outputs.changed == 'true'
         working-directory: packages/n8n-nodes
         run: npm install && npm run build
 
-      - name: Publish to npm (OIDC)
+      - name: Publish to npm (OIDC trusted publishing)
         if: steps.check.outputs.changed == 'true'
         working-directory: packages/n8n-nodes
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
