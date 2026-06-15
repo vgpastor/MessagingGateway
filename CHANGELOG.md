@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-15
+
+### Fixed
+
+- **WhatsApp device linking** — new QR / pairing-code links were rejected by WhatsApp (`Connection Failure` → `401 loggedOut`) while existing sessions kept working. Baileys now advertises the live WhatsApp Web version via `fetchLatestBaileysVersion()` (fetched once and cached per process), falling back to a pinned version only if the fetch fails. The previous hardcoded version became outdated and blocked new links.
+- **`waVersion` override ignored** — `parseBaileysConfig` dropped the `waVersion` field, so per-account overrides in `accounts.yaml` never took effect. It is now parsed and validated.
+
+### Changed
+
+- Upgraded `@whiskeysockets/baileys` from `^7.0.0-rc.9` to `^7.0.0-rc13`.
+- Added a configurable `qrTimeoutMs` (default `60000`) controlling the Baileys QR / pairing window.
+
 ## [0.3.0] - 2026-04-05
 
 ### Added

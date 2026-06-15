@@ -1,7 +1,9 @@
 import makeWASocket, {
   useMultiFileAuthState,
+  fetchLatestBaileysVersion,
   DisconnectReason,
   type WASocket,
+  type WAVersion,
   type BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import type { Boom } from '@hapi/boom';
@@ -11,6 +13,13 @@ import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
 import type { GroupInfo } from '../../../core/groups/group.types.js';
+
+/**
+ * Fallback WhatsApp Web version, used only when {@link fetchLatestBaileysVersion}
+ * fails (e.g. no network at startup). WhatsApp rejects new device links from
+ * outdated versions, so the live version is always preferred.
+ */
+const FALLBACK_WA_VERSION: WAVersion = [2, 3000, 1034074495];
 
 type BaileysMessageHandler = (event: BaileysEventMap['messages.upsert']) => void;
 type BaileysConnectionHandler = (update: Partial<BaileysEventMap['connection.update']>) => void;
@@ -27,6 +36,7 @@ interface SocketEntry {
 
 export class BaileysSocketManager implements SocketManagerPort<BaileysProviderConfig> {
   private sockets = new Map<string, SocketEntry>();
+  private cachedWaVersion: WAVersion | undefined;
 
   async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
     const existing = this.sockets.get(accountId);
@@ -39,11 +49,14 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
+    const version = await this.resolveWaVersion(config);
+
     const socket = makeWASocket({
       auth: state,
       browser: config.browser ?? ['MessagingGateway', 'Chrome', '1.0.0'],
-      version: config.waVersion ?? [2, 3000, 1034074495],
+      version,
       connectTimeoutMs: config.connectTimeoutMs ?? 60_000,
+      qrTimeout: config.qrTimeoutMs ?? 60_000,
       markOnlineOnConnect: config.markOnlineOnConnect ?? true,
     });
 
@@ -244,6 +257,36 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       return pn ?? undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Resolve the WhatsApp Web version to advertise when opening a socket.
+   *
+   * Priority: explicit per-account `waVersion` → the latest version reported by
+   * Baileys (fetched once and cached for the process lifetime) → the hardcoded
+   * {@link FALLBACK_WA_VERSION}. Keeping the version current is what prevents
+   * WhatsApp from rejecting new device links ("couldn't link device").
+   */
+  private async resolveWaVersion(config: BaileysProviderConfig): Promise<WAVersion> {
+    if (config.waVersion) {
+      return config.waVersion;
+    }
+    if (this.cachedWaVersion) {
+      return this.cachedWaVersion;
+    }
+    try {
+      const { version } = await fetchLatestBaileysVersion();
+      this.cachedWaVersion = version;
+      getLogger().info('Fetched latest WhatsApp Web version', { provider: 'baileys', version });
+      return version;
+    } catch (error) {
+      getLogger().warn('Could not fetch latest WhatsApp Web version, using fallback', {
+        provider: 'baileys',
+        fallback: FALLBACK_WA_VERSION,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return FALLBACK_WA_VERSION;
     }
   }
 

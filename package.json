@@ -1,6 +1,6 @@
 {
   "name": "unified-messaging-gateway",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Unified Messaging Gateway - Single point of contact for all messaging integrations",
   "main": "dist/index.js",
   "scripts": {
@@ -33,7 +33,7 @@
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^5.2.5",
     "@fastify/websocket": "^11.2.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
     "better-sqlite3": "^12.8.0",
     "dotenv": "^17.3.1",
     "fastify": "^5.7.4",
