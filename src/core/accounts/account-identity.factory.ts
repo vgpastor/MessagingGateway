@@ -8,5 +8,6 @@ export function buildDefaultIdentity(channel: ChannelType): AccountIdentity {
     case 'telegram': return { channel: 'telegram', botUsername: '' };
     case 'email': return { channel: 'email', address: '' };
     case 'sms': return { channel: 'sms', phoneNumber: '' };
+    case 'mattermost': return { channel: 'mattermost' };
   }
 }

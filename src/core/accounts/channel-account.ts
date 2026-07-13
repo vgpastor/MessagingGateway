@@ -10,7 +10,7 @@ export interface RateLimitConfig {
 
 export interface AccountMetadata {
   owner: string;
-  environment: 'production' | 'staging';
+  environment: 'production' | 'staging' | 'development';
   webhookPath?: string;
   rateLimit?: RateLimitConfig;
   tags: string[];

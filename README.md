@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/@messaging-gateway/sdk?logo=npm)](https://www.npmjs.com/package/@messaging-gateway/sdk)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
 
-A single API to send and receive messages across **WhatsApp**, **Telegram**, **Email**, and **SMS**. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
+A single API to send and receive messages across **WhatsApp**, **Telegram**, **Email**, **SMS**, and **Mattermost**. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
 
 **Key highlights:**
 - One API to rule all messaging channels
@@ -48,7 +48,7 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 
 ## Features
 
-- **Multi-channel**: WhatsApp (Baileys, wwebjs-api), Telegram, Email (Brevo), SMS (Twilio, MessageBird)
+- **Multi-channel**: WhatsApp (Baileys, wwebjs-api), Telegram, Email (Brevo), SMS (Twilio, MessageBird), Mattermost (WebSocket)
 - **Unified API**: One endpoint to send, one format for all inbound messages
 - **Message persistence**: Store all inbound and outbound messages (SQLite or PostgreSQL)
 - **Full-text search**: Search across stored messages (FTS5 / TSVECTOR)
@@ -106,6 +106,19 @@ accounts:
       owner: my-org
       environment: production
       tags: [whatsapp, main]
+
+  - id: my-mattermost
+    alias: "My Mattermost"
+    channel: mattermost
+    provider: mattermost
+    identity:
+      botUsername: "mybot"
+    providerConfig:
+      serverUrl: "https://mm.example.com"
+    metadata:
+      owner: my-org
+      environment: production
+      tags: [mattermost, main]
 ```
 
 ## API Reference
@@ -194,6 +207,8 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `POST` | `/webhooks/telegram/:accountId/update` | Telegram |
 | `POST` | `/webhooks/email/:accountId/inbound` | Email |
 | `POST` | `/webhooks/sms/:accountId/inbound` · `/status` | SMS |
+
+> **Mattermost** inbound uses a persistent WebSocket connection (no webhook endpoint). The bot connects automatically on startup via `connectManagedProviders`.
 
 **Real-time** 
 

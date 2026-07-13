@@ -2,7 +2,8 @@ export type AccountIdentity =
   | WhatsAppIdentity
   | TelegramIdentity
   | EmailIdentity
-  | SmsIdentity;
+  | SmsIdentity
+  | MattermostIdentity;
 
 export interface WhatsAppIdentity {
   channel: 'whatsapp';
@@ -26,4 +27,10 @@ export interface SmsIdentity {
   channel: 'sms';
   phoneNumber: string;
   senderId?: string;
+}
+
+export interface MattermostIdentity {
+  channel: 'mattermost';
+  botId?: string;
+  botUsername?: string;
 }

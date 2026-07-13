@@ -1,6 +1,6 @@
 # n8n-nodes-messaging-gateway
 
-Community nodes for [n8n](https://n8n.io/) to integrate with [Unified Messaging Gateway](https://github.com/vgpastor/MessagingGateway) — send and receive messages across WhatsApp, Telegram, Email, and SMS from your n8n workflows.
+Community nodes for [n8n](https://n8n.io/) to integrate with [Unified Messaging Gateway](https://github.com/vgpastor/MessagingGateway) — send and receive messages across WhatsApp, Telegram, Email, SMS, and Mattermost from your n8n workflows.
 
 ## Installation
 
