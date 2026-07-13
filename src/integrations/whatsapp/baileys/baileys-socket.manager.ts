@@ -7,8 +7,8 @@ import makeWASocket, {
   type BaileysEventMap,
 } from '@whiskeysockets/baileys';
 import type { Boom } from '@hapi/boom';
-import { resolve } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
+import { mkdir, rm } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
@@ -37,8 +37,14 @@ interface SocketEntry {
 export class BaileysSocketManager implements SocketManagerPort<BaileysProviderConfig> {
   private sockets = new Map<string, SocketEntry>();
   private cachedWaVersion: WAVersion | undefined;
+  /** Accounts whose session is being cleared; blocks (re)connects during teardown. */
+  private clearing = new Set<string>();
 
   async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
+    if (this.clearing.has(accountId)) {
+      return;
+    }
+
     const existing = this.sockets.get(accountId);
     if (existing) {
       return;
@@ -94,7 +100,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         const statusCode = error?.output?.statusCode;
         const shouldReconnect =
           statusCode !== DisconnectReason.loggedOut &&
-          (config.retryOnDisconnect ?? true);
+          (config.retryOnDisconnect ?? true) &&
+          !this.clearing.has(accountId);
         const maxRetries = config.maxRetries ?? 5;
 
         if (shouldReconnect && entry.retryCount < maxRetries) {
@@ -165,6 +172,55 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     if (entry) {
       await entry.socket.logout().catch(() => {});
       this.sockets.delete(accountId);
+    }
+  }
+
+  /**
+   * Close the socket locally and delete the persisted multi-file auth state so
+   * the next {@link connect} starts a fresh pairing and emits a new QR.
+   *
+   * Unlike {@link disconnect} this does NOT call `logout()` (a network round-trip
+   * that can hang on expired creds) — the files are deleted anyway. The account
+   * is flagged in {@link clearing} for the duration so the auto-reconnect loop
+   * can't recreate the auth dir mid-teardown.
+   *
+   * ponytail: a reconnect already in flight *before* this call (past the clearing
+   * check) could still race the delete; acceptable — worst case is an extra fresh
+   * QR, and the loop is short (no backoff, maxRetries) so it rarely overlaps.
+   */
+  async clearSession(accountId: string, config: BaileysProviderConfig): Promise<void> {
+    const authDir = this.resolveAuthDir(accountId, config);
+    this.assertDeletableAuthDir(authDir);
+
+    this.clearing.add(accountId);
+    try {
+      const entry = this.sockets.get(accountId);
+      if (entry) {
+        // Drop the connection handlers first so the imminent 'close' can't
+        // schedule a reconnect, then close locally (no network logout).
+        try { entry.socket.ev.removeAllListeners('connection.update'); } catch { /* best-effort */ }
+        try { entry.socket.end(undefined); } catch { /* best-effort */ }
+        this.sockets.delete(accountId);
+      }
+      await rm(authDir, { recursive: true, force: true });
+      getLogger().info('Session cleared', { provider: 'baileys', accountId, authDir });
+    } finally {
+      this.clearing.delete(accountId);
+    }
+  }
+
+  /**
+   * Guard the destructive {@link clearSession} `rm -rf`: refuse to delete any
+   * path outside the managed auth root. `authDir` comes from per-account
+   * `providerConfig`, which the account-creation API accepts as free-form, so an
+   * unchecked value like `../../..` would delete arbitrary directories.
+   */
+  private assertDeletableAuthDir(authDir: string): void {
+    const root = resolve(process.cwd(), 'data', 'baileys-auth');
+    if (!authDir.startsWith(root + sep)) {
+      const error = new Error(`Refusing to delete auth dir outside '${root}': '${authDir}'`);
+      (error as { code?: string }).code = 'INVALID_AUTH_DIR';
+      throw error;
     }
   }
 
@@ -305,3 +361,4 @@ export function createBaileysSocketManager(): BaileysSocketManager {
 
 /** Default singleton instance */
 export const baileysSocketManager = createBaileysSocketManager();
+

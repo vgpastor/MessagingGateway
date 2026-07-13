@@ -32,6 +32,13 @@ export interface ConnectionManagerPort {
   /** Disconnect and clear session */
   disconnect(accountId: string): Promise<void>;
 
+  /**
+   * Clear the persisted session/credentials so the next {@link connect} starts a
+   * fresh pairing and emits a new QR. Use when stored auth is expired and the
+   * account is stuck reconnecting without producing a QR. Optional capability.
+   */
+  clearSession?(accountId: string, providerConfig: Record<string, unknown>): Promise<void>;
+
   /** List all groups the account participates in (optional capability) */
   getGroups?(accountId: string): Promise<GroupInfo[]>;
 
@@ -42,3 +49,4 @@ export interface ConnectionManagerPort {
 export interface PairingCodeCapable {
   requestPairingCode(accountId: string, phoneNumber: string): Promise<string>;
 }
+
