@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-13
+
+### Added
+
+- **Mattermost integration** — full channel support via WebSocket inbound + REST v4 outbound
+  - New `mattermost` channel and provider type
+  - `MessagingPort` adapter: text, media upload (multipart), threaded replies via `root_id` resolution
+  - `ConnectionManagerPort` + `SocketManagerPort`: persistent WebSocket (`wss://…/api/v4/websocket`) with authentication, reconnect backoff, dedup guard, and bot-message skip
+  - `ProviderHealthChecker`: `GET /api/v4/users/me` for identity discovery and credential validation
+  - Content mapper: `mapPostToContent` (text, image, audio, video, document from `file_ids`) and `buildMattermostEnvelope`
+  - `wireEvents`: socket `posted` → `UnifiedEnvelope` → `MESSAGE_INBOUND`; connection status → `CONNECTION_UPDATE`
+  - Auto-connects via `connectManagedProviders` (no webhook controller or `server.ts` change)
+  - `ws` WebSocket client dependency added
+  - `MattermostIdentity` added to `AccountIdentity` union
+  - 27 unit tests (adapter, mapper, health checker)
+
 ## [0.4.1] - 2026-07-13
 
 ### Added

@@ -98,7 +98,7 @@ export async function accountsController(
       querystring: {
         type: 'object',
         properties: {
-          channel: { type: 'string', enum: ['whatsapp', 'telegram', 'email', 'sms'] },
+          channel: { type: 'string', enum: ['whatsapp', 'telegram', 'email', 'sms', 'mattermost'] },
           owner: { type: 'string' },
         },
       },

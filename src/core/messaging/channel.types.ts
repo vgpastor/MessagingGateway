@@ -1,4 +1,4 @@
-export type ChannelType = 'whatsapp' | 'telegram' | 'email' | 'sms';
+export type ChannelType = 'whatsapp' | 'telegram' | 'email' | 'sms' | 'mattermost';
 
 export type ProviderType =
   | 'wwebjs-api'
@@ -9,7 +9,8 @@ export type ProviderType =
   | 'brevo'
   | 'ses'
   | 'twilio'
-  | 'messagebird';
+  | 'messagebird'
+  | 'mattermost';
 
 export type ContentType =
   | 'text'

@@ -67,7 +67,7 @@ export const unifiedEnvelopeSchema = {
   properties: {
     id: { type: 'string' as const },
     accountId: { type: 'string' as const },
-    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
+    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms', 'mattermost'] },
     direction: { type: 'string' as const, enum: ['inbound', 'outbound'] },
     timestamp: { type: 'string' as const, format: 'date-time' },
     conversationId: { type: 'string' as const },
@@ -169,7 +169,7 @@ export const accountResponseSchema = {
   properties: {
     id: { type: 'string' as const },
     alias: { type: 'string' as const },
-    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
+    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms', 'mattermost'] },
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
@@ -211,7 +211,7 @@ export const createAccountBodySchema = {
   properties: {
     id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-acme")' },
     alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
-    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
+    channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms', 'mattermost'] },
     provider: {
       type: 'string' as const,
       enum: ['wwebjs-api', 'evolution-api', 'meta-cloud-api', 'baileys', 'telegram-bot-api', 'brevo', 'ses', 'twilio', 'messagebird'],

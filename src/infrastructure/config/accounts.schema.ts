@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const channelTypes = ['whatsapp', 'telegram', 'email', 'sms'] as const;
+const channelTypes = ['whatsapp', 'telegram', 'email', 'sms', 'mattermost'] as const;
 
 const providerTypes = [
   'wwebjs-api',
@@ -12,6 +12,7 @@ const providerTypes = [
   'ses',
   'twilio',
   'messagebird',
+  'mattermost',
 ] as const;
 
 const whatsappIdentitySchema = z.object({
@@ -34,6 +35,11 @@ const smsIdentitySchema = z.object({
   senderId: z.string().optional(),
 });
 
+const mattermostIdentitySchema = z.object({
+  botId: z.string().optional(),
+  botUsername: z.string().optional(),
+});
+
 const rateLimitSchema = z.object({
   maxPerMinute: z.number().positive(),
   maxPerDay: z.number().positive(),
@@ -50,13 +56,14 @@ const accountSchema = z.object({
     telegramIdentitySchema,
     emailIdentitySchema,
     smsIdentitySchema,
+    mattermostIdentitySchema,
   ]).optional(),
   credentialsRef: z.string().min(1).optional(),
   credentials: z.string().min(1).optional(),
   providerConfig: z.record(z.string(), z.unknown()).default({}),
   metadata: z.object({
     owner: z.string().min(1),
-    environment: z.enum(['production', 'staging']).default('production'),
+    environment: z.enum(['production', 'staging', 'development']).default('production'),
     webhookPath: z.string().optional(),
     rateLimit: rateLimitSchema.optional(),
     tags: z.array(z.string()).default([]),

@@ -71,3 +71,18 @@ accounts:
   #     owner: my-org
   #     environment: production
   #     tags: [sms, alerts]
+
+  # === Mattermost (WebSocket — self-hosted) ===
+  # - id: mm-main
+  #   alias: "My Mattermost"
+  #   channel: mattermost
+  #   provider: mattermost
+  #   identity:
+  #     botUsername: mybot
+  #   credentialsRef: MM_BOT_TOKEN  # reads MM_BOT_TOKEN env var
+  #   providerConfig:
+  #     serverUrl: "https://mm.example.com"
+  #   metadata:
+  #     owner: my-org
+  #     environment: production
+  #     tags: [mattermost, main]

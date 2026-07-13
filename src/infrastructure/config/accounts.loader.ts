@@ -86,5 +86,11 @@ function buildIdentity(
         phoneNumber: raw['phoneNumber'] as string,
         senderId: raw['senderId'] as string | undefined,
       };
+    case 'mattermost':
+      return {
+        channel: 'mattermost',
+        botId: raw['botId'] as string | undefined,
+        botUsername: raw['botUsername'] as string | undefined,
+      };
   }
 }

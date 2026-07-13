@@ -12,6 +12,7 @@ import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
 import { twilioProvider } from './integrations/sms/twilio/index.js';
 import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
+import { mattermostProvider } from './integrations/mattermost/api-v4/index.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { Events, createEvent } from './core/events.js';
@@ -34,6 +35,7 @@ function createProviderRegistry(): ProviderRegistry {
   providerRegistry.register(brevoProvider);
   providerRegistry.register(twilioProvider);
   providerRegistry.register(messagebirdProvider);
+  providerRegistry.register(mattermostProvider);
   providerRegistry.setCredentialResolver(resolveProviderCredential);
 
   const logger = getLogger();
@@ -138,7 +140,13 @@ async function connectManagedProviders(
     const bundle = providerRegistry.getOrThrow(account.provider);
     try {
       const connectionManager = bundle.connection!();
-      await connectionManager.connect(account.id, account.providerConfig);
+      // Resolve credential and inject into providerConfig so connection managers can access it
+      const resolvedCredential = resolveProviderCredential(account.credentialsRef, account.provider, account.credentials);
+      const configWithCredential = { ...account.providerConfig };
+      if (resolvedCredential) {
+        configWithCredential.token = resolvedCredential;
+      }
+      await connectionManager.connect(account.id, configWithCredential);
 
       if (bundle.wireEvents) {
         await bundle.wireEvents(account, eventBus);

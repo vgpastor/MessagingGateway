@@ -4,7 +4,7 @@
 
 A unified messaging platform that abstracts away provider-specific complexity, enabling:
 
-- **Send and receive** messages across any channel (WhatsApp, Telegram, Instagram, Email, SMS) through a single API
+- **Send and receive** messages across any channel (WhatsApp, Telegram, Instagram, Email, SMS, Mattermost) through a single API
 - **Cross-platform interactions**: a poll created on WhatsApp can be answered from Telegram; a conversation can span multiple channels
 - **Real-time streaming**: clients subscribe to events via WebSocket, webhooks, or SSE
 - **Provider agnostic**: adding a new provider (e.g. Instagram, Discord, Slack) means implementing a single adapter interface — zero changes to core logic
@@ -47,6 +47,7 @@ The system is **event-driven at every layer**: provider events flow inward throu
 │                                                               │
 │  Baileys  ·  wwebjs  ·  Meta Cloud API  ·  Telegram Bot API  │
 │  Brevo    ·  SES     ·  Twilio          ·  MessageBird        │
+│  Mattermost (WebSocket)                                       │
 │  Instagram Graph API  ·  Discord (future) ·  Slack (future)   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -474,6 +475,15 @@ src/
 │   │   └── bot-api/
 │   │       ├── index.ts
 │   │       └── telegram.health.ts
+│   ├── mattermost/
+│   │   ├── mattermost-channel.types.ts
+│   │   ├── mattermost-content.mapper.ts
+│   │   └── api-v4/
+│   │       ├── index.ts
+│   │       ├── mattermost.adapter.ts
+│   │       ├── mattermost.socket-manager.ts
+│   │       ├── mattermost.connection-manager.ts
+│   │       └── mattermost.health-checker.ts
 │   ├── email/
 │   │   └── brevo/
 │   │       ├── index.ts
