@@ -564,6 +564,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -594,13 +595,23 @@ export async function accountsController(
       });
     }
 
-    await clearSession(account.id, account.providerConfig);
-    await manager.connect(account.id, account.providerConfig);
+    try {
+      await clearSession(account.id, account.providerConfig);
+      await manager.connect(account.id, account.providerConfig);
+    } catch (error) {
+      fastify.log.error({ accountId: account.id, err: error }, 'Account session reset failed');
+      return reply.status(500).send({
+        error: 'Internal Server Error',
+        code: 'RESET_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to reset session',
+      });
+    }
+
     fastify.log.info({ accountId: account.id }, 'Account session reset');
 
     return {
       accountId: account.id,
-      status: 'reset',
+      status: 'connecting',
       message: 'Session cleared and reconnecting. Poll GET /api/v1/accounts/:id to retrieve the new QR.',
     };
   });

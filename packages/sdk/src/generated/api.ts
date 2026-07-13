@@ -925,6 +925,12 @@ export type PostApiV1AccountsIdReset404 = {
   message: string;
 };
 
+export type PostApiV1AccountsIdReset500 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
 /**
  * Routing criteria (used if "from" is not provided)
  */
@@ -2056,11 +2062,16 @@ export type postApiV1AccountsIdResetResponse404 = {
   data: PostApiV1AccountsIdReset404
   status: 404
 }
+
+export type postApiV1AccountsIdResetResponse500 = {
+  data: PostApiV1AccountsIdReset500
+  status: 500
+}
     
 export type postApiV1AccountsIdResetResponseSuccess = (postApiV1AccountsIdResetResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404) & {
+export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404 | postApiV1AccountsIdResetResponse500) & {
   headers: Headers;
 };
 
