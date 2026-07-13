@@ -134,7 +134,8 @@ curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 | `PUT` | `/api/v1/accounts/:id` | Yes | Update account |
 | `DELETE` | `/api/v1/accounts/:id` | Yes | Delete account |
 | `POST` | `/api/v1/accounts/:id/connect` | Yes | Initiate connection (generates QR) |
-| `POST` | `/api/v1/accounts/:id/disconnect` | Yes | Disconnect |
+| `POST` | `/api/v1/accounts/:id/disconnect` | Yes | Disconnect (keeps stored credentials) |
+| `POST` | `/api/v1/accounts/:id/reset` | Yes | Clear the stored session and reconnect (fresh QR) — use when auth is expired and the account is stuck reconnecting without emitting a QR |
 | `POST` | `/api/v1/messages/send` | Yes | Send a message |
 | `GET` | `/api/v1/messages` | Yes | Query stored messages (requires `STORAGE_ENABLED`) |
 | `GET` | `/api/v1/messages/:id` | Yes | Get a stored message by ID |
