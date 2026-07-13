@@ -15,7 +15,7 @@ export async function sendController(
   fastify.post('/api/v1/messages/send', {
     schema: {
       description: 'Send a message through a specific account or via routing rules',
-      tags: ['Messaging'],
+      tags: ['Messages'],
       body: sendMessageBodySchema,
       response: {
         200: messageResultSchema,

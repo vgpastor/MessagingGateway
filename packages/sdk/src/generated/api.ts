@@ -1312,6 +1312,108 @@ export type GetApiV1AccountsIdGroupsGroupId404 = {
   message: string;
 };
 
+export type GetApiV1MessagesParams = {
+accountId?: string;
+channel?: string;
+conversationId?: string;
+senderId?: string;
+contentType?: string;
+direction?: GetApiV1MessagesDirection;
+since?: string;
+until?: string;
+limit?: string;
+offset?: string;
+};
+
+export type GetApiV1MessagesDirection = typeof GetApiV1MessagesDirection[keyof typeof GetApiV1MessagesDirection];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const GetApiV1MessagesDirection = {
+  inbound: 'inbound',
+  outbound: 'outbound',
+} as const;
+
+export type GetApiV1MessagesId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type GetApiV1MessagesStatsParams = {
+accountId?: string;
+since?: string;
+};
+
+export type GetApiV1MessagesSearchParams = {
+/**
+ * Search query (FTS5 syntax)
+ */
+q: string;
+accountId?: string;
+limit?: string;
+offset?: string;
+};
+
+export type GetApiV1MessagesAnalyticsParams = {
+accountId?: string;
+since?: string;
+until?: string;
+};
+
+export type GetApiV1MessagesExportParams = {
+accountId?: string;
+since?: string;
+until?: string;
+format?: GetApiV1MessagesExportFormat;
+/**
+ * Max messages to export (default: 1000)
+ */
+limit?: string;
+offset?: string;
+};
+
+export type GetApiV1MessagesExportFormat = typeof GetApiV1MessagesExportFormat[keyof typeof GetApiV1MessagesExportFormat];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const GetApiV1MessagesExportFormat = {
+  csv: 'csv',
+  json: 'json',
+} as const;
+
+export type GetApiV1ConversationsConversationIdContextParams = {
+/**
+ * Max messages to return (default: 50)
+ */
+limit?: string;
+/**
+ * Only messages after this UTC timestamp
+ */
+since?: string;
+/**
+ * Filter by account
+ */
+accountId?: string;
+/**
+ * Output format (default: openai)
+ */
+format?: GetApiV1ConversationsConversationIdContextFormat;
+/**
+ * Include media descriptions (default: true)
+ */
+includeMedia?: string;
+};
+
+export type GetApiV1ConversationsConversationIdContextFormat = typeof GetApiV1ConversationsConversationIdContextFormat[keyof typeof GetApiV1ConversationsConversationIdContextFormat];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const GetApiV1ConversationsConversationIdContextFormat = {
+  openai: 'openai',
+  raw: 'raw',
+} as const;
+
 /**
  * Health check endpoint
  */
@@ -2607,6 +2709,302 @@ export const getApiV1AccountsIdGroupsGroupId = async (id: string,
     groupId: string, options?: RequestInit): Promise<getApiV1AccountsIdGroupsGroupIdResponse> => {
   
   return customFetch<getApiV1AccountsIdGroupsGroupIdResponse>(getGetApiV1AccountsIdGroupsGroupIdUrl(id,groupId),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Query stored messages with filters. Requires STORAGE_ENABLED=true.
+ */
+export type getApiV1MessagesResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1MessagesResponseSuccess = (getApiV1MessagesResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1MessagesResponse = (getApiV1MessagesResponseSuccess)
+
+export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/messages?${stringifiedParams}` : `/api/v1/messages`
+}
+
+export const getApiV1Messages = async (params?: GetApiV1MessagesParams, options?: RequestInit): Promise<getApiV1MessagesResponse> => {
+  
+  return customFetch<getApiV1MessagesResponse>(getGetApiV1MessagesUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Get a stored message by ID
+ */
+export type getApiV1MessagesIdResponse404 = {
+  data: GetApiV1MessagesId404
+  status: 404
+}
+    
+;
+export type getApiV1MessagesIdResponseError = (getApiV1MessagesIdResponse404) & {
+  headers: Headers;
+};
+
+export type getApiV1MessagesIdResponse = (getApiV1MessagesIdResponseError)
+
+export const getGetApiV1MessagesIdUrl = (id: string,) => {
+
+
+  
+
+  return `/api/v1/messages/${id}`
+}
+
+export const getApiV1MessagesId = async (id: string, options?: RequestInit): Promise<getApiV1MessagesIdResponse> => {
+  
+  return customFetch<getApiV1MessagesIdResponse>(getGetApiV1MessagesIdUrl(id),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Get message count statistics
+ */
+export type getApiV1MessagesStatsResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1MessagesStatsResponseSuccess = (getApiV1MessagesStatsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1MessagesStatsResponse = (getApiV1MessagesStatsResponseSuccess)
+
+export const getGetApiV1MessagesStatsUrl = (params?: GetApiV1MessagesStatsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/messages/stats?${stringifiedParams}` : `/api/v1/messages/stats`
+}
+
+export const getApiV1MessagesStats = async (params?: GetApiV1MessagesStatsParams, options?: RequestInit): Promise<getApiV1MessagesStatsResponse> => {
+  
+  return customFetch<getApiV1MessagesStatsResponse>(getGetApiV1MessagesStatsUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Full-text search across stored messages. Requires STORAGE_ENABLED=true.
+ */
+export type getApiV1MessagesSearchResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1MessagesSearchResponseSuccess = (getApiV1MessagesSearchResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1MessagesSearchResponse = (getApiV1MessagesSearchResponseSuccess)
+
+export const getGetApiV1MessagesSearchUrl = (params: GetApiV1MessagesSearchParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/messages/search?${stringifiedParams}` : `/api/v1/messages/search`
+}
+
+export const getApiV1MessagesSearch = async (params: GetApiV1MessagesSearchParams, options?: RequestInit): Promise<getApiV1MessagesSearchResponse> => {
+  
+  return customFetch<getApiV1MessagesSearchResponse>(getGetApiV1MessagesSearchUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Returns aggregated message statistics. Requires STORAGE_ENABLED=true.
+ */
+export type getApiV1MessagesAnalyticsResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1MessagesAnalyticsResponseSuccess = (getApiV1MessagesAnalyticsResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1MessagesAnalyticsResponse = (getApiV1MessagesAnalyticsResponseSuccess)
+
+export const getGetApiV1MessagesAnalyticsUrl = (params?: GetApiV1MessagesAnalyticsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/messages/analytics?${stringifiedParams}` : `/api/v1/messages/analytics`
+}
+
+export const getApiV1MessagesAnalytics = async (params?: GetApiV1MessagesAnalyticsParams, options?: RequestInit): Promise<getApiV1MessagesAnalyticsResponse> => {
+  
+  return customFetch<getApiV1MessagesAnalyticsResponse>(getGetApiV1MessagesAnalyticsUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.
+ */
+export type getApiV1MessagesExportResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1MessagesExportResponseSuccess = (getApiV1MessagesExportResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1MessagesExportResponse = (getApiV1MessagesExportResponseSuccess)
+
+export const getGetApiV1MessagesExportUrl = (params?: GetApiV1MessagesExportParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/messages/export?${stringifiedParams}` : `/api/v1/messages/export`
+}
+
+export const getApiV1MessagesExport = async (params?: GetApiV1MessagesExportParams, options?: RequestInit): Promise<getApiV1MessagesExportResponse> => {
+  
+  return customFetch<getApiV1MessagesExportResponse>(getGetApiV1MessagesExportUrl(params),
+  {      
+    ...options,
+    method: 'GET'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Get conversation history formatted for AI consumption. Returns messages in chronological order with participant info. Use format=openai for ChatGPT-compatible output, format=raw for full envelopes.
+ */
+export type getApiV1ConversationsConversationIdContextResponse200 = {
+  data: void
+  status: 200
+}
+    
+export type getApiV1ConversationsConversationIdContextResponseSuccess = (getApiV1ConversationsConversationIdContextResponse200) & {
+  headers: Headers;
+};
+;
+
+export type getApiV1ConversationsConversationIdContextResponse = (getApiV1ConversationsConversationIdContextResponseSuccess)
+
+export const getGetApiV1ConversationsConversationIdContextUrl = (conversationId: string,
+    params?: GetApiV1ConversationsConversationIdContextParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/conversations/${conversationId}/context?${stringifiedParams}` : `/api/v1/conversations/${conversationId}/context`
+}
+
+export const getApiV1ConversationsConversationIdContext = async (conversationId: string,
+    params?: GetApiV1ConversationsConversationIdContextParams, options?: RequestInit): Promise<getApiV1ConversationsConversationIdContextResponse> => {
+  
+  return customFetch<getApiV1ConversationsConversationIdContextResponse>(getGetApiV1ConversationsConversationIdContextUrl(conversationId,params),
   {      
     ...options,
     method: 'GET'

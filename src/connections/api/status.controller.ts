@@ -17,7 +17,7 @@ export async function statusController(
     {
       schema: {
         description: 'Get the delivery status of a sent message',
-        tags: ['Messaging'],
+        tags: ['Messages'],
         params: {
           type: 'object',
           properties: { id: { type: 'string' } },
@@ -78,7 +78,7 @@ export async function statusController(
     {
       schema: {
         description: 'Mark a message as read',
-        tags: ['Messaging'],
+        tags: ['Messages'],
         params: {
           type: 'object',
           properties: { id: { type: 'string' } },
