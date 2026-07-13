@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Unified Messaging Gateway
  * Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.
- * OpenAPI spec version: 0.2.3
+ * OpenAPI spec version: 0.4.0
  */
 import { customFetch } from '../fetch-mutator.js';
 export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
@@ -902,6 +902,24 @@ export type PostApiV1AccountsIdDisconnect400 = {
 };
 
 export type PostApiV1AccountsIdDisconnect404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdReset200 = {
+  accountId: string;
+  status: string;
+  message?: string;
+};
+
+export type PostApiV1AccountsIdReset400 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdReset404 = {
   error: string;
   code?: string;
   message: string;
@@ -2011,6 +2029,54 @@ export const getPostApiV1AccountsIdDisconnectUrl = (id: string,) => {
 export const postApiV1AccountsIdDisconnect = async (id: string, options?: RequestInit): Promise<postApiV1AccountsIdDisconnectResponse> => {
   
   return customFetch<postApiV1AccountsIdDisconnectResponse>(getPostApiV1AccountsIdDisconnectUrl(id),
+  {      
+    ...options,
+    method: 'POST'
+    
+    
+  }
+);}
+
+
+
+/**
+ * Clear the stored session/credentials and restart the connection so a fresh QR is generated. Use when the stored auth is expired and the account is stuck reconnecting without emitting a QR. After calling this, poll GET /api/v1/accounts/:id to retrieve the new QR code.
+ */
+export type postApiV1AccountsIdResetResponse200 = {
+  data: PostApiV1AccountsIdReset200
+  status: 200
+}
+
+export type postApiV1AccountsIdResetResponse400 = {
+  data: PostApiV1AccountsIdReset400
+  status: 400
+}
+
+export type postApiV1AccountsIdResetResponse404 = {
+  data: PostApiV1AccountsIdReset404
+  status: 404
+}
+    
+export type postApiV1AccountsIdResetResponseSuccess = (postApiV1AccountsIdResetResponse200) & {
+  headers: Headers;
+};
+export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404) & {
+  headers: Headers;
+};
+
+export type postApiV1AccountsIdResetResponse = (postApiV1AccountsIdResetResponseSuccess | postApiV1AccountsIdResetResponseError)
+
+export const getPostApiV1AccountsIdResetUrl = (id: string,) => {
+
+
+  
+
+  return `/api/v1/accounts/${id}/reset`
+}
+
+export const postApiV1AccountsIdReset = async (id: string, options?: RequestInit): Promise<postApiV1AccountsIdResetResponse> => {
+  
+  return customFetch<postApiV1AccountsIdResetResponse>(getPostApiV1AccountsIdResetUrl(id),
   {      
     ...options,
     method: 'POST'
