@@ -542,4 +542,67 @@ export async function accountsController(
 
     return { accountId: account.id, status: 'disconnected' };
   });
+
+  // POST /api/v1/accounts/:id/reset — clear the stored session and reconnect (fresh QR)
+  fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/reset', {
+    schema: {
+      description:
+        'Clear the stored session/credentials and restart the connection so a fresh QR is generated. ' +
+        'Use when the stored auth is expired and the account is stuck reconnecting without emitting a QR. ' +
+        'After calling this, poll GET /api/v1/accounts/:id to retrieve the new QR code.',
+      tags: ['Accounts'],
+      params: idParamsSchema,
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            accountId: { type: 'string' },
+            status: { type: 'string' },
+            message: { type: 'string' },
+          },
+          required: ['accountId', 'status'],
+        },
+        400: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const account = await deps.accountRepository.findById(request.params.id);
+    if (!account) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${request.params.id}' not found`,
+      });
+    }
+
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
+    if (!manager) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'NOT_SELF_AUTH',
+        message: `Provider '${account.provider}' does not support managed connections.`,
+      });
+    }
+
+    const clearSession = manager.clearSession?.bind(manager);
+    if (!clearSession) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'RESET_NOT_SUPPORTED',
+        message: `Provider '${account.provider}' does not support session reset.`,
+      });
+    }
+
+    await clearSession(account.id, account.providerConfig);
+    await manager.connect(account.id, account.providerConfig);
+    fastify.log.info({ accountId: account.id }, 'Account session reset');
+
+    return {
+      accountId: account.id,
+      status: 'reset',
+      message: 'Session cleared and reconnecting. Poll GET /api/v1/accounts/:id to retrieve the new QR.',
+    };
+  });
 }
+

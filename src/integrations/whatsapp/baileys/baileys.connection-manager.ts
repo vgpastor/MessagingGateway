@@ -35,6 +35,11 @@ export class BaileysConnectionManager implements ConnectionManagerPort, PairingC
     await this.socketManager.disconnect(accountId);
   }
 
+  async clearSession(accountId: string, providerConfig: Record<string, unknown>): Promise<void> {
+    const config = parseBaileysConfig(providerConfig);
+    await this.socketManager.clearSession(accountId, config);
+  }
+
   async getGroups(accountId: string): Promise<GroupInfo[]> {
     return this.socketManager.getGroups(accountId);
   }
@@ -43,3 +48,4 @@ export class BaileysConnectionManager implements ConnectionManagerPort, PairingC
     return this.socketManager.getGroupInfo(accountId, groupId);
   }
 }
+

@@ -8,7 +8,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import type { Boom } from '@hapi/boom';
 import { resolve } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
@@ -168,6 +168,17 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     }
   }
 
+  /**
+   * Disconnect (best-effort) and delete the persisted multi-file auth state so
+   * the next {@link connect} starts a fresh pairing and emits a new QR.
+   */
+  async clearSession(accountId: string, config: BaileysProviderConfig): Promise<void> {
+    await this.disconnect(accountId).catch(() => {});
+    const authDir = this.resolveAuthDir(accountId, config);
+    await rm(authDir, { recursive: true, force: true });
+    getLogger().info('Session cleared', { provider: 'baileys', accountId, authDir });
+  }
+
   isConnected(accountId: string): boolean {
     const entry = this.sockets.get(accountId);
     return entry?.connectionStatus === 'connected';
@@ -305,3 +316,4 @@ export function createBaileysSocketManager(): BaileysSocketManager {
 
 /** Default singleton instance */
 export const baileysSocketManager = createBaileysSocketManager();
+
