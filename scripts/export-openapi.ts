@@ -4,6 +4,29 @@
  */
 import { resolve } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
+import type { FullMessageStorePort } from '../src/core/persistence/message-store.port.js';
+
+/**
+ * No-op message store used only so the persistence-gated message/conversation
+ * routes register and appear in the exported spec. Never stores or returns data.
+ */
+const emptyResult = { messages: [], total: 0, limit: 0, offset: 0 };
+const schemaMessageStore: FullMessageStorePort = {
+  save: async () => {},
+  query: async () => emptyResult,
+  findById: async () => undefined,
+  count: async () => 0,
+  init: async () => {},
+  close: async () => {},
+  search: async () => emptyResult,
+  getStats: async () => ({
+    totalMessages: 0, byChannel: {}, byContentType: {}, byDirection: {},
+    topConversations: [], byHour: new Array(24).fill(0),
+  }),
+  getConversationHistory: async (conversationId: string) => ({
+    conversationId, participantCount: 0, participants: [], totalMessages: 0, envelopes: [],
+  }),
+};
 
 async function main() {
   process.env['NODE_ENV'] = 'development';
@@ -29,6 +52,7 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, webhookForwarder,
+    messageStore: schemaMessageStore,
     apiKey: 'schema-export', port: 0, logLevel: 'silent',
   });
 

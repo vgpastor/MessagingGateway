@@ -124,30 +124,82 @@ curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 
 ### Endpoints
 
+The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); when `SWAGGER_ENABLED=true` it is also served interactively at `GET /docs`. The tables below summarise it.
+
+**System** (no auth)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Health check (returns status, version, uptime) |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/openapi.json` | OpenAPI 3 specification |
+
+**Accounts** (auth required)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/accounts` | List all accounts |
+| `GET` | `/api/v1/accounts/:id` | Get account (includes QR code while connecting) |
+| `POST` | `/api/v1/accounts` | Create account |
+| `PUT` | `/api/v1/accounts/:id` | Update account |
+| `DELETE` | `/api/v1/accounts/:id` | Delete account |
+| `POST` | `/api/v1/accounts/:id/connect` | Initiate connection (generates QR) — self-auth providers |
+| `POST` | `/api/v1/accounts/:id/pair` | Request a pairing code instead of a QR — self-auth providers |
+| `POST` | `/api/v1/accounts/:id/disconnect` | Disconnect the socket (keeps stored credentials) |
+| `POST` | `/api/v1/accounts/:id/reset` | Clear the stored session and reconnect for a fresh QR — use when auth is expired and the account is stuck reconnecting without emitting a QR |
+| `GET` | `/api/v1/accounts/:id/health` | Per-account connection health |
+
+**Groups** (auth required)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/accounts/:id/groups` | List groups the account participates in |
+| `GET` | `/api/v1/accounts/:id/groups/:groupId` | Get a single group's metadata |
+
+**Messages** (auth required)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/messages/send` | Send a message |
+| `GET` | `/api/v1/messages/:id/status` | Delivery status of a sent message |
+| `POST` | `/api/v1/messages/:id/read` | Mark a message as read |
+| `GET` | `/api/v1/messages` | Query stored messages with filters † |
+| `GET` | `/api/v1/messages/:id` | Get a stored message by ID † |
+| `GET` | `/api/v1/messages/search?q=` | Full-text search across messages † |
+| `GET` | `/api/v1/messages/stats` | Message count with filters † |
+| `GET` | `/api/v1/messages/analytics` | Aggregated statistics (by channel, direction, hourly) † |
+| `GET` | `/api/v1/messages/export` | Export messages as CSV or JSON † |
+| `GET` | `/api/v1/conversations/:id/context` | AI-ready conversation history † |
+
+† Requires message persistence (`STORAGE_ENABLED=true`); otherwise these routes are not registered.
+
+**Webhook configuration** (auth required) — forward events to your systems
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/webhooks` | List all configured webhooks |
+| `GET` | `/api/v1/accounts/:id/webhooks` | List an account's webhooks |
+| `POST` | `/api/v1/accounts/:id/webhooks` | Add a webhook to an account |
+| `PUT` | `/api/v1/webhooks/:webhookId` | Update a webhook |
+| `DELETE` | `/api/v1/webhooks/:webhookId` | Delete a webhook |
+| `DELETE` | `/api/v1/accounts/:id/webhooks` | Remove all of an account's webhooks |
+
+> The older singular `GET/PUT/DELETE /api/v1/accounts/:id/webhook` endpoints still work for backwards compatibility but are deprecated and hidden from the OpenAPI spec — prefer the plural `…/webhooks` routes above.
+
+**Inbound provider callbacks** (verified by provider signature/token, not the API key) — where cloud providers POST incoming events
+
+| Method | Endpoint | Provider |
+|---|---|---|
+| `POST` | `/webhooks/whatsapp/:accountId/inbound` · `/status` | WhatsApp Cloud API |
+| `POST` | `/webhooks/telegram/:accountId/update` | Telegram |
+| `POST` | `/webhooks/email/:accountId/inbound` | Email |
+| `POST` | `/webhooks/sms/:accountId/inbound` · `/status` | SMS |
+
+**Real-time** 
+
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `GET` | `/health` | No | Health check |
-| `GET` | `/metrics` | No | Prometheus metrics |
-| `GET` | `/api/v1/accounts` | Yes | List all accounts |
-| `GET` | `/api/v1/accounts/:id` | Yes | Get account (includes QR code if connecting) |
-| `POST` | `/api/v1/accounts` | Yes | Create account |
-| `PUT` | `/api/v1/accounts/:id` | Yes | Update account |
-| `DELETE` | `/api/v1/accounts/:id` | Yes | Delete account |
-| `POST` | `/api/v1/accounts/:id/connect` | Yes | Initiate connection (generates QR) |
-| `POST` | `/api/v1/accounts/:id/disconnect` | Yes | Disconnect |
-| `POST` | `/api/v1/messages/send` | Yes | Send a message |
-| `GET` | `/api/v1/messages` | Yes | Query stored messages (requires `STORAGE_ENABLED`) |
-| `GET` | `/api/v1/messages/:id` | Yes | Get a stored message by ID |
-| `GET` | `/api/v1/messages/search?q=` | Yes | Full-text search across messages |
-| `GET` | `/api/v1/messages/stats` | Yes | Message count with filters |
-| `GET` | `/api/v1/messages/analytics` | Yes | Aggregated statistics (by channel, direction, hourly) |
-| `GET` | `/api/v1/messages/export` | Yes | Export messages as CSV or JSON |
-| `GET` | `/api/v1/conversations/:id/context` | Yes | AI-ready conversation history |
-| `GET` | `/api/v1/accounts/:id/groups` | Yes | List groups for an account |
-| `GET` | `/api/v1/accounts/:id/webhook` | Yes | Get webhook config |
-| `PUT` | `/api/v1/accounts/:id/webhook` | Yes | Set webhook config |
-| `DELETE` | `/api/v1/accounts/:id/webhook` | Yes | Remove webhook config |
-| `WS` | `/ws/events` | Token | Real-time event stream |
+| `WS` | `/ws/events` | Token (query param) | Real-time event stream |
 
 ### Send a Message
 
@@ -224,14 +276,17 @@ Every inbound message, regardless of platform, arrives in this standardized form
 
 ### Webhooks
 
-Configure a global webhook or per-account webhooks to forward events:
+Add one or more webhooks per account to forward events to your systems:
 
 ```bash
-# Per-account webhook
-curl -X PUT http://localhost:3123/api/v1/accounts/my-whatsapp/webhook \
+# Add a webhook to an account
+curl -X POST http://localhost:3123/api/v1/accounts/my-whatsapp/webhooks \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{"url": "https://n8n.example.com/webhook/whatsapp", "secret": "my-secret"}'
+
+# List an account's webhooks
+curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts/my-whatsapp/webhooks
 ```
 
 Webhook headers: `X-UMG-Event`, `X-UMG-Account`, `X-UMG-Channel`, `X-UMG-Signature` (HMAC-SHA256).

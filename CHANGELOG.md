@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-13
+
+### Added
+
+- **`POST /api/v1/accounts/:id/reset`** — clears the stored session/credentials and reconnects so a fresh QR is generated. Use when the stored auth is expired and the account is stuck looping between `connecting` and `disconnected` without emitting a QR (previously only recoverable by deleting `data/baileys-auth/<id>` over SSH). Poll `GET /api/v1/accounts/:id` for the new QR. Only supported by self-auth (managed) providers; returns `400 RESET_NOT_SUPPORTED` otherwise. Backed by a new optional `clearSession` capability on `ConnectionManagerPort`, implemented by the Baileys adapter.
+
+### Security
+
+- The Baileys `clearSession` delete is confined to the managed auth root, so a free-form `authDir` in `providerConfig` (e.g. `../../..`) can no longer trigger an arbitrary recursive delete via the reset endpoint.
+
 ## [0.4.0] - 2026-06-15
 
 ### Fixed
