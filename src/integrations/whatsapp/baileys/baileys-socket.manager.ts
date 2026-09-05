@@ -30,12 +30,21 @@ interface SocketEntry {
   retryCount: number;
   connectionStatus: ConnectionStatus;
   lastQr: string | undefined;
-  messageHandlers: BaileysMessageHandler[];
-  connectionHandlers: BaileysConnectionHandler[];
 }
 
 export class BaileysSocketManager implements SocketManagerPort<BaileysProviderConfig> {
   private sockets = new Map<string, SocketEntry>();
+  /**
+   * Inbound subscriptions, keyed by account and kept OUTSIDE {@link SocketEntry}.
+   *
+   * Handlers belong to the account, not to whichever socket happens to be open:
+   * they are registered once at startup (`wireEvents`) while sockets come and go
+   * on every reconnect and on {@link clearSession}. Storing them on the entry
+   * meant a re-paired account silently stopped delivering messages until the
+   * process restarted.
+   */
+  private messageHandlers = new Map<string, BaileysMessageHandler[]>();
+  private connectionHandlers = new Map<string, BaileysConnectionHandler[]>();
   private cachedWaVersion: WAVersion | undefined;
   /** Accounts whose session is being cleared; blocks (re)connects during teardown. */
   private clearing = new Set<string>();
@@ -72,8 +81,6 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       retryCount: 0,
       connectionStatus: 'connecting',
       lastQr: undefined,
-      messageHandlers: [],
-      connectionHandlers: [],
     };
 
     this.sockets.set(accountId, entry);
@@ -81,7 +88,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     socket.ev.on('creds.update', saveCreds);
 
     socket.ev.on('connection.update', (update) => {
-      for (const handler of entry.connectionHandlers) {
+      for (const handler of this.handlersFor(this.connectionHandlers, accountId)) {
         handler(update);
       }
 
@@ -107,9 +114,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         if (shouldReconnect && entry.retryCount < maxRetries) {
           entry.retryCount++;
           getLogger().info('Connection closed, reconnecting', { provider: 'baileys', accountId, statusCode, attempt: entry.retryCount, maxRetries });
-          // Remove the old socket but preserve handlers and QR for the new entry
-          const prevHandlers = entry.messageHandlers;
-          const prevConnectionHandlers = entry.connectionHandlers;
+          // Remove the old socket but carry the QR and retry count to the new
+          // entry. Handlers live on the manager, so they survive on their own.
           const prevQr = entry.lastQr;
           const prevRetryCount = entry.retryCount;
           this.sockets.delete(accountId);
@@ -117,8 +123,6 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
           void this.connect(accountId, config).then(() => {
             const newEntry = this.sockets.get(accountId);
             if (newEntry) {
-              newEntry.messageHandlers = prevHandlers;
-              newEntry.connectionHandlers = prevConnectionHandlers;
               newEntry.retryCount = prevRetryCount;
               // Preserve QR until a new one is received
               if (!newEntry.lastQr && prevQr) {
@@ -141,8 +145,9 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     });
 
     socket.ev.on('messages.upsert', (event) => {
-      getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: entry.messageHandlers.length });
-      for (const handler of entry.messageHandlers) {
+      const handlers = this.handlersFor(this.messageHandlers, accountId);
+      getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
+      for (const handler of handlers) {
         handler(event);
       }
     });
@@ -154,17 +159,35 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   onMessage(accountId: string, handler: BaileysMessageHandler): void {
-    const entry = this.sockets.get(accountId);
-    if (entry) {
-      entry.messageHandlers.push(handler);
-    }
+    this.register(this.messageHandlers, accountId, handler);
   }
 
   onConnectionUpdate(accountId: string, handler: BaileysConnectionHandler): void {
-    const entry = this.sockets.get(accountId);
-    if (entry) {
-      entry.connectionHandlers.push(handler);
+    this.register(this.connectionHandlers, accountId, handler);
+  }
+
+  /**
+   * Registration does not require an open socket: subscribing before the first
+   * {@link connect}, or between a teardown and the reconnect, is valid and the
+   * handler still receives every later event.
+   */
+  private register<T>(registry: Map<string, T[]>, accountId: string, handler: T): void {
+    const handlers = registry.get(accountId);
+    if (handlers) {
+      handlers.push(handler);
+      return;
     }
+    registry.set(accountId, [handler]);
+  }
+
+  private handlersFor<T>(registry: Map<string, T[]>, accountId: string): readonly T[] {
+    return registry.get(accountId) ?? [];
+  }
+
+  /** Drop an account's subscriptions. Only for accounts that are going away. */
+  private forgetHandlers(accountId: string): void {
+    this.messageHandlers.delete(accountId);
+    this.connectionHandlers.delete(accountId);
   }
 
   async disconnect(accountId: string): Promise<void> {
@@ -173,6 +196,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       await entry.socket.logout().catch(() => {});
       this.sockets.delete(accountId);
     }
+    // logout() unlinks the device: the account is done, not just closed.
+    this.forgetHandlers(accountId);
   }
 
   /**

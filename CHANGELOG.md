@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-09-05
+
+### Fixed
+
+- **Una cuenta revinculada con `POST /:id/reset` dejaba de entregar mensajes.** Los handlers de entrada vivían dentro de `SocketEntry`, y `clearSession()` borra esa entrada del mapa de sockets; la reconexión posterior creaba una entrada nueva con la lista de handlers vacía, y sólo `wireEvents` (que corre al arrancar el proceso) volvía a registrarlos. El síntoma en el log era `messages.upsert received ... "handlers":0`: los mensajes llegaban de WhatsApp y no los procesaba nadie — ni se guardaban ni se reenviaban al webhook — hasta reiniciar el contenedor. Las suscripciones pasan a vivir en el propio manager, indexadas por cuenta, así que sobreviven a reconexiones y resets.
+- **Suscribirse antes del primer `connect()` ya no se pierde en silencio.** `onMessage` / `onConnectionUpdate` descartaban el handler si aún no existía socket, así que un mensaje que llegase entre `connect()` y `wireEvents()` se perdía. Registrar ya no depende de que haya socket abierto.
+
 ## [0.5.0] - 2026-09-05
 
 ### Changed
