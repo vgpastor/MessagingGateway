@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-05
+
+### Changed
+
+- **Baileys actualizado** de `^7.0.0-rc13` a `^7.0.0-rc14`.
+- Dependencias de runtime al día: `fastify` 5.12.3, `@fastify/cors` 11.3.0, `@fastify/swagger` 9.8.1, `@fastify/websocket` 11.3.0, `@fastify/swagger-ui` 6.1.1, `better-sqlite3` 13.0.3 (migrado a N-API), `pg` 8.23.0, `zod` 4.5.4, `yaml` 2.9.0, `dotenv` 17.4.2.
+- Herramientas de desarrollo al día: `typescript` 7.0.2, `vitest` 5.0.0, `orval` 8.28.1, `tsx` 4.23.13, `@types/node` 26, `@types/pg` 8.23.1, `@types/better-sqlite3` 9.6.0.
+- **El paquete pasa a ESM** (`"type": "module"`). Baileys 7 es ESM puro, así que la build CJS anterior sólo funcionaba gracias al `require(esm)` de Node 22, y `npm run dev` (tsx) ni siquiera arrancaba: su resolver CJS falla con `ERR_PACKAGE_PATH_NOT_EXPORTED` sobre `whatsapp-rust-bridge`, una dependencia ESM-only de Baileys. Con ESM nativo, `npm run dev`, `npm start` y los tests van por el mismo camino de módulos. Incluye `scripts/fix-generated-imports.js` reescrito con `import` / `import.meta.url` y `build:copy-migrations` con `--input-type=module`.
+- `vitest.config.ts` renombrado a `vitest.config.mts` para que Vite lo cargue como ESM nativo (elimina el aviso de `configLoader: 'native'`).
+- SDK regenerado con orval 8: los alias auxiliares `*FiltersInclude/ExcludeAnyOfItem` desaparecen y su unión (`boolean | number | string`) queda embebida. Sin cambios funcionales ni en el contrato HTTP.
+
+### Fixed
+
+- **`npm run dev` vuelve a arrancar.** Estaba roto desde Baileys 7 (rc9), no sólo en rc14. Ver el punto de ESM arriba.
+
+### Removed
+
+- **Soporte de Node 20** (EOL). `engines` pasa a `>=22` y la matriz de CI a `[22, 24]`, porque `vitest` 5 exige `^22.12`, `better-sqlite3` 13 exige `>=22` y `orval` 8 exige `>=22.18`. La imagen Docker ya usaba `node:22-alpine`.
+
+### Security
+
+- `npm audit` pasa de 22 vulnerabilidades (2 críticas, 17 altas) a 0.
+
 ## [0.4.1] - 2026-07-13
 
 ### Added
