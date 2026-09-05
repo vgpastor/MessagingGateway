@@ -33,7 +33,9 @@ Never commit code that fails any of these steps.
 - `strict: true` is enabled — never disable it
 - `noUncheckedIndexedAccess: true` — always handle `undefined` when accessing arrays/records by index
 - `noImplicitReturns: true` — all code paths must return
+- The package is **ESM** (`"type": "module"`), compiled with `module: NodeNext` — `dist/` is ESM too
 - All imports use `.js` extensions (NodeNext module resolution)
+- No `require()`, `__dirname` or `__filename` in `src/` or `scripts/` — use `import` and `import.meta.url`
 - Use `type` imports for type-only imports (`import type { ... }`)
 
 ## Testing Rules
