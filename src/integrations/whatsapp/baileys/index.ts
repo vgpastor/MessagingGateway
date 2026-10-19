@@ -11,7 +11,7 @@ import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
 import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { downloadBaileysMedia } from './baileys-media.js';
-import { jidNormalizedUser } from '@whiskeysockets/baileys';
+import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
 
@@ -106,7 +106,11 @@ export const baileysProvider: ProviderBundle = {
     });
 
     socketManager.onConnectionUpdate(account.id, (update) => {
-      const status = socketManager.getConnectionStatus(account.id);
+      // 401 loggedOut: WhatsApp unlinked the device and the socket manager will
+      // not reconnect. Report it as auth_expired so it gets alerted, not just logged.
+      const statusCode = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
+      const loggedOut = update.connection === 'close' && statusCode === DisconnectReason.loggedOut;
+      const status = loggedOut ? 'auth_expired' : socketManager.getConnectionStatus(account.id);
       const qr = update.qr ?? socketManager.getLastQr(account.id);
       eventBus.emit(
         createEvent<ConnectionUpdatePayload>(

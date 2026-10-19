@@ -72,6 +72,7 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `API_KEY` | _(none)_ | API key for auth. Empty = dev mode (no auth) |
 | `WEBHOOK_CALLBACK_URL` | _(none)_ | Global webhook URL for forwarding events |
 | `WEBHOOK_CALLBACK_SECRET` | _(none)_ | HMAC secret for webhook signatures |
+| `ALERT_WEBHOOK_URL` | _(none)_ | Receives one `connection.update` (`status: auth_expired`) when an account loses its session, e.g. WhatsApp unlinked the device. Payload has a Slack-compatible `text` field |
 | `ACCOUNTS_CONFIG_PATH` | `data/accounts.yaml` | Path to accounts config file |
 | `HEALTH_CHECK_INTERVAL_MS` | `300000` | Health check interval (ms) |
 | `CORS_ORIGIN` | `*` in dev | Allowed CORS origin in production |

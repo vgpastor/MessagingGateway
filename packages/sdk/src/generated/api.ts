@@ -1098,6 +1098,7 @@ export const PostApiV1AccountsIdWebhooksBodyEventsItem = {
   messageinbound: 'message.inbound',
   messagestatus: 'message.status',
   messagesent: 'message.sent',
+  connectionupdate: 'connection.update',
   '*': '*',
 } as const;
 
@@ -1159,6 +1160,7 @@ export const PutApiV1WebhooksWebhookIdBodyEventsItem = {
   messageinbound: 'message.inbound',
   messagestatus: 'message.status',
   messagesent: 'message.sent',
+  connectionupdate: 'connection.update',
   '*': '*',
 } as const;
 

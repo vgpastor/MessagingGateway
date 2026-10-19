@@ -34,7 +34,8 @@ export interface MessageOutboundPayload {
 
 export interface ConnectionUpdatePayload {
   accountId: string;
-  status: 'disconnected' | 'connecting' | 'connected';
+  /** `auth_expired`: the session was revoked (e.g. WhatsApp 401 loggedOut); no reconnect follows. */
+  status: 'disconnected' | 'connecting' | 'connected' | 'auth_expired';
   qr?: string;
 }
 
