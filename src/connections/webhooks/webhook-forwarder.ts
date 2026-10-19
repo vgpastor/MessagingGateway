@@ -53,7 +53,7 @@ export class WebhookForwarder {
     }
   }
 
-  private async send(
+  async send(
     url: string,
     secret: string | undefined,
     accountId: string,

@@ -13,6 +13,7 @@ export interface EnvConfig {
   apiKey: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
+  alertWebhookUrl?: string;
   accountsConfigPath?: string;
   healthCheckIntervalMs: number;
   storageEnabled: boolean;
@@ -33,6 +34,7 @@ export function loadEnvConfig(): EnvConfig {
     apiKey,
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
+    alertWebhookUrl: process.env['ALERT_WEBHOOK_URL'],
     accountsConfigPath: process.env['ACCOUNTS_CONFIG_PATH'],
     healthCheckIntervalMs: parseInt(process.env['HEALTH_CHECK_INTERVAL_MS'] ?? '300000', 10),
     storageEnabled: process.env['STORAGE_ENABLED'] === 'true',

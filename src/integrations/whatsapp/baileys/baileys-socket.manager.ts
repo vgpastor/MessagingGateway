@@ -88,10 +88,6 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     socket.ev.on('creds.update', saveCreds);
 
     socket.ev.on('connection.update', (update) => {
-      for (const handler of this.handlersFor(this.connectionHandlers, accountId)) {
-        handler(update);
-      }
-
       if (update.qr) {
         entry.lastQr = update.qr;
         entry.connectionStatus = 'connecting';
@@ -142,6 +138,12 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         entry.lastQr = undefined;
         getLogger().info('Connection established', { provider: 'baileys', accountId });
       }
+
+      // Notify after the state above is updated, so handlers that read
+      // getConnectionStatus() see 'connected' on open, not the previous status.
+      for (const handler of this.handlersFor(this.connectionHandlers, accountId)) {
+        handler(update);
+      }
     });
 
     socket.ev.on('messages.upsert', (event) => {
@@ -191,13 +193,15 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   async disconnect(accountId: string): Promise<void> {
+    // logout() unlinks the device: the account is done, not just closed. Forget
+    // the handlers first so the 401 close that logout() emits is not reported
+    // as an unexpected session loss (and alerted).
+    this.forgetHandlers(accountId);
     const entry = this.sockets.get(accountId);
     if (entry) {
       await entry.socket.logout().catch(() => {});
       this.sockets.delete(accountId);
     }
-    // logout() unlinks the device: the account is done, not just closed.
-    this.forgetHandlers(accountId);
   }
 
   /**

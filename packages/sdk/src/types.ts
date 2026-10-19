@@ -241,7 +241,7 @@ export interface WsEvent<T = unknown> {
 
 export interface ConnectionUpdateData {
   accountId: string;
-  status: 'disconnected' | 'connecting' | 'connected';
+  status: 'disconnected' | 'connecting' | 'connected' | 'auth_expired';
   qr?: string;
 }
 

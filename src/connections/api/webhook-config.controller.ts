@@ -50,7 +50,7 @@ const webhookConfigInputSchema = {
     secret: { type: 'string' as const, description: 'HMAC-SHA256 secret for signature verification' },
     events: {
       type: 'array' as const,
-      items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', '*'] },
+      items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', 'connection.update', '*'] },
       description: 'Event types to forward. Defaults to ["*"]',
     },
     filters: filtersSchema,

@@ -18,6 +18,7 @@ import { Events, createEvent } from './core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
 import { messagesTotal, connectionStatus } from './infrastructure/metrics/prometheus.js';
 import { WebhookForwarder } from './connections/webhooks/webhook-forwarder.js';
+import { subscribeConnectionAlerts } from './connections/webhooks/connection-alert.subscriber.js';
 import { FileWebhookConfigStore } from './connections/webhooks/file-webhook-config.store.js';
 import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
@@ -77,6 +78,9 @@ function wireEventBus(
     if (status === 'connected' && account.status !== 'active') {
       await accountRepository.update(accountId, { status: 'active' });
       logger.info('Status auto-updated to active (connected)', { accountId });
+    } else if (status === 'auth_expired' && account.status !== 'auth_expired') {
+      await accountRepository.update(accountId, { status: 'auth_expired' });
+      logger.warn('Status auto-updated to auth_expired (session revoked)', { accountId });
     } else if (status === 'disconnected' && account.status === 'active') {
       await accountRepository.update(accountId, { status: 'auth_expired' });
       logger.info('Status auto-updated to auth_expired (disconnected)', { accountId });
@@ -184,6 +188,7 @@ async function main() {
 
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
+  subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
 
   // Optional: persistence plugin (SQLite or PostgreSQL)
   let messageStore: import('./core/persistence/message-store.port.js').FullMessageStorePort | undefined;
