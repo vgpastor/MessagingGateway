@@ -1,0 +1,64 @@
+# Production example: Messaging Gateway + PostgreSQL (not published).
+# Usage:
+#   cp docker-compose.prod.example.yml docker-compose.prod.yml
+#   Provide the variables below through the shell or an env file
+#   (docker compose --env-file prod.env -f docker-compose.prod.yml up -d).
+# Required: POSTGRES_PASSWORD, API_KEY. See .env.example for the full list.
+# Adjust the host paths (/opt/messaging-gateway/...) and the external network to your server.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    # No `ports`: Postgres is reachable only from the compose network.
+    environment:
+      POSTGRES_DB: messaging
+      POSTGRES_USER: messaging
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - /opt/messaging-gateway/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messaging"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  gateway:
+    image: vgpastor/messaging-gateway:latest
+    ports:
+      - "32768:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      API_KEY: ${API_KEY:?API_KEY must be set}
+      READ_API_KEY: ${READ_API_KEY:-}
+      ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
+      WEBHOOK_CALLBACK_URL: ${WEBHOOK_CALLBACK_URL:-}
+      WEBHOOK_CALLBACK_SECRET: ${WEBHOOK_CALLBACK_SECRET:-}
+      HEALTH_CHECK_INTERVAL_MS: ${HEALTH_CHECK_INTERVAL_MS:-300000}
+      STORAGE_ENABLED: "true"
+      STORAGE_DRIVER: postgres
+      DATABASE_URL: postgres://messaging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/messaging
+      MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-16777216}
+      MEDIA_RETENTION_DAYS: ${MEDIA_RETENTION_DAYS:-30}
+      MESSAGE_RETENTION_DAYS: ${MESSAGE_RETENTION_DAYS:-180}
+    volumes:
+      - /opt/messaging-gateway/data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - default
+      - shared-net
+
+networks:
+  shared-net:
+    external: true
