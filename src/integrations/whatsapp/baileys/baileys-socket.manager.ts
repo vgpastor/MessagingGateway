@@ -295,8 +295,11 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
    * No-ops, returning false, when a reconnect is already covered: the account
    * has a socket (even a dead one waiting out its backoff), a timer is pending,
    * a connect is in flight, its session is being cleared, it is logged out
-   * (needs a QR, not a retry) or it opted out with `retryOnDisconnect: false`.
-   * A failed attempt is retried with backoff.
+   * (needs a QR, not a retry), it opted out with `retryOnDisconnect: false`, or
+   * its event subscriptions are not registered yet. That last guard stops the
+   * startup credential validation from opening sockets before the inbound wiring
+   * exists (a lost `open`, dropped offline messages): wiring is what makes an
+   * account eligible. A failed attempt is retried with backoff.
    *
    * @returns whether a connect was started
    */
@@ -307,6 +310,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       this.reconnectTimers.has(accountId) ||
       this.clearing.has(accountId) ||
       this.loggedOut.has(accountId) ||
+      !this.isWired(accountId) ||
       config.retryOnDisconnect === false
     ) {
       return false;
@@ -314,6 +318,11 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     getLogger().info('Account has no socket, reconnecting', { provider: 'baileys', accountId });
     void this.reconnect(accountId, config);
     return true;
+  }
+
+  /** Whether the account's inbound/connection subscriptions have been registered. */
+  private isWired(accountId: string): boolean {
+    return this.messageHandlers.has(accountId) || this.connectionHandlers.has(accountId);
   }
 
   hasSocket(accountId: string): boolean {

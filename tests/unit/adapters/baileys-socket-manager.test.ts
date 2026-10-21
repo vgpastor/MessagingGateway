@@ -272,8 +272,18 @@ describe('BaileysSocketManager reconnection', () => {
   });
 
   describe('ensureConnected', () => {
+    it('does not open a socket before the account event wiring exists', async () => {
+      const manager = new BaileysSocketManager();
+
+      expect(manager.ensureConnected(RECONNECT_ID, {})).toBe(false);
+      await settle();
+
+      expect(fakeSockets).toHaveLength(0);
+    });
+
     it('opens a socket for an account that has none', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
 
       expect(manager.ensureConnected(RECONNECT_ID, {})).toBe(true);
       await waitForSockets(1);
@@ -283,6 +293,7 @@ describe('BaileysSocketManager reconnection', () => {
 
     it('does nothing when the account already has a socket', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
       await connected(manager);
 
       expect(manager.ensureConnected(RECONNECT_ID, {})).toBe(false);
@@ -291,6 +302,7 @@ describe('BaileysSocketManager reconnection', () => {
 
     it('does not stack a second connect while one is in progress', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
       const connect = vi.spyOn(manager, 'connect');
 
       expect(manager.ensureConnected(RECONNECT_ID, {})).toBe(true);
@@ -303,6 +315,7 @@ describe('BaileysSocketManager reconnection', () => {
     it('does not race a reconnect that is already scheduled', async () => {
       useFakeTimeouts();
       const manager = new BaileysSocketManager({ random: maxJitter });
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
       await connected(manager);
       fakeSockets[0]!.ev.emit('connection.update', close(428));
       // Even if the stale entry were gone, the pending timer owns the next attempt.
@@ -313,6 +326,7 @@ describe('BaileysSocketManager reconnection', () => {
 
     it('refuses to resurrect a logged-out account', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
       await connected(manager);
       fakeSockets[0]!.ev.emit('connection.update', close(401));
 
@@ -323,6 +337,7 @@ describe('BaileysSocketManager reconnection', () => {
 
     it('leaves alone an account configured with retryOnDisconnect false', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
 
       expect(manager.ensureConnected(RECONNECT_ID, { retryOnDisconnect: false })).toBe(false);
       await settle();
@@ -331,6 +346,7 @@ describe('BaileysSocketManager reconnection', () => {
 
     it('allows an explicit connect after a logout (re-pairing)', async () => {
       const manager = new BaileysSocketManager();
+      manager.onConnectionUpdate(RECONNECT_ID, () => {});
       await connected(manager);
       fakeSockets[0]!.ev.emit('connection.update', close(401));
 

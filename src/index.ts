@@ -32,6 +32,7 @@ import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js'
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
+import { connectManagedProviders } from './infrastructure/connect-managed-providers.js';
 import type { ChannelAccount } from './core/accounts/channel-account.js';
 
 /** Register all supported providers and inject the credential resolver */
@@ -133,35 +134,6 @@ function wireEventBus(
   });
 
   return new WebSocketBroadcaster(eventBus);
-}
-
-/** Connect managed providers (e.g. Baileys) and wire their inbound events */
-async function connectManagedProviders(
-  accounts: ChannelAccount[],
-  providerRegistry: ProviderRegistry,
-  eventBus: EventBus,
-  inboundPipeline: InboundPipeline,
-): Promise<void> {
-  const logger = getLogger();
-  const managedAccounts = accounts.filter(
-    (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
-  );
-
-  for (const account of managedAccounts) {
-    const bundle = providerRegistry.getOrThrow(account.provider);
-    try {
-      const connectionManager = bundle.connection!();
-      await connectionManager.connect(account.id, account.providerConfig);
-
-      if (bundle.wireEvents) {
-        await bundle.wireEvents(account, eventBus, inboundPipeline);
-      }
-
-      logger.info('Connected and listening for messages', { provider: account.provider, accountId: account.id });
-    } catch (err) {
-      logger.error('Failed to connect', { provider: account.provider, accountId: account.id, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
 }
 
 async function main() {
