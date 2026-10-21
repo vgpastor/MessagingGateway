@@ -26,5 +26,10 @@ export interface ChannelAccount {
   credentialsRef: string;
   credentials?: string;
   providerConfig: Record<string, unknown>;
+  /**
+   * Inbound conversations (chat/group JIDs) this account keeps. `'*'` or absent
+   * means all; a list drops every other conversation before it is stored.
+   */
+  conversations?: '*' | string[];
   metadata: AccountMetadata;
 }

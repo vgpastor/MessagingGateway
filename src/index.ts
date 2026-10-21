@@ -6,7 +6,7 @@ import { loadEnvConfig, resolveProviderCredential } from './infrastructure/confi
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
-import { baileysProvider } from './integrations/whatsapp/baileys/index.js';
+import { baileysProvider, resolveBaileysLidToPhone } from './integrations/whatsapp/baileys/index.js';
 import { wwebjsProvider } from './integrations/whatsapp/wwebjs-api/index.js';
 import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
@@ -14,6 +14,10 @@ import { twilioProvider } from './integrations/sms/twilio/index.js';
 import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
+import { InboundPipeline } from './core/inbound/inbound-pipeline.js';
+import { noopMediaService } from './core/inbound/media-service.js';
+import { noopMetrics } from './core/metrics/metrics.port.js';
+import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
 import { messagesTotal, connectionStatus } from './infrastructure/metrics/prometheus.js';
@@ -132,6 +136,7 @@ async function connectManagedProviders(
   accounts: ChannelAccount[],
   providerRegistry: ProviderRegistry,
   eventBus: EventBus,
+  inboundPipeline: InboundPipeline,
 ): Promise<void> {
   const logger = getLogger();
   const managedAccounts = accounts.filter(
@@ -145,7 +150,7 @@ async function connectManagedProviders(
       await connectionManager.connect(account.id, account.providerConfig);
 
       if (bundle.wireEvents) {
-        await bundle.wireEvents(account, eventBus);
+        await bundle.wireEvents(account, eventBus, inboundPipeline);
       }
 
       logger.info('Connected and listening for messages', { provider: account.provider, accountId: account.id });
@@ -191,7 +196,7 @@ async function main() {
   subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
 
   // Optional: persistence plugin (SQLite or PostgreSQL)
-  let messageStore: import('./core/persistence/message-store.port.js').FullMessageStorePort | undefined;
+  let messageStore: FullMessageStorePort | undefined;
   if (envConfig.storageEnabled) {
     const { createMessageStore } = await import('./persistence/message-store.factory.js');
     const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
@@ -202,6 +207,16 @@ async function main() {
       ...(envConfig.storageDriver === 'sqlite' ? { database: envConfig.databasePath } : {}),
     });
   }
+
+  // Inbound: filter → persist (message log) → emit → media. Persisting strictly
+  // before emitting keeps `accountSeq` gaps meaningful for consumers.
+  const inboundPipeline = new InboundPipeline({
+    store: messageStore,
+    eventBus,
+    media: noopMediaService, // replaced by the disk-backed MediaService
+    metrics: noopMetrics,
+    resolveLidToPhone: resolveBaileysLidToPhone,
+  });
 
   // Health check scheduler
   const healthCheckScheduler = new HealthCheckScheduler(
@@ -223,7 +238,7 @@ async function main() {
     logger.info('Unified Messaging Gateway listening', { port: envConfig.port });
     logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
-    await connectManagedProviders(accounts, providerRegistry, eventBus);
+    await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
     healthCheckScheduler.start();
 
     const shutdown = async () => {

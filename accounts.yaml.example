@@ -10,6 +10,8 @@ accounts:
     #   browser: ["MyApp", "Chrome", "1.0.0"]
     #   connectTimeoutMs: 60000
     #   maxRetries: 5
+    # Conversations (chat/group JIDs) whose inbound messages are kept. Default '*' = all.
+    # conversations: ["120363000000000000@g.us", "34600111222@s.whatsapp.net"]
     metadata:
       owner: my-org
       environment: production

@@ -6,6 +6,7 @@ import type { ProviderHealthChecker } from '../core/messaging/provider-health.po
 import type { InboundWebhookPort } from '../core/messaging/inbound-webhook.port.js';
 import type { ConnectionManagerPort } from '../core/accounts/connection-manager.port.js';
 import type { EventBus } from '../core/event-bus.js';
+import type { InboundPipeline } from '../core/inbound/inbound-pipeline.js';
 import { AdapterNotFoundError } from '../core/errors.js';
 
 // ── Factory function types for ProviderBundle ───────────────────
@@ -32,8 +33,8 @@ export interface ProviderBundle {
   inbound?: InboundAdapterFactory;
   health?: HealthAdapterFactory;
   connection?: ConnectionAdapterFactory;
-  /** Wire inbound events and connection updates to the EventBus for a given account */
-  wireEvents?: (account: ChannelAccount, eventBus: EventBus) => Promise<void>;
+  /** Wire inbound messages (through the pipeline) and connection updates (to the EventBus) for a given account */
+  wireEvents?: (account: ChannelAccount, eventBus: EventBus, inbound: InboundPipeline) => Promise<void>;
 }
 
 // ── ProviderRegistry ────────────────────────────────────────────

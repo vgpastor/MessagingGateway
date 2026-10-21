@@ -3,6 +3,7 @@
  *
  * Tests the complete use case:
  *   API send request → MessageRouter → EventBus(MESSAGE_OUTBOUND) → PersistenceSubscriber → MessageStore
+ *   Baileys inbound → InboundPipeline → MessageLog.insertInbound → EventBus(MESSAGE_INBOUND)
  *
  * Uses real EventBus and a spy MessageStore to verify the full chain
  * without depending on external services (WhatsApp, SQLite, Postgres).
@@ -11,12 +12,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MessageRouterService } from '../../src/core/routing/message-router.service.js';
 import { EventBus } from '../../src/core/event-bus.js';
 import { Events } from '../../src/core/events.js';
+import type { MessageInboundPayload } from '../../src/core/events.js';
+import { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
+import { noopMediaService } from '../../src/core/inbound/media-service.js';
+import { noopMetrics } from '../../src/core/metrics/metrics.port.js';
 import { subscribePersistence } from '../../src/persistence/persistence-subscriber.js';
 import type { ChannelAccountRepository } from '../../src/core/accounts/channel-account.repository.js';
 import type { MessagingAdapterFactory } from '../../src/core/messaging/ports/messaging-adapter.port.js';
 import type { MessagingPort } from '../../src/core/messaging/messaging.port.js';
 import type { ChannelAccount } from '../../src/core/accounts/channel-account.js';
-import type { MessageStorePort } from '../../src/core/persistence/message-store.port.js';
+import type { MessageStorePort, MessageLogPort } from '../../src/core/persistence/message-store.port.js';
 import type { UnifiedEnvelope } from '../../src/core/messaging/unified-envelope.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
@@ -261,63 +266,68 @@ describe('Outbound message persistence flow', () => {
 describe('Inbound message persistence flow', () => {
   let eventBus: EventBus;
   let store: ReturnType<typeof createMockStore>;
+  let logged: UnifiedEnvelope[];
+  let insertInbound: ReturnType<typeof vi.fn>;
+  let pipeline: InboundPipeline;
+  const emittedInbound: UnifiedEnvelope[] = [];
+
+  const inboundEnvelope = (overrides: Partial<UnifiedEnvelope> = {}): UnifiedEnvelope => ({
+    id: 'msg_test-inbound-001',
+    accountId: 'wa-test',
+    channel: 'whatsapp',
+    direction: 'inbound',
+    timestamp: new Date('2026-04-05T10:30:00Z'),
+    conversationId: '34600000099@s.whatsapp.net',
+    sender: { id: '34600000099@s.whatsapp.net', displayName: 'Customer' },
+    recipient: { id: '+34600000001' },
+    content: { type: 'text', body: 'Hi, I need help' },
+    gateway: {
+      receivedAt: new Date('2026-04-05T10:30:00Z'),
+      adapterId: 'baileys',
+      account: { id: 'wa-test', alias: 'Test WA', owner: 'test-org', tags: ['whatsapp'] },
+    },
+    ...overrides,
+  });
 
   beforeEach(() => {
     eventBus = new EventBus();
     store = createMockStore();
     subscribePersistence(eventBus, store);
+
+    logged = [];
+    emittedInbound.length = 0;
+    eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (e) => { emittedInbound.push(e.data.envelope); });
+    insertInbound = vi.fn(async (envelope: UnifiedEnvelope) => {
+      logged.push(envelope);
+      return { inserted: true, seq: logged.length, accountSeq: logged.length };
+    });
+    pipeline = new InboundPipeline({
+      store: { insertInbound } as unknown as MessageLogPort,
+      eventBus,
+      media: noopMediaService,
+      metrics: noopMetrics,
+    });
   });
 
-  it('should persist inbound message emitted through EventBus', async () => {
-    const envelope: UnifiedEnvelope = {
-      id: 'msg_test-inbound-001',
-      accountId: 'wa-test',
-      channel: 'whatsapp',
-      direction: 'inbound',
-      timestamp: new Date('2026-04-05T10:30:00Z'),
-      conversationId: '34600000099@s.whatsapp.net',
-      sender: { id: '34600000099@s.whatsapp.net', displayName: 'Customer' },
-      recipient: { id: '+34600000001' },
-      content: { type: 'text', body: 'Hi, I need help' },
-      gateway: {
-        receivedAt: new Date('2026-04-05T10:30:00Z'),
-        adapterId: 'baileys',
-        account: { id: 'wa-test', alias: 'Test WA', owner: 'test-org', tags: ['whatsapp'] },
-      },
-    };
+  it('should persist inbound message through the pipeline, once, before it is emitted', async () => {
+    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never, 'notify');
 
-    await eventBus.emit({
-      id: 'evt-001',
-      type: Events.MESSAGE_INBOUND,
-      timestamp: new Date(),
-      source: 'baileys',
-      data: { envelope },
-    });
+    expect(insertInbound).toHaveBeenCalledTimes(1);
+    expect(logged[0].id).toBe('msg_test-inbound-001');
+    expect(logged[0].direction).toBe('inbound');
+    expect(logged[0].content).toMatchObject({ body: 'Hi, I need help' });
+    expect(emittedInbound).toHaveLength(1);
+    expect(emittedInbound[0].seq).toBe(1);
+    expect(emittedInbound[0].accountSeq).toBe(1);
+  });
 
-    expect(store.save).toHaveBeenCalledTimes(1);
-    expect(store.saved[0].id).toBe('msg_test-inbound-001');
-    expect(store.saved[0].direction).toBe('inbound');
-    expect(store.saved[0].content.body).toBe('Hi, I need help');
+  it('should not store inbound a second time from the persistence subscriber', async () => {
+    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never, 'notify');
+
+    expect(store.save).not.toHaveBeenCalled();
   });
 
   it('should persist both inbound and outbound in a bidirectional conversation', async () => {
-    const inboundEnvelope: UnifiedEnvelope = {
-      id: 'msg_in-001',
-      accountId: 'wa-test',
-      channel: 'whatsapp',
-      direction: 'inbound',
-      timestamp: new Date('2026-04-05T10:00:00Z'),
-      conversationId: '34600000099@s.whatsapp.net',
-      sender: { id: '34600000099@s.whatsapp.net', displayName: 'Customer' },
-      recipient: { id: '+34600000001' },
-      content: { type: 'text', body: 'Question from customer' },
-      gateway: {
-        receivedAt: new Date(),
-        adapterId: 'baileys',
-        account: { id: 'wa-test', alias: 'Test WA', owner: 'test-org', tags: ['whatsapp'] },
-      },
-    };
-
     const outboundEnvelope: UnifiedEnvelope = {
       id: 'msg_out-001',
       accountId: 'wa-test',
@@ -335,20 +345,18 @@ describe('Inbound message persistence flow', () => {
       },
     };
 
-    await eventBus.emit({
-      id: 'evt-in', type: Events.MESSAGE_INBOUND,
-      timestamp: new Date(), source: 'baileys',
-      data: { envelope: inboundEnvelope },
-    });
+    await pipeline.handle(whatsappAccount, inboundEnvelope({ id: 'msg_in-001' }), {} as never, 'notify');
     await eventBus.emit({
       id: 'evt-out', type: Events.MESSAGE_OUTBOUND,
       timestamp: new Date(), source: 'router',
       data: { envelope: outboundEnvelope },
     });
 
-    expect(store.save).toHaveBeenCalledTimes(2);
-    expect(store.saved[0].direction).toBe('inbound');
-    expect(store.saved[1].direction).toBe('outbound');
-    expect(store.saved[0].conversationId).toBe(store.saved[1].conversationId);
+    // inbound goes to the message log (insertInbound), outbound to save()
+    expect(logged).toHaveLength(1);
+    expect(logged[0].direction).toBe('inbound');
+    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(store.saved[0].direction).toBe('outbound');
+    expect(logged[0].conversationId).toBe(store.saved[0].conversationId);
   });
 });

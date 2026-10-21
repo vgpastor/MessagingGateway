@@ -5,6 +5,8 @@ export interface MetricsPort {
   decGauge(name: string, labels?: Record<string, string>): void;
   incGauge(name: string, labels?: Record<string, string>): void;
   observeHistogram(name: string, value: number, labels?: Record<string, string>): void;
+  /** An inbound message could not be written to the message log */
+  persistFailures(): void;
 }
 
 /** No-op implementation for when metrics are disabled */
@@ -13,4 +15,5 @@ export const noopMetrics: MetricsPort = {
   decGauge: () => {},
   incGauge: () => {},
   observeHistogram: () => {},
+  persistFailures: () => {},
 };
