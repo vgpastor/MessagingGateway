@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import Fastify, { LogController, type FastifyRequest } from 'fastify';
+import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
@@ -17,6 +17,8 @@ import type { HealthCheckSchedulerPort } from '../core/accounts/health-check-sch
 import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
 import { createApiKeyGuard, type AuthScope } from '../core/auth/api-key.guard.js';
 import { redactUrl } from './logging/redact-url.js';
+import { requestSerializers } from './logging/request-serializers.js';
+import { QuietRequestLogController } from './logging/quiet-request-log-controller.js';
 import { healthController } from '../connections/api/health.controller.js';
 import { accountsController } from '../connections/api/accounts.controller.js';
 import { sendController } from '../connections/api/send.controller.js';
@@ -66,20 +68,12 @@ export async function createServer(deps: ServerDeps) {
   const isDev = process.env['NODE_ENV'] !== 'production';
   const usePrettyLogs = process.env['NODE_ENV'] === 'development';
 
-  // Same shape as Fastify's default request serializer, with the token query value redacted.
-  const serializers = {
-    req: (request: FastifyRequest) => ({
-      method: request.method,
-      url: redactUrl(request.url),
-      host: request.host,
-      remoteAddress: request.ip,
-      remotePort: request.socket?.remotePort,
-    }),
-  };
+  const serializers = requestSerializers;
 
   const fastify = Fastify({
     // Fastify's own request logs print the raw URL; the onResponse hook below logs a redacted one.
-    logController: new LogController({ disableRequestLogging: true }),
+    // Its error logs stay enabled.
+    logController: new QuietRequestLogController(),
     logger: usePrettyLogs
       ? {
           level: deps.logLevel,
@@ -107,14 +101,6 @@ export async function createServer(deps: ServerDeps) {
     };
     if (reply.statusCode >= 500) request.log.error(fields, 'request completed');
     else request.log.info(fields, 'request completed');
-  });
-
-  // Request logging is off, so handler errors would go unreported: log them here (no URL, no query).
-  fastify.addHook('onError', async (request, _reply, error) => {
-    request.log.error(
-      { err: error, method: request.method, route: request.routeOptions?.url },
-      'request errored',
-    );
   });
 
   fastify.removeContentTypeParser('application/json');
