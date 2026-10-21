@@ -19,7 +19,7 @@ import type {
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, waMessageIdOf,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender, waMessageIdOf,
 } from '../core/persistence/message-store.utils.js';
 
 const COLUMNS = envelopeColumns();
@@ -79,11 +79,11 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const stmt = db.prepare(`
       INSERT OR REPLACE INTO messages (
         id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, recipient_id,
+        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
         content_type, content_preview, content_json,
         context_json, channel_details_json, gateway_json,
         timestamp, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const preview = extractPreview(envelope);
@@ -96,6 +96,8 @@ export class SqliteMessageStore implements FullMessageStorePort {
       envelope.conversationId,
       envelope.sender.id,
       envelope.sender.displayName ?? null,
+      envelope.sender.phone ?? null,
+      envelope.sender.lid ?? null,
       envelope.recipient.id,
       envelope.content.type,
       preview,
@@ -282,11 +284,11 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const insert = db.prepare(`
       INSERT INTO messages (
         id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, recipient_id,
+        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
         content_type, content_preview, content_json,
         context_json, channel_details_json, gateway_json,
         timestamp, created_at, wa_message_id, sent_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
     `);
     const bump = db.prepare(`
@@ -308,6 +310,8 @@ export class SqliteMessageStore implements FullMessageStorePort {
         envelope.conversationId,
         envelope.sender.id,
         envelope.sender.displayName ?? null,
+        envelope.sender.phone ?? null,
+        envelope.sender.lid ?? null,
         envelope.recipient.id,
         envelope.content.type,
         preview,
@@ -435,7 +439,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
       direction: row.direction,
       timestamp: new Date(row.timestamp as string),
       conversationId: row.conversation_id as string,
-      sender: { id: row.sender_id as string, displayName: row.sender_name as string | undefined },
+      sender: readSender(row),
       recipient: { id: row.recipient_id as string },
       content: parseJsonColumnRequired(row.content_json as string),
       context: parseJsonColumn(row.context_json as string | null) ?? undefined,

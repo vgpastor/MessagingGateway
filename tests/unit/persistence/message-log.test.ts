@@ -188,6 +188,44 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect(await store.findByWaMessageId('acc-a', 'nope')).toBeUndefined();
     });
 
+    it('queryAfter, findById and findByWaMessageId return sender phone/lid, sentAt, seq and accountSeq exactly as inserted', async () => {
+      const sentAt = new Date('2026-04-05T09:59:58.000Z');
+      const env = makeEnvelope('acc-a', 'ID1', {
+        sentAt,
+        sender: { id: '144980999962625@lid', displayName: 'Customer', phone: '+34600111222', lid: '144980999962625@lid' },
+      });
+      const res = await store.insertInbound(env);
+
+      const { messages } = await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.sender).toEqual({ id: '144980999962625@lid', displayName: 'Customer', phone: '+34600111222', lid: '144980999962625@lid' });
+      expect(messages[0]?.sentAt?.toISOString()).toBe(sentAt.toISOString());
+      expect(messages[0]?.seq).toBe(res.seq);
+      expect(messages[0]?.accountSeq).toBe(1);
+
+      expect((await store.findById(env.id))?.sender).toMatchObject({ phone: '+34600111222', lid: '144980999962625@lid' });
+      expect((await store.findByWaMessageId('acc-a', 'ID1'))?.sender).toMatchObject({ phone: '+34600111222', lid: '144980999962625@lid' });
+    });
+
+    it('a sender without phone/lid comes back without those keys', async () => {
+      await store.insertInbound(makeEnvelope('acc-a', 'NOID'));
+
+      const { messages } = await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 });
+      expect(messages[0]?.sender).toEqual({ id: '34600000099@s.whatsapp.net', displayName: 'Customer' });
+      expect(messages[0]?.sender).not.toHaveProperty('phone');
+      expect(messages[0]?.sender).not.toHaveProperty('lid');
+    });
+
+    it('save() also persists sender phone/lid', async () => {
+      const env = makeEnvelope('acc-a', 'S1', {
+        direction: 'outbound',
+        sender: { id: '+34600000001', phone: '+34600000001', lid: '1@lid' },
+      });
+      await store.save(env);
+
+      expect((await store.findById(env.id))?.sender).toMatchObject({ phone: '+34600000001', lid: '1@lid' });
+    });
+
     it('save() (outbound) keeps working and does not take an accountSeq', async () => {
       await store.insertInbound(makeEnvelope('acc-a', 'I1'));
       await store.save(makeEnvelope('acc-a', 'O1', { direction: 'outbound' }));

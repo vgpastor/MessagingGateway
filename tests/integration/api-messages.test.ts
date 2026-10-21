@@ -506,6 +506,7 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     accountId: 'wa-seq',
     timestamp: new Date(`2026-04-05T11:0${n}:00Z`),
     sentAt: new Date(`2026-04-05T11:0${n}:00Z`),
+    sender: { id: '34600000001@s.whatsapp.net', displayName: 'Alice', phone: '+34600111222', lid: '144980999962625@lid' },
     content: { type: 'text', body: `inbound ${n}` },
     channelDetails: { platform: 'whatsapp', messageId: `WA-${n}` },
     gateway: { ...testEnvelopes[0]!.gateway, account: { ...testEnvelopes[0]!.gateway.account, id: 'wa-seq' } },
@@ -579,7 +580,7 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     expect(first.seq).toEqual(expect.any(Number));
     expect(first.sentAt).toBe('2026-04-05T11:01:00.000Z');
     expect(first.timestamp).toBe('2026-04-05T11:01:00.000Z');
-    expect(first.sender).toMatchObject({ id: '34600000001@s.whatsapp.net', displayName: 'Alice' });
+    expect(first.sender).toEqual({ id: '34600000001@s.whatsapp.net', displayName: 'Alice', phone: '+34600111222', lid: '144980999962625@lid' });
     expect(first.content).toMatchObject({ type: 'text', body: 'inbound 1' });
   });
 

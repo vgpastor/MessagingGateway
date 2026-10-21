@@ -3,6 +3,7 @@
  * Extracted to avoid duplication between SQLite and PostgreSQL stores.
  */
 import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
+import type { ContactRef } from '../messaging/channel.types.js';
 
 // ── UTC helpers ─────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ export function cutoffUTC(days: number): string {
  */
 const ENVELOPE_COLUMN_NAMES = [
   'id', 'account_id', 'channel', 'direction', 'conversation_id',
-  'sender_id', 'sender_name', 'recipient_id',
+  'sender_id', 'sender_name', 'sender_phone', 'sender_lid', 'recipient_id',
   'content_type', 'content_preview', 'content_json',
   'context_json', 'channel_details_json', 'gateway_json',
   'timestamp', 'created_at',
@@ -108,6 +109,14 @@ export function readLogFields(row: Record<string, unknown>): { seq?: number; acc
 }
 
 // ── Row mapping ─────────────────────────────────────────────────
+
+/** Sender of a row; `phone`/`lid` are omitted when NULL (legacy rows, or channels that don't expose them) */
+export function readSender(row: Record<string, unknown>): ContactRef {
+  const sender: ContactRef = { id: row.sender_id as string, displayName: (row.sender_name as string | null) ?? undefined };
+  if (row.sender_phone != null) sender.phone = row.sender_phone as string;
+  if (row.sender_lid != null) sender.lid = row.sender_lid as string;
+  return sender;
+}
 
 /** Parse a JSON column that may already be an object (PostgreSQL JSONB) or a string (SQLite TEXT) */
 export function parseJsonColumn<T = unknown>(value: string | Record<string, unknown> | null | undefined): T | undefined {

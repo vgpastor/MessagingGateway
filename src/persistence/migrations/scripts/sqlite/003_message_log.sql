@@ -1,5 +1,5 @@
 -- Message log: global `seq`, per-account contiguous `account_seq`, WhatsApp message id dedupe,
--- provider `sent_at` and the raw provider payload (SQLite).
+-- provider `sent_at`, the sender's stable identity (`sender_phone`, `sender_lid`) and the raw provider payload (SQLite).
 --
 -- Existing rows are renumbered in their original insertion order (rowid).
 
@@ -7,6 +7,9 @@ ALTER TABLE messages ADD COLUMN seq INTEGER;
 ALTER TABLE messages ADD COLUMN account_seq INTEGER;
 ALTER TABLE messages ADD COLUMN wa_message_id TEXT;
 ALTER TABLE messages ADD COLUMN sent_at TEXT;
+-- Sender identity as exposed by the channel (E.164 phone, WhatsApp LID). NULL for legacy rows: nothing is backfilled.
+ALTER TABLE messages ADD COLUMN sender_phone TEXT;
+ALTER TABLE messages ADD COLUMN sender_lid TEXT;
 ALTER TABLE messages ADD COLUMN raw_json TEXT;
 
 UPDATE messages SET seq = rowid;

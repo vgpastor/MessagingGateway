@@ -15,7 +15,7 @@ import type {
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, waMessageIdOf,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender, waMessageIdOf,
 } from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
@@ -74,11 +74,11 @@ export class PostgresMessageStore implements FullMessageStorePort {
     await pool.query(
       `INSERT INTO messages (
         id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, recipient_id,
+        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
         content_type, content_preview, content_json,
         context_json, channel_details_json, gateway_json,
         timestamp, created_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       ON CONFLICT (id) DO UPDATE SET
         content_json = EXCLUDED.content_json,
         content_preview = EXCLUDED.content_preview,
@@ -93,6 +93,8 @@ export class PostgresMessageStore implements FullMessageStorePort {
         envelope.conversationId,
         envelope.sender.id,
         envelope.sender.displayName ?? null,
+        envelope.sender.phone ?? null,
+        envelope.sender.lid ?? null,
         envelope.recipient.id,
         envelope.content.type,
         preview,
@@ -302,11 +304,11 @@ export class PostgresMessageStore implements FullMessageStorePort {
       const inserted = await client.query(
         `INSERT INTO messages (
           id, account_id, channel, direction, conversation_id,
-          sender_id, sender_name, recipient_id,
+          sender_id, sender_name, sender_phone, sender_lid, recipient_id,
           content_type, content_preview, content_json,
           context_json, channel_details_json, gateway_json,
           timestamp, created_at, wa_message_id, sent_at, raw_json
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
         ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
         RETURNING seq`,
         [
@@ -317,6 +319,8 @@ export class PostgresMessageStore implements FullMessageStorePort {
           envelope.conversationId,
           envelope.sender.id,
           envelope.sender.displayName ?? null,
+          envelope.sender.phone ?? null,
+          envelope.sender.lid ?? null,
           envelope.recipient.id,
           envelope.content.type,
           extractPreview(envelope),
@@ -469,7 +473,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       direction: row.direction,
       timestamp: ts instanceof Date ? ts : new Date(ts as string),
       conversationId: row.conversation_id as string,
-      sender: { id: row.sender_id as string, displayName: row.sender_name as string | undefined },
+      sender: readSender(row),
       recipient: { id: row.recipient_id as string },
       content: parseJsonColumnRequired(row.content_json as string),
       context: parseJsonColumn(row.context_json as string | null) ?? undefined,

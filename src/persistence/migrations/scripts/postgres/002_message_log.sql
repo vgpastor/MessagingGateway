@@ -1,5 +1,5 @@
 -- Message log: global `seq`, per-account contiguous `account_seq`, WhatsApp message id dedupe,
--- provider `sent_at` and the raw provider payload (PostgreSQL).
+-- provider `sent_at`, the sender's stable identity (`sender_phone`, `sender_lid`) and the raw provider payload (PostgreSQL).
 --
 -- Runs as ONE multi-statement simple query, i.e. a single implicit transaction:
 -- either the whole upgrade of existing rows applies or nothing does.
@@ -11,6 +11,9 @@ ALTER TABLE messages
   ADD COLUMN account_seq BIGINT,
   ADD COLUMN wa_message_id TEXT,
   ADD COLUMN sent_at TIMESTAMPTZ,
+  -- Sender identity as exposed by the channel (E.164 phone, WhatsApp LID). NULL for legacy rows: nothing is backfilled.
+  ADD COLUMN sender_phone TEXT,
+  ADD COLUMN sender_lid TEXT,
   ADD COLUMN raw_json JSONB;
 
 -- WhatsApp message id lives in the channel details; empty means "unknown" (NULL never conflicts)
