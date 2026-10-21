@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Unified Messaging Gateway
  * Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.5.1
  */
 import { customFetch } from '../fetch-mutator.js';
 export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
@@ -1369,6 +1369,44 @@ export const GetApiV1ConversationsConversationIdContextFormat = {
   openai: 'openai',
   raw: 'raw',
 } as const;
+
+export type GetApiV1MediaId202Status = typeof GetApiV1MediaId202Status[keyof typeof GetApiV1MediaId202Status];
+
+
+export const GetApiV1MediaId202Status = {
+  pending: 'pending',
+} as const;
+
+export type GetApiV1MediaId202 = {
+  status: GetApiV1MediaId202Status;
+};
+
+export type GetApiV1MediaId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type GetApiV1MediaId410Status = typeof GetApiV1MediaId410Status[keyof typeof GetApiV1MediaId410Status];
+
+
+export const GetApiV1MediaId410Status = {
+  skipped: 'skipped',
+  expired: 'expired',
+} as const;
+
+export type GetApiV1MediaId410SkipReason = typeof GetApiV1MediaId410SkipReason[keyof typeof GetApiV1MediaId410SkipReason];
+
+
+export const GetApiV1MediaId410SkipReason = {
+  too_large: 'too_large',
+  download_failed: 'download_failed',
+} as const;
+
+export type GetApiV1MediaId410 = {
+  status: GetApiV1MediaId410Status;
+  skipReason?: GetApiV1MediaId410SkipReason;
+};
 
 export type getHealthResponse200 = {
   data: GetHealth200
@@ -3026,6 +3064,54 @@ export const getApiV1ConversationsConversationIdContext = async (conversationId:
     params?: GetApiV1ConversationsConversationIdContextParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1ConversationsConversationIdContextResponse> => {
 
   return customFetch<getApiV1ConversationsConversationIdContextResponse>(getGetApiV1ConversationsConversationIdContextUrl(conversationId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export type getApiV1MediaIdResponse202 = {
+  data: GetApiV1MediaId202
+  status: 202
+}
+
+export type getApiV1MediaIdResponse404 = {
+  data: GetApiV1MediaId404
+  status: 404
+}
+
+export type getApiV1MediaIdResponse410 = {
+  data: GetApiV1MediaId410
+  status: 410
+}
+
+export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse202) & {
+  headers: Headers;
+};
+export type getApiV1MediaIdResponseError = (getApiV1MediaIdResponse404 | getApiV1MediaIdResponse410) & {
+  headers: Headers;
+};
+
+export type getApiV1MediaIdResponse = (getApiV1MediaIdResponseSuccess | getApiV1MediaIdResponseError)
+
+export const getGetApiV1MediaIdUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/media/${id}`
+}
+
+/**
+ * Download the media of a stored message (the `media.url` of its envelope). 200 streams the file; 202 while it is still being downloaded; 410 when it was skipped or has expired.
+ */
+export const getApiV1MediaId = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MediaIdResponse> => {
+
+  return customFetch<getApiV1MediaIdResponse>(getGetApiV1MediaIdUrl(id),
   {
     ...options,
     method: 'GET'

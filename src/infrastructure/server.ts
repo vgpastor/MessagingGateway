@@ -40,6 +40,8 @@ export interface ServerDeps {
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
   messageStore?: import('../core/persistence/message-store.port.js').FullMessageStorePort;
+  /** Where inbound media is read from; enables GET /api/v1/media/:id together with `messageStore`. */
+  mediaStore?: import('../core/inbound/media-service.js').MediaFileReader;
   apiKey: string;
   port: number;
   logLevel: string;
@@ -224,6 +226,16 @@ export async function createServer(deps: ServerDeps) {
           contextService,
         }),
       );
+
+      if (deps.mediaStore) {
+        const { mediaController } = await import('../connections/api/media.controller.js');
+        await authenticated.register(
+          async (instance) => mediaController(instance, {
+            messageStore: deps.messageStore!,
+            mediaStore: deps.mediaStore!,
+          }),
+        );
+      }
     }
   });
 

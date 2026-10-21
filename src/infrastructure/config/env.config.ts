@@ -21,6 +21,14 @@ export interface EnvConfig {
   databasePath: string;
   databaseUrl?: string;
   metricsEnabled: boolean;
+  /** Largest inbound media (bytes) that is downloaded; bigger ones are skipped. */
+  mediaMaxBytes: number;
+  /** Days a stored media file is kept. */
+  mediaRetentionDays: number;
+  /** Days a message is kept in the log. */
+  messageRetentionDays: number;
+  /** Directory (inside the data volume) where inbound media is stored. */
+  mediaDir: string;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -42,7 +50,17 @@ export function loadEnvConfig(): EnvConfig {
     databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
     databaseUrl: process.env['DATABASE_URL'],
     metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
+    mediaMaxBytes: positiveInt('MEDIA_MAX_BYTES', 16_777_216),
+    mediaRetentionDays: positiveInt('MEDIA_RETENTION_DAYS', 30),
+    messageRetentionDays: positiveInt('MESSAGE_RETENTION_DAYS', 180),
+    mediaDir: process.env['MEDIA_DIR'] ?? '/app/data/media',
   };
+}
+
+/** Reads a positive integer env var, falling back to `fallback` when unset or invalid. */
+function positiveInt(name: string, fallback: number): number {
+  const parsed = parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function resolveApiKey(nodeEnv: string): string {

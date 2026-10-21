@@ -81,6 +81,10 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `STORAGE_DRIVER` | `sqlite` | Storage backend: `sqlite` or `postgres` |
 | `DATABASE_PATH` | `data/messages.db` | SQLite database file path |
 | `DATABASE_URL` | _(none)_ | PostgreSQL connection URL (required when driver=postgres) |
+| `MEDIA_DIR` | `/app/data/media` | Where inbound media files are stored (keep it inside the data volume) |
+| `MEDIA_MAX_BYTES` | `16777216` | Largest inbound media downloaded (bytes); bigger ones are skipped |
+| `MEDIA_RETENTION_DAYS` | `30` | Days media files are kept |
+| `MESSAGE_RETENTION_DAYS` | `180` | Days messages are kept in the log |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` |
 
 Create a `.env.local` file to override defaults:
@@ -166,6 +170,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `POST` | `/api/v1/messages/:id/read` | Mark a message as read |
 | `GET` | `/api/v1/messages` | Query stored messages with filters † |
 | `GET` | `/api/v1/messages/:id` | Get a stored message by ID † |
+| `GET` | `/api/v1/media/:id` | Download a message's media (`media.url`): 200 file, 202 still downloading, 410 skipped/expired † |
 | `GET` | `/api/v1/messages/search?q=` | Full-text search across messages † |
 | `GET` | `/api/v1/messages/stats` | Message count with filters † |
 | `GET` | `/api/v1/messages/analytics` | Aggregated statistics (by channel, direction, hourly) † |

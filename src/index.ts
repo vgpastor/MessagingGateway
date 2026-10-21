@@ -15,8 +15,10 @@ import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { InboundPipeline } from './core/inbound/inbound-pipeline.js';
-import { noopMediaService } from './core/inbound/media-service.js';
-import { toStorableRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
+import { DiskMediaService, noopMediaService, type MediaService } from './core/inbound/media-service.js';
+import { toStorableRaw, restoreBaileysRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
+import { downloadBaileysMedia } from './integrations/whatsapp/baileys/baileys-media.js';
+import { DiskMediaStore } from './persistence/media/disk-media-store.js';
 import { noopMetrics } from './core/metrics/metrics.port.js';
 import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
@@ -209,12 +211,24 @@ async function main() {
     });
   }
 
+  // Inbound media goes to disk (never to the database); without a message log there is nowhere to record it.
+  const mediaStore = new DiskMediaStore(envConfig.mediaDir);
+  const mediaService: MediaService = messageStore
+    ? new DiskMediaService({
+        store: messageStore,
+        files: mediaStore,
+        download: (raw, maxBytes) => downloadBaileysMedia(raw as Parameters<typeof downloadBaileysMedia>[0], maxBytes),
+        restoreRaw: restoreBaileysRaw,
+        maxBytes: envConfig.mediaMaxBytes,
+      })
+    : noopMediaService;
+
   // Inbound: filter → persist (message log) → emit → media. Persisting strictly
   // before emitting keeps `accountSeq` gaps meaningful for consumers.
   const inboundPipeline = new InboundPipeline({
     store: messageStore,
     eventBus,
-    media: noopMediaService, // replaced by the disk-backed MediaService
+    media: mediaService,
     metrics: noopMetrics,
     resolveLidToPhone: resolveBaileysLidToPhone,
     toStorableRaw,
@@ -229,7 +243,7 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
-    webhookForwarder, wsBroadcaster, messageStore,
+    webhookForwarder, wsBroadcaster, messageStore, mediaStore,
     apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
     metricsEnabled: envConfig.metricsEnabled,
@@ -241,6 +255,10 @@ async function main() {
     logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
     await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
+    // Media left pending by a previous run (crash between persisting the message and downloading it).
+    mediaService.resumePendingMedia().catch((err) => {
+      logger.error('Failed to resume pending media', { error: err instanceof Error ? err.message : String(err) });
+    });
     healthCheckScheduler.start();
 
     const shutdown = async () => {

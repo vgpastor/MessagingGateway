@@ -53,6 +53,7 @@ async function main() {
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, webhookForwarder,
     messageStore: schemaMessageStore,
+    mediaStore: { open: async () => undefined },
     apiKey: 'schema-export', port: 0, logLevel: 'silent',
   });
 

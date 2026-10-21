@@ -47,3 +47,13 @@ export function toStorableRaw(message: unknown): unknown {
   });
   return json === undefined ? undefined : JSON.parse(json);
 }
+
+/**
+ * Inverse of {@link toStorableRaw}: rebuilds a Baileys message from the stored
+ * JSON (buffers revived, numeric strings back to `Long`s) so its media can be
+ * downloaded again, e.g. after a restart.
+ */
+export function restoreBaileysRaw(stored: unknown): proto.IWebMessageInfo {
+  const revived = JSON.parse(JSON.stringify(stored), BufferJSON.reviver) as Record<string, unknown>;
+  return proto.WebMessageInfo.fromObject(revived);
+}
