@@ -220,6 +220,7 @@ async function main() {
     wireAccount: async (account) => { await providerRegistry.get(account.provider)?.wireEvents?.(account, eventBus, inboundPipeline); },
     webhookForwarder, wsBroadcaster, messageStore, mediaStore,
     apiKey: envConfig.apiKey,
+    readApiKey: envConfig.readApiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
     metricsEnabled: envConfig.metricsEnabled,
   });

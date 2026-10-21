@@ -11,6 +11,8 @@ export interface EnvConfig {
   nodeEnv: string;
   logLevel: string;
   apiKey: string;
+  /** Optional read-only key: reads messages/media and subscribes to WS events, nothing else. */
+  readApiKey?: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
   alertWebhookUrl?: string;
@@ -40,6 +42,7 @@ export function loadEnvConfig(): EnvConfig {
     nodeEnv,
     logLevel: process.env['LOG_LEVEL'] ?? 'info',
     apiKey,
+    readApiKey: process.env['READ_API_KEY'] || undefined,
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     alertWebhookUrl: process.env['ALERT_WEBHOOK_URL'],

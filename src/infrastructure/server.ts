@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import Fastify from 'fastify';
+import Fastify, { LogController, type FastifyRequest } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
@@ -15,7 +15,8 @@ import type { WebhookForwarder } from '../connections/webhooks/webhook-forwarder
 import type { CredentialValidatorPort } from '../core/accounts/credential-validator.port.js';
 import type { HealthCheckSchedulerPort } from '../core/accounts/health-check-scheduler.port.js';
 import type { WebSocketBroadcaster } from '../connections/ws/websocket-broadcaster.js';
-import { createApiKeyGuard } from '../core/auth/api-key.guard.js';
+import { createApiKeyGuard, type AuthScope } from '../core/auth/api-key.guard.js';
+import { redactUrl } from './logging/redact-url.js';
 import { healthController } from '../connections/api/health.controller.js';
 import { accountsController } from '../connections/api/accounts.controller.js';
 import { sendController } from '../connections/api/send.controller.js';
@@ -26,9 +27,16 @@ import { emailWebhookController } from '../connections/api/inbound/email-webhook
 import { smsWebhookController } from '../connections/api/inbound/sms-webhook.controller.js';
 import { webhookConfigController } from '../connections/api/webhook-config.controller.js';
 import { groupsController } from '../connections/api/groups.controller.js';
-import { websocketController } from '../connections/ws/websocket.controller.js';
+import { websocketController, selectKeyProtocol } from '../connections/ws/websocket.controller.js';
 import { metricsController } from '../connections/api/metrics.controller.js';
 import { accountSchema } from './config/accounts.schema.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Scope granted by the API key guard (`admin` or `read`). */
+    authScope?: AuthScope;
+  }
+}
 
 export interface ServerDeps {
   accountRepository: ChannelAccountRepository;
@@ -45,8 +53,12 @@ export interface ServerDeps {
   /** Where inbound media is read from; enables GET /api/v1/media/:id together with `messageStore`. */
   mediaStore?: import('../core/inbound/media-service.js').MediaFileReader;
   apiKey: string;
+  /** Optional read-only key: GET messages/media and the WS event stream, nothing else. */
+  readApiKey?: string;
   port: number;
   logLevel: string;
+  /** Where the structured logs are written (defaults to stdout); mainly for tests. */
+  logStream?: { write(msg: string): void };
   metricsEnabled?: boolean;
 }
 
@@ -54,10 +66,24 @@ export async function createServer(deps: ServerDeps) {
   const isDev = process.env['NODE_ENV'] !== 'production';
   const usePrettyLogs = process.env['NODE_ENV'] === 'development';
 
+  // Same shape as Fastify's default request serializer, with the token query value redacted.
+  const serializers = {
+    req: (request: FastifyRequest) => ({
+      method: request.method,
+      url: redactUrl(request.url),
+      host: request.host,
+      remoteAddress: request.ip,
+      remotePort: request.socket?.remotePort,
+    }),
+  };
+
   const fastify = Fastify({
+    // Fastify's own request logs print the raw URL; the onResponse hook below logs a redacted one.
+    logController: new LogController({ disableRequestLogging: true }),
     logger: usePrettyLogs
       ? {
           level: deps.logLevel,
+          serializers,
           transport: {
             target: 'pino-pretty',
             options: { colorize: true },
@@ -65,7 +91,30 @@ export async function createServer(deps: ServerDeps) {
         }
       : {
           level: deps.logLevel,
+          serializers,
+          ...(deps.logStream ? { stream: deps.logStream } : {}),
         },
+  });
+
+  fastify.addHook('onResponse', async (request, reply) => {
+    if (request.url.split('?')[0] === '/health') return;
+    const fields = {
+      method: request.method,
+      url: redactUrl(request.url),
+      route: request.routeOptions?.url,
+      statusCode: reply.statusCode,
+      responseTime: Math.round(reply.elapsedTime * 100) / 100,
+    };
+    if (reply.statusCode >= 500) request.log.error(fields, 'request completed');
+    else request.log.info(fields, 'request completed');
+  });
+
+  // Request logging is off, so handler errors would go unreported: log them here (no URL, no query).
+  fastify.addHook('onError', async (request, _reply, error) => {
+    request.log.error(
+      { err: error, method: request.method, route: request.routeOptions?.url },
+      'request errored',
+    );
   });
 
   fastify.removeContentTypeParser('application/json');
@@ -82,7 +131,8 @@ export async function createServer(deps: ServerDeps) {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
-  await fastify.register(fastifyWebsocket);
+  // The key can travel as the `umg.<key>` subprotocol; it must be echoed back in the handshake.
+  await fastify.register(fastifyWebsocket, { options: { handleProtocols: selectKeyProtocol } });
 
   await fastify.register(fastifySwagger, {
     openapi: {
@@ -124,16 +174,6 @@ export async function createServer(deps: ServerDeps) {
 
   await fastify.register(healthController);
 
-  if (deps.metricsEnabled !== false) {
-    const { registry } = await import('./metrics/prometheus.js');
-    await fastify.register(
-      async (instance) => metricsController(instance, {
-        getMetrics: () => registry.metrics(),
-        contentType: registry.contentType,
-      }),
-    );
-  }
-
   // ── Inbound webhooks (provider-to-gateway, own signature validation) ──
 
   await fastify.register(
@@ -168,10 +208,21 @@ export async function createServer(deps: ServerDeps) {
 
   // ── Authenticated API routes ────────────────────────────────
 
-  const apiKeyGuard = createApiKeyGuard(deps.apiKey);
+  const apiKeyGuard = createApiKeyGuard({ adminKey: deps.apiKey, readKey: deps.readApiKey });
 
   await fastify.register(async (authenticated) => {
     authenticated.addHook('preHandler', apiKeyGuard);
+
+    // Prometheus metrics: admin key only (the read-only key gets 403).
+    if (deps.metricsEnabled !== false) {
+      const { registry } = await import('./metrics/prometheus.js');
+      await authenticated.register(
+        async (instance) => metricsController(instance, {
+          getMetrics: () => registry.metrics(),
+          contentType: registry.contentType,
+        }),
+      );
+    }
 
     await authenticated.register(
       async (instance) => accountsController(instance, {
@@ -242,13 +293,14 @@ export async function createServer(deps: ServerDeps) {
     }
   });
 
-  // ── WebSocket (token-based auth handled inside controller) ──
+  // ── WebSocket (key auth handled inside the controller: header, subprotocol or legacy ?token=) ──
 
   if (deps.wsBroadcaster) {
     await fastify.register(
       async (instance) => websocketController(instance, {
         wsBroadcaster: deps.wsBroadcaster!,
         apiKey: deps.apiKey,
+        readApiKey: deps.readApiKey,
       }),
     );
   }

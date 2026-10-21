@@ -45,3 +45,26 @@ describe('loadEnvConfig retention', () => {
     expect(loadEnvConfig().messageRetentionDays).toBe(180);
   });
 });
+
+describe('loadEnvConfig read-only key', () => {
+  const saved = { ...process.env };
+
+  beforeEach(() => {
+    process.env['API_KEY'] = 'test-key';
+    delete process.env['READ_API_KEY'];
+  });
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it('is undefined when READ_API_KEY is unset or empty', () => {
+    expect(loadEnvConfig().readApiKey).toBeUndefined();
+    process.env['READ_API_KEY'] = '';
+    expect(loadEnvConfig().readApiKey).toBeUndefined();
+  });
+
+  it('reads READ_API_KEY', () => {
+    process.env['READ_API_KEY'] = 'read-only-key';
+    expect(loadEnvConfig().readApiKey).toBe('read-only-key');
+  });
+});
