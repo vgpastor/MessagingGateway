@@ -6,7 +6,7 @@ import { loadEnvConfig, resolveProviderCredential } from './infrastructure/confi
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
-import { baileysProvider, resolveBaileysLidToPhone } from './integrations/whatsapp/baileys/index.js';
+import { baileysProvider, resolveBaileysLidToPhone, setBaileysMessageStore } from './integrations/whatsapp/baileys/index.js';
 import { wwebjsProvider } from './integrations/whatsapp/wwebjs-api/index.js';
 import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
@@ -177,6 +177,7 @@ async function main() {
     const { createMessageStore } = await import('./persistence/message-store.factory.js');
     const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
     messageStore = await createMessageStore(envConfig);
+    setBaileysMessageStore(messageStore);
     subscribePersistence(eventBus, messageStore);
     logger.info('Persistence enabled', {
       driver: envConfig.storageDriver,
@@ -216,6 +217,7 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
+    wireAccount: async (account) => { await providerRegistry.get(account.provider)?.wireEvents?.(account, eventBus, inboundPipeline); },
     webhookForwarder, wsBroadcaster, messageStore, mediaStore,
     apiKey: envConfig.apiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,

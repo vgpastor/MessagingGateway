@@ -37,6 +37,8 @@ export interface ServerDeps {
   messageRouter: MessageRouterService;
   credentialValidator: CredentialValidatorPort;
   healthCheckScheduler?: HealthCheckSchedulerPort;
+  /** Wires an account's inbound events (idempotent); used for accounts created or connected at runtime. */
+  wireAccount?: (account: import('../core/accounts/channel-account.js').ChannelAccount) => Promise<void>;
   webhookForwarder: WebhookForwarder;
   wsBroadcaster?: WebSocketBroadcaster;
   messageStore?: import('../core/persistence/message-store.port.js').FullMessageStorePort;
@@ -177,6 +179,7 @@ export async function createServer(deps: ServerDeps) {
         credentialValidator: deps.credentialValidator,
         healthCheckScheduler: deps.healthCheckScheduler,
         providerRegistry: deps.providerRegistry,
+        wireAccount: deps.wireAccount,
         validateAccountBody: (body: unknown) => {
           const parsed = accountSchema.safeParse(body);
           if (!parsed.success) {

@@ -5,6 +5,8 @@ import makeWASocket, {
   type WASocket,
   type WAVersion,
   type BaileysEventMap,
+  type CacheStore,
+  type GroupMetadata,
 } from '@whiskeysockets/baileys';
 import type { Boom } from '@hapi/boom';
 import { resolve, sep } from 'node:path';
@@ -12,6 +14,8 @@ import { mkdir, rm } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import { computeBackoffMs } from '../../../core/util/backoff.js';
+import { TtlCache } from '../../../core/util/ttl-cache.js';
+import type { BaileysMessageLookup } from './baileys-message-lookup.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
 import type { GroupInfo } from '../../../core/groups/group.types.js';
 
@@ -30,6 +34,15 @@ interface SocketEntry {
   config: BaileysProviderConfig;
   connectionStatus: ConnectionStatus;
   lastQr: string | undefined;
+}
+
+/** How long Baileys' retry counters and group metadata stay cached. */
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 5000;
+
+/** Baileys types its caches with a generic `get<T>`; ours is typed by value, so adapt once here. */
+function asCacheStore(cache: TtlCache<unknown>): CacheStore {
+  return cache as unknown as CacheStore;
 }
 
 export interface BaileysSocketManagerOptions {
@@ -67,8 +80,22 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
    * because the entry is replaced on every reconnect. Reset when the socket opens.
    */
   private reconnectAttempts = new Map<string, number>();
+  /** Where Baileys finds messages it must re-send or retry-decrypt; unset until a message log exists. */
+  private messageLookup: BaileysMessageLookup | undefined;
+  /**
+   * Per-account caches handed to Baileys. Kept OUTSIDE {@link SocketEntry} so they
+   * survive reconnects, and per account because the same WhatsApp message id can
+   * reach two of our accounts (a shared group) and must not share retry counters.
+   */
+  private retryCounters = new Map<string, TtlCache<unknown>>();
+  private groupMetadata = new Map<string, TtlCache<GroupMetadata>>();
 
   constructor(private readonly options: BaileysSocketManagerOptions = {}) {}
+
+  /** Back Baileys' `getMessage` with the message log (call once the store exists). */
+  setMessageLookup(lookup: BaileysMessageLookup | undefined): void {
+    this.messageLookup = lookup;
+  }
 
   async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
     if (this.clearing.has(accountId)) {
@@ -107,7 +134,17 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       version,
       connectTimeoutMs: config.connectTimeoutMs ?? 60_000,
       qrTimeout: config.qrTimeoutMs ?? 60_000,
-      markOnlineOnConnect: config.markOnlineOnConnect ?? true,
+      markOnlineOnConnect: config.markOnlineOnConnect ?? false,
+      getMessage: async (key) => {
+        if (!key.id || !this.messageLookup) return undefined;
+        try {
+          return await this.messageLookup(accountId, key.id);
+        } catch {
+          return undefined; // never throw into Baileys' retry path
+        }
+      },
+      msgRetryCounterCache: asCacheStore(this.cacheFor(this.retryCounters, accountId)),
+      cachedGroupMetadata: async (jid) => this.groupMetadataFor(accountId).get(jid),
     });
 
     const entry: SocketEntry = {
@@ -174,6 +211,13 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       }
     });
 
+    // A changed group must not be served stale to Baileys when it addresses the group.
+    const groupCache = this.groupMetadataFor(accountId);
+    socket.ev.on('groups.update', (updates) => {
+      for (const update of updates) if (update.id) groupCache.del(update.id);
+    });
+    socket.ev.on('group-participants.update', (update) => groupCache.del(update.id));
+
     socket.ev.on('messages.upsert', (event) => {
       const handlers = this.handlersFor(this.messageHandlers, accountId);
       getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
@@ -182,6 +226,19 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       }
     });
 
+  }
+
+  private cacheFor<V>(registry: Map<string, TtlCache<V>>, accountId: string): TtlCache<V> {
+    let cache = registry.get(accountId);
+    if (!cache) {
+      cache = new TtlCache<V>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
+      registry.set(accountId, cache);
+    }
+    return cache;
+  }
+
+  private groupMetadataFor(accountId: string): TtlCache<GroupMetadata> {
+    return this.cacheFor(this.groupMetadata, accountId);
   }
 
   getSocket(accountId: string): WASocket | undefined {
@@ -321,7 +378,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   /** Whether the account's inbound/connection subscriptions have been registered. */
-  private isWired(accountId: string): boolean {
+  isWired(accountId: string): boolean {
     return this.messageHandlers.has(accountId) || this.connectionHandlers.has(accountId);
   }
 
@@ -357,6 +414,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     const socket = this.getSocket(accountId);
     if (!socket) return [];
     const groups = await socket.groupFetchAllParticipating();
+    const cache = this.groupMetadataFor(accountId);
+    for (const metadata of Object.values(groups)) cache.set(metadata.id, metadata);
     return Object.values(groups).map(g => ({
       id: g.id,
       name: g.subject,
@@ -377,6 +436,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     if (!socket) return undefined;
     try {
       const metadata = await socket.groupMetadata(groupId);
+      this.groupMetadataFor(accountId).set(groupId, metadata);
       return {
         id: metadata.id,
         name: metadata.subject,

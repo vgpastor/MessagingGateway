@@ -47,6 +47,12 @@ export interface AccountsControllerDeps {
   credentialValidator: CredentialValidatorPort;
   healthCheckScheduler?: HealthCheckSchedulerPort;
   providerRegistry: ProviderLookupPort;
+  /**
+   * Subscribe an account to its provider's inbound events. Must be idempotent
+   * (the same account is wired at boot, on creation and on every connect).
+   * Without it, accounts created at runtime would receive nothing until restart.
+   */
+  wireAccount?: (account: ChannelAccount) => Promise<void>;
   /** Validate create-account request body (injected to avoid schema library coupling) */
   validateAccountBody: (body: unknown) => AccountValidationResult;
 }
@@ -84,6 +90,15 @@ export async function accountsController(
   fastify: FastifyInstance,
   deps: AccountsControllerDeps,
 ): Promise<void> {
+
+  /** Wire inbound events for an account; a failure is logged and never blocks the request. */
+  async function wire(account: ChannelAccount): Promise<void> {
+    try {
+      await deps.wireAccount?.(account);
+    } catch (err) {
+      fastify.log.error(`Failed to wire events for ${account.id}: ${(err as Error).message}`);
+    }
+  }
 
   const idParamsSchema = {
     type: 'object' as const,
@@ -262,6 +277,8 @@ export async function accountsController(
       const saved = await deps.accountRepository.save(account);
       fastify.log.info(`Account created: ${saved.id}`);
 
+      await wire(saved);
+
       // Fire-and-forget health check if credentials are available
       if (saved.credentials || saved.credentialsRef) {
         deps.healthCheckScheduler?.checkAccount(saved.id).catch((err) => {
@@ -403,6 +420,8 @@ export async function accountsController(
       });
     }
 
+    // Wire before connecting so no early event is lost (and after a disconnect, which forgets the handlers).
+    await wire(account);
     await manager.connect(account.id, account.providerConfig);
 
     return sanitizeAccount(account, deps.providerRegistry);
@@ -478,6 +497,7 @@ export async function accountsController(
 
     // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
+      await wire(account);
       await manager.connect(account.id, account.providerConfig);
     }
 

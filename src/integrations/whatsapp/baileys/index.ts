@@ -11,9 +11,16 @@ import { BaileysConnectionManager } from './baileys.connection-manager.js';
 import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
 import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
+import { createBaileysMessageLookup } from './baileys-message-lookup.js';
+import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
 import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
+
+/** Let Baileys' `getMessage` read from the message log (retries / re-sends). Call once the store exists. */
+export function setBaileysMessageStore(store: Pick<MessageLogPort, 'findByWaMessageId'> | undefined): void {
+  socketManager.setMessageLookup(store ? createBaileysMessageLookup(store) : undefined);
+}
 
 /** Resolve a WhatsApp LID to its phone JID using the account's open socket (undefined if unknown). */
 export function resolveBaileysLidToPhone(accountId: string, lid: string): Promise<string | undefined> {
@@ -51,7 +58,15 @@ export const baileysProvider: ProviderBundle = {
   health: () => new BaileysHealthChecker(socketManager),
   connection: () => new BaileysConnectionManager(socketManager),
 
+  /**
+   * Idempotent per account: the socket manager appends handlers on every
+   * registration, so a second call would deliver each message twice. Boot wiring
+   * and hot wiring (accounts created or connected through the API) both land here.
+   * The guard is the socket manager's own record of registered handlers, so it
+   * resets when a disconnect forgets them and the account can be wired again.
+   */
   async wireEvents(account: ChannelAccount, eventBus: EventBus, inbound: InboundPipeline): Promise<void> {
+    if (socketManager.isWired(account.id)) return;
     const inboundAdapter = new BaileysWebhookAdapter();
 
     socketManager.onMessage(account.id, async (event) => {
