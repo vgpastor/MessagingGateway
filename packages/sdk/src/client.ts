@@ -2,7 +2,7 @@ import type {
   ClientConfig, Account, CreateAccountInput, UpdateAccountInput,
   SendMessageCommand, MessageResult, WebhookConfig, WebhookConfigInput,
   HealthStatus, GatewayError, GroupInfo, MessageQuery, MessageQueryResult,
-  MessageStats, UnifiedEnvelope, ConversationContext,
+  MessageStats, UnifiedEnvelope, ConversationContext, MessagesAfterResult,
 } from './types.js';
 
 export class GatewayApiError extends Error {
@@ -219,6 +219,21 @@ class MessagesApi {
     }
     const qs = params.toString();
     return this.client.get<MessageQueryResult>(`/api/v1/messages${qs ? `?${qs}` : ''}`);
+  }
+
+  /**
+   * Catch-up read of inbound messages by per-account sequence: everything for
+   * `accountId` with `accountSeq > afterAccountSeq`, oldest first. Use it after
+   * a reconnect or when a gap in `accountSeq` is detected; keep calling with
+   * `nextAfterAccountSeq` until it is `null`.
+   */
+  async after(accountId: string, afterAccountSeq: number, limit = 500): Promise<MessagesAfterResult> {
+    const params = new URLSearchParams({
+      accountId,
+      afterAccountSeq: String(afterAccountSeq),
+      limit: String(limit),
+    });
+    return this.client.get<MessagesAfterResult>(`/api/v1/messages?${params.toString()}`);
   }
 
   async get(messageId: string): Promise<UnifiedEnvelope> {

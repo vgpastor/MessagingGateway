@@ -1,5 +1,6 @@
-import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
+import { computeBackoffMs, DEFAULT_BACKOFF_BASE_MS, DEFAULT_BACKOFF_MAX_MS } from './backoff.js';
+import { openSocket, type GatewaySocket } from './socket.js';
 import type {
   EventsConfig, SendMessageCommand, UnifiedEnvelope,
   MessageSentData, ConnectionUpdateData, MessageSendFailedData,
@@ -17,11 +18,22 @@ type EventMap = {
   'subscribed': [accounts: string[]];
   'unsubscribed': [accounts: string[]];
   'pong': [];
+  /** A reconnect was scheduled: `attempt` is 1-based, `delayMs` the jittered wait. */
+  'reconnecting': [attempt: number, delayMs: number];
   'raw': [event: WsEventType, data: unknown];
 };
 
+/** No server ping and no message for this long means the connection is dead (the server pings every 30 s). */
+const HEARTBEAT_TIMEOUT_MS = 75_000;
+
 /**
  * WebSocket event client for real-time gateway events.
+ *
+ * Authenticates with the API key in an `Authorization` header (Node) or the
+ * `umg.<key>` subprotocol (browser) — never in the URL. Reconnects with
+ * exponential backoff and full jitter, and drops connections that go silent
+ * for 75 s. After a reconnect, use `client.messages.after(...)` with the last
+ * seen `accountSeq` to catch up on anything missed.
  *
  * @example
  * ```typescript
@@ -39,10 +51,12 @@ type EventMap = {
  * ```
  */
 export class MessagingGatewayEvents {
-  private ws: WebSocket | null = null;
-  private readonly config: Required<EventsConfig>;
+  private ws: GatewaySocket | null = null;
+  private readonly config: Required<Omit<EventsConfig, 'reconnectIntervalMs'>>;
   private readonly emitter = new EventEmitter();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
   private intentionalClose = false;
   private pendingSends: Array<{ resolve: (id: string) => void; reject: (err: Error) => void; id: string }> = [];
 
@@ -52,44 +66,55 @@ export class MessagingGatewayEvents {
       apiKey: config.apiKey ?? '',
       accounts: config.accounts ?? [],
       autoReconnect: config.autoReconnect ?? true,
-      reconnectIntervalMs: config.reconnectIntervalMs ?? 5000,
+      reconnectBaseMs: config.reconnectBaseMs ?? config.reconnectIntervalMs ?? DEFAULT_BACKOFF_BASE_MS,
+      reconnectMaxMs: config.reconnectMaxMs ?? DEFAULT_BACKOFF_MAX_MS,
+      random: config.random ?? Math.random,
     };
   }
 
   /** Connect to the WebSocket server */
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.ws) return; // already open or connecting
 
     this.intentionalClose = false;
-    const wsUrl = this.buildWsUrl();
-    this.ws = new WebSocket(wsUrl);
+    const socket: GatewaySocket = openSocket(this.buildWsUrl(), this.config.apiKey, {
+      onOpen: () => {
+        // 'connected' event comes from the server, not from the open event
+        if (this.ws === socket) this.armWatchdog();
+      },
+      onMessage: (data) => {
+        if (this.ws === socket) this.armWatchdog();
+        try {
+          this.handleServerMessage(JSON.parse(data));
+        } catch {
+          // Ignore malformed messages
+        }
+      },
+      onPing: () => {
+        if (this.ws === socket) this.armWatchdog();
+      },
+      onClose: (code, reason) => {
+        const wasCurrent = this.ws === socket;
+        if (wasCurrent) {
+          this.ws = null;
+          this.clearWatchdog();
+        }
+        this.emitter.emit('disconnected', code, reason);
+        this.rejectPendingSends('WebSocket disconnected');
 
-    this.ws.on('open', () => {
-      // 'connected' event comes from the server, not from the open event
+        if (wasCurrent && this.config.autoReconnect && !this.intentionalClose) {
+          this.scheduleReconnect();
+        }
+      },
+      onError: (err) => {
+        // Errors from a socket we already dropped (e.g. an aborted handshake) are noise,
+        // and an EventEmitter 'error' nobody listens to would throw
+        if (this.ws === socket && this.emitter.listenerCount('error') > 0) {
+          this.emitter.emit('error', err);
+        }
+      },
     });
-
-    this.ws.on('message', (raw: Buffer | string) => {
-      try {
-        const msg = JSON.parse(raw.toString());
-        this.handleServerMessage(msg);
-      } catch {
-        // Ignore malformed messages
-      }
-    });
-
-    this.ws.on('close', (code, reason) => {
-      this.ws = null;
-      this.emitter.emit('disconnected', code, reason.toString());
-      this.rejectPendingSends('WebSocket disconnected');
-
-      if (this.config.autoReconnect && !this.intentionalClose) {
-        this.scheduleReconnect();
-      }
-    });
-
-    this.ws.on('error', (err) => {
-      this.emitter.emit('error', err);
-    });
+    this.ws = socket;
   }
 
   /** Disconnect from the WebSocket server */
@@ -99,10 +124,10 @@ export class MessagingGatewayEvents {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
-      this.ws.close(1000, 'Client disconnect');
-      this.ws = null;
-    }
+    this.clearWatchdog();
+    const socket = this.ws;
+    this.ws = null;
+    socket?.close(1000, 'Client disconnect');
     this.rejectPendingSends('Client disconnected');
   }
 
@@ -130,7 +155,7 @@ export class MessagingGatewayEvents {
 
   /** Whether the WebSocket is connected */
   get isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.ws?.isOpen ?? false;
   }
 
   // ── Event listener methods ──────────────────────────────────
@@ -160,6 +185,8 @@ export class MessagingGatewayEvents {
 
     switch (event) {
       case 'connected':
+        // The server accepted us: the connection is healthy, so backoff starts over
+        this.reconnectAttempt = 0;
         this.emitter.emit('connected');
         break;
       case 'message.inbound':
@@ -187,19 +214,19 @@ export class MessagingGatewayEvents {
   }
 
   private sendAction(action: Record<string, unknown>): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
+    if (!this.ws?.isOpen) {
       throw new Error('WebSocket is not connected');
     }
     this.ws.send(JSON.stringify(action));
   }
 
+  /** The API key is deliberately not part of the URL; see `openSocket`. */
   private buildWsUrl(): string {
     const base = this.config.baseUrl
       .replace(/^http:/, 'ws:')
       .replace(/^https:/, 'wss:');
 
     const params = new URLSearchParams();
-    if (this.config.apiKey) params.set('token', this.config.apiKey);
     if (this.config.accounts.length) params.set('accounts', this.config.accounts.join(','));
 
     const qs = params.toString();
@@ -208,10 +235,35 @@ export class MessagingGatewayEvents {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
+    const delayMs = computeBackoffMs(this.reconnectAttempt, {
+      baseMs: this.config.reconnectBaseMs,
+      maxMs: this.config.reconnectMaxMs,
+      random: this.config.random,
+    });
+    this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.config.reconnectIntervalMs);
+    }, delayMs);
+    this.emitter.emit('reconnecting', this.reconnectAttempt, delayMs);
+  }
+
+  /** (Re)starts the dead-connection timer; any server activity proves the link is alive. */
+  private armWatchdog(): void {
+    if (!this.ws?.supportsPing) return;
+    this.clearWatchdog();
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null;
+      // terminate() makes the socket's close handler run, which schedules the reconnect
+      this.ws?.terminate();
+    }, HEARTBEAT_TIMEOUT_MS);
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
   }
 
   private rejectPendingSends(reason: string): void {
