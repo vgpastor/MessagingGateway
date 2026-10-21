@@ -41,7 +41,7 @@
     "websocket",
     "unified-messaging"
   ],
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20.19 <21 || >=22.12" },
   "license": "MIT",
   "repository": {
     "type": "git",
