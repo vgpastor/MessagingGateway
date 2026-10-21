@@ -66,6 +66,8 @@ beforeAll(async () => {
   // Marked ready but the file is gone (purged): reported as expired.
   await store.insertInbound(imageEnvelope('GONE1', { mimeType: 'image/jpeg', status: 'pending' }), {});
   await store.updateMedia('GONE1', { status: 'ready', url: '/api/v1/media/GONE1' });
+  // Historic row: media existed, its content was purged and it never had a status.
+  await store.insertInbound(imageEnvelope('LEGACY1', { mimeType: 'image/jpeg', base64Purged: true } as MediaInfo), {});
   await store.insertInbound({ ...imageEnvelope('TXT1', { mimeType: 'x' }), content: { type: 'text', body: 'hi' } } as UnifiedEnvelope, {});
 
   const accounts = loadAccountsFromYaml(resolve(process.cwd(), 'tests/fixtures/accounts.yaml'));
@@ -128,6 +130,12 @@ describe('GET /api/v1/media/:id', () => {
   it('answers 410 when the media is ready but its file is gone', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/media/GONE1', headers: AUTH });
     expect(res.statusCode).toBe(410);
+  });
+
+  it('answers 410 expired for a historic media without status', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/media/LEGACY1', headers: AUTH });
+    expect(res.statusCode).toBe(410);
+    expect(res.json()).toEqual({ status: 'expired' });
   });
 
   it('answers 404 for an unknown id and for a message without media', async () => {

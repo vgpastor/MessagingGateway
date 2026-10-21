@@ -1,7 +1,7 @@
 import { getLogger } from '../logger/logger.port.js';
 import { extensionForMimeType } from '../messaging/media-mime.js';
 import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
-import type { MessageLogPort } from '../persistence/message-store.port.js';
+import type { MessageLogPort, MessageStorePort } from '../persistence/message-store.port.js';
 
 /**
  * Downloads and stores the media of inbound messages, off the hot path: the
@@ -46,7 +46,7 @@ export interface MediaFileReader {
 }
 
 export interface DiskMediaServiceDeps {
-  store: Pick<MessageLogPort, 'updateMedia' | 'findPendingMedia'>;
+  store: Pick<MessageLogPort, 'updateMedia' | 'findPendingMedia'> & Pick<MessageStorePort, 'findById'>;
   files: MediaFileWriter;
   download: MediaDownload;
   /** Turns the raw payload kept in the message log back into what `download` expects (revives buffers...). Identity by default. */
@@ -70,6 +70,8 @@ export const mediaUrl = (mediaId: string): string => `/api/v1/media/${mediaId}`;
 export class DiskMediaService implements MediaService {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
+  /** Media ids being processed right now: the live path and a resume must not both work on one id. */
+  private readonly inFlight = new Set<string>();
 
   private get logger() {
     return getLogger().child({ module: 'media-service' });
@@ -98,14 +100,20 @@ export class DiskMediaService implements MediaService {
 
   /** `getRaw` runs inside the guard: a stored raw that cannot be restored fails that media only. */
   private async run(mediaId: string, accountId: string, getRaw: () => unknown): Promise<void> {
-    await this.acquire();
+    if (this.inFlight.has(mediaId)) return;
+    this.inFlight.add(mediaId);
     try {
-      await this.store(mediaId, accountId, getRaw());
-    } catch (err) {
-      this.logger.warn('Media download failed', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });
-      await this.markFailed(mediaId, accountId, 'download_failed');
+      await this.acquire();
+      try {
+        await this.store(mediaId, accountId, getRaw());
+      } catch (err) {
+        this.logger.warn('Media download failed', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });
+        await this.markSkipped(mediaId, accountId, 'download_failed');
+      } finally {
+        this.release();
+      }
     } finally {
-      this.release();
+      this.inFlight.delete(mediaId);
     }
   }
 
@@ -113,22 +121,34 @@ export class DiskMediaService implements MediaService {
     const result = await this.deps.download(raw, this.deps.maxBytes);
     if (!result) {
       this.logger.warn('Message has no downloadable media', { accountId, mediaId });
-      await this.deps.store.updateMedia(mediaId, { status: 'skipped', skipReason: 'download_failed' });
+      await this.markSkipped(mediaId, accountId, 'download_failed', true);
       return;
     }
     if ('skipped' in result) {
       this.logger.info('Media skipped: over the size cap', { accountId, mediaId, maxBytes: this.deps.maxBytes });
-      await this.deps.store.updateMedia(mediaId, { status: 'skipped', skipReason: result.skipped });
+      await this.markSkipped(mediaId, accountId, result.skipped, true);
       return;
     }
     const { size } = await this.deps.files.write(accountId, mediaId, extensionForMimeType(result.mimeType), result.data);
     await this.deps.store.updateMedia(mediaId, { status: 'ready', size, url: mediaUrl(mediaId) });
   }
 
-  private async markFailed(mediaId: string, accountId: string, skipReason: 'download_failed'): Promise<void> {
+  /**
+   * Records that the media was not stored, unless it already is: a late failure
+   * (e.g. a second attempt) must never turn a `ready` media into `skipped`.
+   * With `propagate` a storage error is rethrown (the caller's catch records it);
+   * otherwise it is only logged.
+   */
+  private async markSkipped(
+    mediaId: string, accountId: string, skipReason: 'too_large' | 'download_failed', propagate = false,
+  ): Promise<void> {
     try {
+      const current = await this.deps.store.findById(mediaId);
+      const status = current && 'media' in current.content ? current.content.media?.status : undefined;
+      if (status === 'ready') return;
       await this.deps.store.updateMedia(mediaId, { status: 'skipped', skipReason });
     } catch (err) {
+      if (propagate) throw err;
       this.logger.error('Failed to record media failure', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });
     }
   }

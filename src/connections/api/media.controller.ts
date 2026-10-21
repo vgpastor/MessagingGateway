@@ -37,13 +37,15 @@ export async function mediaController(fastify: FastifyInstance, deps: MediaContr
     const { id } = request.params;
     const envelope = await deps.messageStore.findById(id);
     const media = envelope && 'media' in envelope.content ? envelope.content.media : undefined;
-    if (!envelope || !media?.status) {
+    if (!envelope || !media) {
       return reply.status(404).send({ error: 'Not Found', code: 'MEDIA_NOT_FOUND', message: `No media for message ${id}` });
     }
 
-    if (media.status === 'pending') return reply.status(202).send({ status: 'pending' });
-    if (media.status !== 'ready') {
-      return reply.status(410).send({ status: media.status, ...(media.skipReason ? { skipReason: media.skipReason } : {}) });
+    // Historic rows have a media without status (their content was purged): it existed and is gone.
+    const status = media.status ?? 'expired';
+    if (status === 'pending') return reply.status(202).send({ status: 'pending' });
+    if (status !== 'ready') {
+      return reply.status(410).send({ status, ...(media.skipReason ? { skipReason: media.skipReason } : {}) });
     }
 
     const file = await deps.mediaStore.open(id, envelope.accountId);

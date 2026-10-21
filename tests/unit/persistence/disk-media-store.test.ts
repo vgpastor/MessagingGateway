@@ -80,6 +80,16 @@ describe('DiskMediaStore', () => {
     expect(await new DiskMediaStore(join(dir, 'does-not-exist')).purgeOlderThan(1)).toBe(0);
   });
 
+  it('concurrent writes of the same media do not clash on a temp file', async () => {
+    await Promise.all([
+      store.write('wa-1', 'MSG1', 'jpg', Buffer.from('same')),
+      store.write('wa-1', 'MSG1', 'jpg', Buffer.from('same')),
+      store.write('wa-1', 'MSG1', 'jpg', Buffer.from('same')),
+    ]);
+
+    expect(await readdir(join(dir, 'wa-1', new Date().toISOString().slice(0, 7)))).toEqual(['MSG1.jpg']);
+  });
+
   it('does not leave temp files behind', async () => {
     const written = await store.write('wa-1', 'MSG1', 'jpg', Buffer.from('abc'));
     expect((await readFile(written.path)).toString()).toBe('abc');

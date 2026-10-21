@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { mimeTypeForExtension } from '../../core/messaging/media-mime.js';
 
@@ -37,7 +38,7 @@ export class DiskMediaStore {
     const path = join(folder, `${safeSegment(mediaId)}.${safeSegment(ext)}`);
     await mkdir(folder, { recursive: true });
     // Write then rename: a crash never leaves a truncated file that `open` would serve.
-    const tmp = `${path}.${process.pid}.tmp`;
+    const tmp = `${path}.${randomUUID()}.tmp`;
     try {
       await writeFile(tmp, data);
       await rename(tmp, path);

@@ -27,6 +27,7 @@ function setup(download: MediaDownload) {
   const store = {
     updateMedia: vi.fn().mockResolvedValue(undefined),
     findPendingMedia: vi.fn().mockResolvedValue([]),
+    findById: vi.fn().mockResolvedValue(envelope()),
   };
   const files = { write: vi.fn().mockResolvedValue({ path: '/media/x.jpg', size: 10 }) };
   const restoreRaw = vi.fn((stored: unknown) => ({ restored: stored }));
@@ -91,6 +92,50 @@ describe('DiskMediaService.process', () => {
     store.updateMedia.mockRejectedValue(new Error('db down'));
 
     await expect(service.process(envelope(), {})).resolves.toBeUndefined();
+  });
+});
+
+describe('DiskMediaService concurrency and late failures', () => {
+  it('a live process() and a resume on the same id download once and end up ready', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const download = vi.fn<MediaDownload>(async () => {
+      await gate;
+      return { data: Buffer.alloc(10), mimeType: 'image/jpeg' };
+    });
+    const { service, store, files } = setup(download);
+    store.findPendingMedia.mockResolvedValueOnce([{ id: 'MSG1', accountId: 'wa-1', raw: {} }]).mockResolvedValue([]);
+
+    const live = service.process(envelope('MSG1', 'wa-1'), {});
+    const resumed = service.resumePendingMedia();
+    await new Promise((r) => setImmediate(r));
+    release();
+    await Promise.all([live, resumed]);
+
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(files.write).toHaveBeenCalledTimes(1);
+    expect(store.updateMedia).toHaveBeenCalledTimes(1);
+    expect(store.updateMedia).toHaveBeenCalledWith('MSG1', expect.objectContaining({ status: 'ready' }));
+  });
+
+  it('can process the same id again once the first run has finished', async () => {
+    const download = vi.fn<MediaDownload>().mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' });
+    const { service } = setup(download);
+
+    await service.process(envelope(), {});
+    await service.process(envelope(), {});
+
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failure never overwrites a media that is already ready', async () => {
+    const download = vi.fn<MediaDownload>().mockRejectedValue(new Error('late failure'));
+    const { service, store } = setup(download);
+    store.findById.mockResolvedValue({ ...envelope(), content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'ready' } } });
+
+    await service.process(envelope(), {});
+
+    expect(store.updateMedia).not.toHaveBeenCalled();
   });
 });
 
