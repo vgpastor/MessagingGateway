@@ -20,6 +20,12 @@ export interface UnifiedEnvelope {
   channel: ChannelType;
   direction: 'inbound' | 'outbound';
   timestamp: Date;
+  /** Global, monotonically increasing sequence in the message log (set by the store) */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 (set by the store) */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: Date;
   /** Conversation/chat thread ID */
   conversationId: string;
   sender: ContactRef;

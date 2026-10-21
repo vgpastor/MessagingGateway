@@ -2,6 +2,8 @@ import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 import type {
   FullMessageStorePort,
+  InsertResult,
+  StoredEnvelope,
   MessageQuery,
   MessageQueryResult,
   MessageStats,
@@ -10,9 +12,15 @@ import type {
   ConversationHistoryOptions,
   RawConversationHistory,
 } from '../core/persistence/message-store.port.js';
-import { toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn } from '../core/persistence/message-store.utils.js';
+import type { MediaInfo } from '../core/messaging/content.js';
+import {
+  toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, waMessageIdOf,
+} from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
+
+const COLUMNS = envelopeColumns();
 
 /**
  * PostgreSQL-based message store using the `pg` driver.
@@ -110,7 +118,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
     const idx = params.length;
     const rows = await pool.query(
-      `SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${idx + 1} OFFSET $${idx + 2}`,
+      `SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT $${idx + 1} OFFSET $${idx + 2}`,
       [...params, limit, offset],
     );
 
@@ -124,7 +132,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
     const pool = this.requirePool();
-    const res = await pool.query('SELECT * FROM messages WHERE id = $1', [messageId]);
+    const res = await pool.query(`SELECT ${COLUMNS} FROM messages WHERE id = $1`, [messageId]);
     return res.rows.length > 0 ? this.rowToEnvelope(res.rows[0]) : undefined;
   }
 
@@ -159,7 +167,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
     const limitIdx = params.length + 1;
     const rows = await pool.query(
-      `SELECT *, ts_rank(search_vector, plainto_tsquery($1)) as rank FROM messages ${where} ORDER BY rank DESC LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
+      `SELECT ${COLUMNS}, ts_rank(search_vector, plainto_tsquery($1)) as rank FROM messages ${where} ORDER BY rank DESC LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
       [...params, limit, offset],
     );
 
@@ -251,7 +259,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
         params,
       ),
       pool.query(
-        `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT $${limitIdx}) sub ORDER BY timestamp ASC`,
+        `SELECT * FROM (SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT $${limitIdx}) sub ORDER BY timestamp ASC`,
         [...params, limit],
       ),
     ]);
@@ -281,6 +289,140 @@ export class PostgresMessageStore implements FullMessageStorePort {
       totalMessages: totalRes.rows[0].total,
       envelopes,
     };
+  }
+
+  // ── Message log ────────────────────────────────────────────────
+
+  async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
+    const pool = this.requirePool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const inserted = await client.query(
+        `INSERT INTO messages (
+          id, account_id, channel, direction, conversation_id,
+          sender_id, sender_name, recipient_id,
+          content_type, content_preview, content_json,
+          context_json, channel_details_json, gateway_json,
+          timestamp, created_at, wa_message_id, sent_at, raw_json
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
+        RETURNING seq`,
+        [
+          envelope.id,
+          envelope.accountId,
+          envelope.channel,
+          envelope.direction,
+          envelope.conversationId,
+          envelope.sender.id,
+          envelope.sender.displayName ?? null,
+          envelope.recipient.id,
+          envelope.content.type,
+          extractPreview(envelope),
+          JSON.stringify(envelope.content),
+          envelope.context ? JSON.stringify(envelope.context) : null,
+          envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
+          JSON.stringify(envelope.gateway),
+          toUTC(envelope.timestamp),
+          nowUTC(),
+          waMessageIdOf(envelope),
+          envelope.sentAt ? toUTC(envelope.sentAt) : null,
+          raw === undefined ? null : JSON.stringify(raw),
+        ],
+      );
+
+      if (inserted.rowCount === 0) {
+        // Duplicate: nothing was written and no accountSeq is consumed
+        await client.query('ROLLBACK');
+        return { inserted: false };
+      }
+
+      // The counter row lock serializes concurrent inserts of the same account until COMMIT,
+      // so account_seq is handed out contiguously and becomes visible in order.
+      const counter = await client.query(
+        `INSERT INTO account_counters (account_id, n) VALUES ($1, 1)
+         ON CONFLICT (account_id) DO UPDATE SET n = account_counters.n + 1
+         RETURNING n`,
+        [envelope.accountId],
+      );
+      const accountSeq = Number(counter.rows[0].n);
+      await client.query('UPDATE messages SET account_seq = $1 WHERE id = $2', [accountSeq, envelope.id]);
+
+      await client.query('COMMIT');
+      return { inserted: true, seq: Number(inserted.rows[0].seq), accountSeq };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => { /* connection already unusable */ });
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async queryAfter(q: { accountId: string; afterAccountSeq: number; limit: number }): Promise<{
+    messages: UnifiedEnvelope[];
+    nextAfterAccountSeq: number | null;
+  }> {
+    const pool = this.requirePool();
+    const limit = clampPageLimit(q.limit);
+
+    // Fetch one extra row to know whether another page exists
+    const res = await pool.query(
+      `SELECT ${COLUMNS} FROM messages
+       WHERE account_id = $1 AND account_seq > $2
+       ORDER BY account_seq ASC LIMIT $3`,
+      [q.accountId, q.afterAccountSeq, limit + 1],
+    );
+
+    const hasMore = res.rows.length > limit;
+    const messages = res.rows.slice(0, limit).map((r) => this.rowToEnvelope(r));
+    const last = messages[messages.length - 1];
+    return { messages, nextAfterAccountSeq: hasMore && last?.accountSeq != null ? last.accountSeq : null };
+  }
+
+  async findByWaMessageId(accountId: string, waMessageId: string): Promise<StoredEnvelope | undefined> {
+    const pool = this.requirePool();
+    const res = await pool.query(
+      `SELECT ${COLUMNS}, raw_json FROM messages WHERE account_id = $1 AND wa_message_id = $2`,
+      [accountId, waMessageId],
+    );
+    const row = res.rows[0];
+    if (!row) return undefined;
+    const raw = parseJsonColumn(row.raw_json as string | null);
+    return raw === undefined ? this.rowToEnvelope(row) : { ...this.rowToEnvelope(row), raw };
+  }
+
+  async updateMedia(id: string, media: Partial<MediaInfo>): Promise<void> {
+    const pool = this.requirePool();
+    await pool.query(
+      `UPDATE messages
+       SET content_json = jsonb_set(content_json, '{media}', COALESCE(content_json->'media', '{}'::jsonb) || $2::jsonb)
+       WHERE id = $1`,
+      [id, JSON.stringify(media)],
+    );
+  }
+
+  async findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>> {
+    const pool = this.requirePool();
+    const res = await pool.query(
+      `SELECT id, account_id, raw_json FROM messages
+       WHERE (content_json->'media'->>'status') = 'pending' AND raw_json IS NOT NULL
+       ORDER BY seq ASC LIMIT $1`,
+      [limit],
+    );
+    return res.rows.map((r) => ({ id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
+  }
+
+  async deleteOlderThan(days: number): Promise<number> {
+    const pool = this.requirePool();
+    const res = await pool.query('DELETE FROM messages WHERE created_at < $1', [cutoffUTC(days)]);
+    return res.rowCount ?? 0;
+  }
+
+  async maxAccountSeq(accountId: string): Promise<number> {
+    const pool = this.requirePool();
+    const res = await pool.query('SELECT n FROM account_counters WHERE account_id = $1', [accountId]);
+    return res.rows.length > 0 ? Number(res.rows[0].n) : 0;
   }
 
   async close(): Promise<void> {
@@ -333,6 +475,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       context: parseJsonColumn(row.context_json as string | null) ?? undefined,
       channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
       gateway: parseJsonColumnRequired(row.gateway_json as string),
+      ...readLogFields(row),
     } as UnifiedEnvelope;
   }
 }
