@@ -158,7 +158,7 @@ export async function createServer(deps: ServerDeps) {
 
   // ── Public routes (no auth) ──────────────────────────────────
 
-  await fastify.register(healthController);
+  await fastify.register(async (instance) => healthController(instance, { accountRepository: deps.accountRepository }));
 
   // ── Inbound webhooks (provider-to-gateway, own signature validation) ──
 

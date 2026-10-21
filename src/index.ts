@@ -20,7 +20,8 @@ import { toStorableRaw, restoreBaileysRaw } from './integrations/whatsapp/bailey
 import { downloadBaileysMedia } from './integrations/whatsapp/baileys/baileys-media.js';
 import { DiskMediaStore } from './persistence/media/disk-media-store.js';
 import { startRetentionSchedule, type RetentionSchedule } from './core/retention/retention-job.js';
-import { noopMetrics } from './core/metrics/metrics.port.js';
+import { noopMetrics, type MetricsPort } from './core/metrics/metrics.port.js';
+import { PrometheusMetrics } from './infrastructure/metrics/prometheus-metrics.js';
 import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
@@ -60,6 +61,7 @@ function wireEventBus(
   webhookForwarder: WebhookForwarder,
   accountRepository: InMemoryAccountRepository,
   messageRouter: MessageRouterService,
+  metrics: MetricsPort,
 ): WebSocketBroadcaster {
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
     const env = event.data.envelope;
@@ -133,7 +135,7 @@ function wireEventBus(
     });
   });
 
-  return new WebSocketBroadcaster(eventBus);
+  return new WebSocketBroadcaster(eventBus, metrics);
 }
 
 async function main() {
@@ -162,13 +164,14 @@ async function main() {
   const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
   const messageRouter = new MessageRouterService(accountRepository, providerRegistry, eventBus);
   const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
-  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
+  const metrics: MetricsPort = envConfig.metricsEnabled ? new PrometheusMetrics() : noopMetrics;
+  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret, metrics);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
   logger.info('Loaded per-account webhook configs', { count: webhookConfigs.length });
 
   // Wire event bus
-  const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
+  const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter, metrics);
   subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
 
   // Optional: persistence plugin (SQLite or PostgreSQL)
@@ -194,6 +197,7 @@ async function main() {
         download: (raw, maxBytes) => downloadBaileysMedia(raw as Parameters<typeof downloadBaileysMedia>[0], maxBytes),
         restoreRaw: restoreBaileysRaw,
         maxBytes: envConfig.mediaMaxBytes,
+        metrics,
       })
     : noopMediaService;
 
@@ -203,7 +207,7 @@ async function main() {
     store: messageStore,
     eventBus,
     media: mediaService,
-    metrics: noopMetrics,
+    metrics,
     resolveLidToPhone: resolveBaileysLidToPhone,
     toStorableRaw,
   });

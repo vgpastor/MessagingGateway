@@ -69,6 +69,7 @@ function setup(opts: {
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
+    mediaSkipped: vi.fn(), lastInbound: vi.fn(),
   };
   const pipeline = new InboundPipeline({ store, eventBus, media, metrics, resolveLidToPhone: opts.resolveLidToPhone, toStorableRaw: opts.toStorableRaw });
   return { pipeline, insertInbound, emitSpy, emitted, media, metrics };
@@ -117,6 +118,28 @@ describe('InboundPipeline', () => {
     await pipeline.handle(makeAccount(), makeEnvelope(), raw, 'notify');
 
     expect(insertInbound).toHaveBeenCalledTimes(2);
+  });
+
+  it('records the last inbound timestamp (seconds since epoch) per account for every emitted message', async () => {
+    const { pipeline, metrics } = setup();
+    const before = Math.floor(Date.now() / 1000);
+
+    await pipeline.handle(makeAccount({ id: 'wa-1' }), makeEnvelope(), raw, 'notify');
+
+    expect(metrics.lastInbound).toHaveBeenCalledTimes(1);
+    const [account, ts] = vi.mocked(metrics.lastInbound).mock.calls[0]!;
+    expect(account).toBe('wa-1');
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(Math.ceil(Date.now() / 1000));
+  });
+
+  it('does not record the last inbound timestamp for filtered messages or duplicates', async () => {
+    const { pipeline, metrics } = setup({ insert: { inserted: false } as InsertResult });
+
+    await pipeline.handle(makeAccount(), makeEnvelope({ conversationId: 'status@broadcast' }), raw, 'notify');
+    await pipeline.handle(makeAccount(), makeEnvelope(), raw, 'notify');
+
+    expect(metrics.lastInbound).not.toHaveBeenCalled();
   });
 
   it('emits after insert with seq and accountSeq', async () => {
@@ -259,7 +282,7 @@ describe('InboundPipeline', () => {
       const pipeline = new InboundPipeline({
         store, eventBus,
         media: { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) },
-        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn() },
+        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(), mediaSkipped: vi.fn(), lastInbound: vi.fn() },
       });
       return { pipeline, order };
     }

@@ -38,4 +38,24 @@ export const storageMessagesTotal = new Counter({
   registers: [registry],
 });
 
+export const persistFailuresTotal = new Counter({
+  name: 'umg_persist_failures_total',
+  help: 'Inbound messages that could not be written to the message log',
+  registers: [registry],
+});
+
+export const mediaSkippedTotal = new Counter({
+  name: 'umg_media_skipped_total',
+  help: 'Inbound media that was not stored',
+  labelNames: ['reason'] as const,
+  registers: [registry],
+});
+
+export const lastInboundTimestamp = new Gauge({
+  name: 'umg_last_inbound_timestamp',
+  help: 'Unix time (seconds) of the last inbound message processed per account',
+  labelNames: ['account'] as const,
+  registers: [registry],
+});
+
 export { registry };

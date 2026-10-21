@@ -138,7 +138,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Health check (returns status, version, uptime) |
+| `GET` | `/health` | Health check: always HTTP 200; `status` is `ok` or `degraded` (any account not `active`, except deliberately `suspended`), plus `accounts` with each account status, version, uptime |
 | `GET` | `/metrics` | Prometheus metrics (admin API key required) |
 | `GET` | `/openapi.json` | OpenAPI 3 specification |
 

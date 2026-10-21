@@ -24,6 +24,10 @@ function envelope(id = 'MSG1', accountId = 'wa-1'): UnifiedEnvelope {
 }
 
 function setup(download: MediaDownload) {
+  const metrics = {
+    incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(),
+    persistFailures: vi.fn(), mediaSkipped: vi.fn(), lastInbound: vi.fn(),
+  };
   const store = {
     updateMedia: vi.fn().mockResolvedValue(undefined),
     findPendingMedia: vi.fn().mockResolvedValue([]),
@@ -31,8 +35,8 @@ function setup(download: MediaDownload) {
   };
   const files = { write: vi.fn().mockResolvedValue({ path: '/media/x.jpg', size: 10 }) };
   const restoreRaw = vi.fn((stored: unknown) => ({ restored: stored }));
-  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX });
-  return { service, store, files, restoreRaw };
+  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX, metrics });
+  return { service, store, files, restoreRaw, metrics };
 }
 
 describe('DiskMediaService.process', () => {
@@ -55,6 +59,27 @@ describe('DiskMediaService.process', () => {
 
     expect(files.write).not.toHaveBeenCalled();
     expect(store.updateMedia).toHaveBeenCalledWith('MSG1', { status: 'skipped', skipReason: 'too_large' });
+  });
+
+  it('counts every skipped media by reason', async () => {
+    const tooLarge = setup(vi.fn<MediaDownload>().mockResolvedValue({ skipped: 'too_large' }));
+    await tooLarge.service.process(envelope(), {});
+    expect(tooLarge.metrics.mediaSkipped).toHaveBeenCalledWith('too_large');
+
+    const failed = setup(vi.fn<MediaDownload>().mockRejectedValue(new Error('boom')));
+    await failed.service.process(envelope(), {});
+    expect(failed.metrics.mediaSkipped).toHaveBeenCalledTimes(1);
+    expect(failed.metrics.mediaSkipped).toHaveBeenCalledWith('download_failed');
+  });
+
+  it('does not count a media that was already ready as skipped', async () => {
+    const download = vi.fn<MediaDownload>().mockRejectedValue(new Error('late failure'));
+    const { service, store, metrics } = setup(download);
+    store.findById.mockResolvedValue({ ...envelope(), content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'ready' } } });
+
+    await service.process(envelope(), {});
+
+    expect(metrics.mediaSkipped).not.toHaveBeenCalled();
   });
 
   it('marks download_failed when the download throws', async () => {

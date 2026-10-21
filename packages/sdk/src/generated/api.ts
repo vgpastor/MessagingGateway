@@ -12,14 +12,16 @@ export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealt
 export const GetHealth200Status = {
   ok: 'ok',
   degraded: 'degraded',
-  error: 'error',
 } as const;
+
+export type GetHealth200Accounts = {[key: string]: 'active' | 'suspended' | 'auth_expired' | 'error' | 'unchecked'};
 
 export type GetHealth200 = {
   status: GetHealth200Status;
   timestamp: string;
   version?: string;
   uptime?: number;
+  accounts: GetHealth200Accounts;
 };
 
 export type PostWebhooksWhatsappAccountIdInboundBody = { [key: string]: unknown };
@@ -1589,7 +1591,7 @@ export const getGetHealthUrl = () => {
 }
 
 /**
- * Health check endpoint
+ * Health check endpoint. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active`. `accounts` maps each account id to its status.
  */
 export const getHealth = async ( options?: Parameters<typeof customFetch>[1]): Promise<getHealthResponse> => {
 

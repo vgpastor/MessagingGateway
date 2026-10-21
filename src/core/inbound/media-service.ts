@@ -1,6 +1,7 @@
 import { getLogger } from '../logger/logger.port.js';
 import { extensionForMimeType } from '../messaging/media-mime.js';
 import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
+import { noopMetrics, type MetricsPort } from '../metrics/metrics.port.js';
 import type { MessageLogPort, MessageStorePort } from '../persistence/message-store.port.js';
 
 /**
@@ -56,6 +57,8 @@ export interface DiskMediaServiceDeps {
   concurrency?: number;
   /** Rows fetched per page when resuming. Default 100. */
   resumeBatchSize?: number;
+  /** Counts skipped media. No-op by default. */
+  metrics?: MetricsPort;
 }
 
 const DEFAULT_CONCURRENCY = 4;
@@ -147,6 +150,7 @@ export class DiskMediaService implements MediaService {
       const status = current && 'media' in current.content ? current.content.media?.status : undefined;
       if (status === 'ready') return;
       await this.deps.store.updateMedia(mediaId, { status: 'skipped', skipReason });
+      (this.deps.metrics ?? noopMetrics).mediaSkipped(skipReason);
     } catch (err) {
       if (propagate) throw err;
       this.logger.error('Failed to record media failure', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });

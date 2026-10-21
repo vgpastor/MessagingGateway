@@ -77,6 +77,7 @@ export class InboundPipeline {
 
     if (!(await this.persist(envelope, raw))) return;
 
+    this.deps.metrics.lastInbound(account.id, Math.floor(Date.now() / 1000));
     await this.deps.eventBus.emit(
       createEvent<MessageInboundPayload>(Events.MESSAGE_INBOUND, account.provider, { envelope }, account.id),
     );
