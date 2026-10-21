@@ -172,6 +172,59 @@ describe('accounts created at runtime', () => {
     expect(inbound.handle).toHaveBeenCalledTimes(1);
   });
 
+  async function waitForNewSocket(before: number): Promise<void> {
+    for (let i = 0; i < 400 && sockets.length === before; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(sockets.length).toBeGreaterThan(before);
+  }
+
+  it('wires again when GET /accounts/:id auto-reconnects after a disconnect', async () => {
+    await create('hot-7');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-7/connect', headers: HEADERS });
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-7/disconnect', headers: HEADERS });
+    const before = sockets.length;
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/accounts/hot-7', headers: HEADERS });
+    expect(response.statusCode).toBe(200);
+    await waitForNewSocket(before);
+
+    sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
+    await flush();
+
+    expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('wires again when POST /accounts/:id/reset re-pairs after a disconnect', async () => {
+    await create('hot-8');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-8/connect', headers: HEADERS });
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-8/disconnect', headers: HEADERS });
+    const before = sockets.length;
+
+    const response = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-8/reset', headers: HEADERS });
+    expect(response.statusCode).toBe(200);
+    await waitForNewSocket(before);
+
+    sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
+    await flush();
+
+    expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('wires again when POST /accounts/:id/pair opens the connection after a disconnect', async () => {
+    await create('hot-9');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/connect', headers: HEADERS });
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/disconnect', headers: HEADERS });
+    const before = sockets.length;
+
+    // The fake socket has no requestPairingCode, so the request ends 400; the connection is what matters.
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
+    expect(sockets.length).toBeGreaterThan(before);
+
+    sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
+    await flush();
+
+    expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
   it('still creates and connects the account when wiring fails', async () => {
     wireSpy.mockRejectedValueOnce(new Error('wire exploded'));
     ids.push('hot-6');

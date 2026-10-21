@@ -6,7 +6,7 @@ import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
 import type { HealthCheckSchedulerPort } from '../../core/accounts/health-check-scheduler.port.js';
 import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
-import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
+import type { PairingCodeCapable, ConnectionManagerPort } from '../../core/accounts/connection-manager.port.js';
 import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 import {
   accountResponseSchema,
@@ -100,6 +100,17 @@ export async function accountsController(
     }
   }
 
+  /**
+   * The ONLY way this controller opens a connection: wire first (idempotent), then
+   * connect. Handlers are forgotten on disconnect, so any connect that skipped the
+   * wiring would pair fine and then receive nothing. Wiring comes first so no
+   * early event is lost.
+   */
+  async function connectWired(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await wire(account);
+    await manager.connect(account.id, account.providerConfig);
+  }
+
   const idParamsSchema = {
     type: 'object' as const,
     properties: { id: { type: 'string' as const } },
@@ -164,7 +175,7 @@ export async function accountsController(
     // Auto-reconnect managed providers that are disconnected
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (manager && !manager.hasConnection(account.id)) {
-      manager.connect(account.id, account.providerConfig).catch((err) => {
+      connectWired(account, manager).catch((err) => {
         fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
       });
     }
@@ -420,9 +431,7 @@ export async function accountsController(
       });
     }
 
-    // Wire before connecting so no early event is lost (and after a disconnect, which forgets the handlers).
-    await wire(account);
-    await manager.connect(account.id, account.providerConfig);
+    await connectWired(account, manager);
 
     return sanitizeAccount(account, deps.providerRegistry);
   });
@@ -497,8 +506,7 @@ export async function accountsController(
 
     // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
-      await wire(account);
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     }
 
     try {
@@ -617,7 +625,7 @@ export async function accountsController(
 
     try {
       await clearSession(account.id, account.providerConfig);
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     } catch (error) {
       fastify.log.error({ accountId: account.id, err: error }, 'Account session reset failed');
       return reply.status(500).send({
