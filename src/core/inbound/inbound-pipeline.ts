@@ -1,4 +1,3 @@
-import type { proto } from '@whiskeysockets/baileys';
 import type { ChannelAccount } from '../accounts/channel-account.js';
 import type { EventBus } from '../event-bus.js';
 import { Events, createEvent } from '../events.js';
@@ -9,7 +8,6 @@ import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
 import type { MetricsPort } from '../metrics/metrics.port.js';
 import type { MessageLogPort } from '../persistence/message-store.port.js';
 import type { MediaService } from './media-service.js';
-import { toStorableRaw } from './storable-raw.js';
 
 export type UpsertType = 'notify' | 'append';
 
@@ -24,6 +22,8 @@ export interface InboundPipelineDeps {
   metrics: MetricsPort;
   /** Resolves a WhatsApp LID to its phone JID (`digits[:device]@s.whatsapp.net`) or bare number. */
   resolveLidToPhone?: (accountId: string, lid: string) => Promise<string | undefined>;
+  /** Turns the provider's raw message into something storable as JSON (strip binaries...). Identity by default. */
+  toStorableRaw?: (raw: unknown) => unknown;
 }
 
 /**
@@ -33,18 +33,41 @@ export interface InboundPipelineDeps {
  * a consumer that sees a gap knows a message was lost, so no event may carry a
  * sequence that is not yet in the log. A duplicate (already logged) is neither
  * emitted nor reprocessed.
+ *
+ * Messages of the same account are processed one at a time, in the order they
+ * reach {@link handle}: the log assigns `accountSeq` in insert order, so emitting
+ * out of that order would show consumers a false gap. Accounts do not block
+ * each other.
  */
 export class InboundPipeline {
   private get logger() {
     return getLogger().child({ module: 'inbound-pipeline' });
   }
 
+  /** Tail of each account's queue; it never rejects, so one failure cannot break the chain. */
+  private readonly queues = new Map<string, Promise<void>>();
+
   constructor(private readonly deps: InboundPipelineDeps) {}
 
-  async handle(
+  handle(account: ChannelAccount, envelope: UnifiedEnvelope, raw: unknown, upsertType: UpsertType): Promise<void> {
+    const previous = this.queues.get(account.id) ?? Promise.resolve();
+    const run = previous.then(() => this.process(account, envelope, raw, upsertType));
+    const tail = run.catch((err) => {
+      this.logger.error('Inbound message processing failed', {
+        accountId: account.id, messageId: envelope.id, error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    this.queues.set(account.id, tail);
+    void tail.then(() => {
+      if (this.queues.get(account.id) === tail) this.queues.delete(account.id);
+    });
+    return run;
+  }
+
+  private async process(
     account: ChannelAccount,
     envelope: UnifiedEnvelope,
-    raw: proto.IWebMessageInfo,
+    raw: unknown,
     upsertType: UpsertType,
   ): Promise<void> {
     if (!this.accepts(account, envelope, upsertType)) return;
@@ -97,11 +120,11 @@ export class InboundPipeline {
    * Returns false only for a duplicate. A storage failure must not lose the live
    * message, so it is counted and the message goes out without a sequence.
    */
-  private async persist(envelope: UnifiedEnvelope, raw: proto.IWebMessageInfo): Promise<boolean> {
+  private async persist(envelope: UnifiedEnvelope, raw: unknown): Promise<boolean> {
     const { store } = this.deps;
     if (!store) return true;
     try {
-      const result = await store.insertInbound(envelope, toStorableRaw(raw));
+      const result = await store.insertInbound(envelope, (this.deps.toStorableRaw ?? ((value) => value))(raw));
       if (!result.inserted) return false;
       envelope.seq = result.seq;
       envelope.accountSeq = result.accountSeq;
@@ -115,7 +138,7 @@ export class InboundPipeline {
   }
 
   /** Fire and forget: media must never delay or fail the message. */
-  private scheduleMedia(envelope: UnifiedEnvelope, raw: proto.IWebMessageInfo): void {
+  private scheduleMedia(envelope: UnifiedEnvelope, raw: unknown): void {
     const onError = (err: unknown) => this.logger.error('Media processing failed', {
       accountId: envelope.accountId, messageId: envelope.id, error: err instanceof Error ? err.message : String(err),
     });

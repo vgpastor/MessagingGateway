@@ -16,6 +16,7 @@ import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
 import { InboundPipeline } from './core/inbound/inbound-pipeline.js';
 import { noopMediaService } from './core/inbound/media-service.js';
+import { toStorableRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
 import { noopMetrics } from './core/metrics/metrics.port.js';
 import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
@@ -216,6 +217,7 @@ async function main() {
     media: noopMediaService, // replaced by the disk-backed MediaService
     metrics: noopMetrics,
     resolveLidToPhone: resolveBaileysLidToPhone,
+    toStorableRaw,
   });
 
   // Health check scheduler

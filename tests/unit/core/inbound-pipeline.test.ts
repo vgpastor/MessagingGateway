@@ -54,6 +54,7 @@ function makeImageEnvelope(): UnifiedEnvelope {
 function setup(opts: {
   insert?: InsertResult | Error | null; // null => storage disabled
   resolveLidToPhone?: (accountId: string, lid: string) => Promise<string | undefined>;
+  toStorableRaw?: (raw: unknown) => unknown;
 } = {}) {
   const eventBus = new EventBus();
   const emitted: UnifiedEnvelope[] = [];
@@ -69,7 +70,7 @@ function setup(opts: {
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
   };
-  const pipeline = new InboundPipeline({ store, eventBus, media, metrics, resolveLidToPhone: opts.resolveLidToPhone });
+  const pipeline = new InboundPipeline({ store, eventBus, media, metrics, resolveLidToPhone: opts.resolveLidToPhone, toStorableRaw: opts.toStorableRaw });
   return { pipeline, insertInbound, emitSpy, emitted, media, metrics };
 }
 
@@ -169,13 +170,25 @@ describe('InboundPipeline', () => {
     expect(metrics.persistFailures).not.toHaveBeenCalled();
   });
 
-  it('passes a storable copy of the raw message to insertInbound', async () => {
+  it('passes the storable form of the raw message to insertInbound', async () => {
+    const toStorableRaw = vi.fn(() => ({ stored: true }));
+    const { pipeline, insertInbound, media } = setup({ toStorableRaw });
+    const msg = { key: { id: 'WAID1' } };
+
+    await pipeline.handle(makeAccount(), makeImageEnvelope(), msg, 'notify');
+
+    expect(toStorableRaw).toHaveBeenCalledWith(msg);
+    expect(insertInbound).toHaveBeenCalledWith(expect.anything(), { stored: true });
+    expect(media.process).toHaveBeenCalledWith(expect.anything(), msg); // media gets the untouched message
+  });
+
+  it('passes the raw message through unchanged when no serializer is injected', async () => {
     const { pipeline, insertInbound } = setup();
-    const msg = { key: { id: 'WAID1' }, message: { imageMessage: { jpegThumbnail: Buffer.alloc(10), directPath: '/p' } } };
+    const msg = { key: { id: 'WAID1' } };
 
-    await pipeline.handle(makeAccount(), makeEnvelope(), msg as never, 'notify');
+    await pipeline.handle(makeAccount(), makeEnvelope(), msg, 'notify');
 
-    expect(insertInbound).toHaveBeenCalledWith(expect.anything(), { key: { id: 'WAID1' }, message: { imageMessage: { directPath: '/p' } } });
+    expect(insertInbound).toHaveBeenCalledWith(expect.anything(), msg);
   });
 
   it('schedules media after emit', async () => {
@@ -221,6 +234,91 @@ describe('InboundPipeline', () => {
     (media.process as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('disk full'));
 
     await expect(pipeline.handle(makeAccount(), makeImageEnvelope(), raw, 'notify')).resolves.toBeUndefined();
+  });
+
+  describe('per-account ordering', () => {
+    const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    /** Store whose insert latency depends on the message; seq follows the order inserts START. */
+    function slowStore(latency: Record<string, number>) {
+      let next = 0;
+      const insertInbound = vi.fn(async (envelope: UnifiedEnvelope): Promise<InsertResult> => {
+        const seq = ++next;
+        await delay(latency[envelope.id] ?? 0);
+        return { inserted: true, seq, accountSeq: seq };
+      });
+      return { insertInbound, store: { insertInbound } as unknown as MessageLogPort };
+    }
+
+    function build(store: MessageLogPort) {
+      const eventBus = new EventBus();
+      const order: string[] = [];
+      eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (e) => {
+        order.push(`${e.data.envelope.id}:${e.data.envelope.accountSeq}`);
+      });
+      const pipeline = new InboundPipeline({
+        store, eventBus,
+        media: { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) },
+        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn() },
+      });
+      return { pipeline, order };
+    }
+
+    it('emits messages of the same account in accountSeq order even when the first insert is slower', async () => {
+      const { store } = slowStore({ m1: 40, m2: 0 });
+      const { pipeline, order } = build(store);
+      const account = makeAccount();
+
+      await Promise.all([
+        pipeline.handle(account, makeEnvelope({ id: 'm1' }), raw, 'notify'),
+        pipeline.handle(account, makeEnvelope({ id: 'm2' }), raw, 'notify'),
+      ]);
+
+      expect(order).toEqual(['m1:1', 'm2:2']);
+    });
+
+    it('does not start the next insert before the previous message was handled', async () => {
+      const { store, insertInbound } = slowStore({ m1: 20 });
+      const { pipeline } = build(store);
+      const account = makeAccount();
+
+      const first = pipeline.handle(account, makeEnvelope({ id: 'm1' }), raw, 'notify');
+      const second = pipeline.handle(account, makeEnvelope({ id: 'm2' }), raw, 'notify');
+      await delay(5);
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+      await Promise.all([first, second]);
+      expect(insertInbound).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps processing after a message fails, and still rejects that call', async () => {
+      const { store, insertInbound } = slowStore({});
+      const { pipeline, order } = build(store);
+      const account = makeAccount();
+      const failing = makeEnvelope({ id: 'bad' });
+      Object.defineProperty(failing, 'conversationId', { get: () => { throw new Error('boom'); } });
+
+      const results = await Promise.allSettled([
+        pipeline.handle(account, failing, raw, 'notify'),
+        pipeline.handle(account, makeEnvelope({ id: 'ok' }), raw, 'notify'),
+      ]);
+
+      expect(results[0].status).toBe('rejected');
+      expect(results[1].status).toBe('fulfilled');
+      expect(order).toEqual(['ok:1']);
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not make different accounts wait for each other', async () => {
+      const { store } = slowStore({ a1: 60 });
+      const { pipeline, order } = build(store);
+
+      await Promise.all([
+        pipeline.handle(makeAccount({ id: 'A' }), makeEnvelope({ id: 'a1', accountId: 'A' }), raw, 'notify'),
+        pipeline.handle(makeAccount({ id: 'B' }), makeEnvelope({ id: 'b1', accountId: 'B' }), raw, 'notify'),
+      ]);
+
+      expect(order.map((o) => o.split(':')[0])).toEqual(['b1', 'a1']);
+    });
   });
 
   describe('LID resolution', () => {
