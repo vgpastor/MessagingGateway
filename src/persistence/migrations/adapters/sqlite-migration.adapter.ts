@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { MigrationAdapter } from '../migration.port.js';
+import type { MigrationAdapter, MigrationScript } from '../migration.port.js';
 
 /**
  * SQLite migration adapter — wraps a better-sqlite3 Database instance.
@@ -23,15 +23,13 @@ export class SqliteMigrationAdapter implements MigrationAdapter {
     return rows.map((r) => r.name);
   }
 
-  async executeSql(sql: string): Promise<void> {
-    this.db.exec(sql);
-  }
-
-  async recordMigration(name: string, checksum: string): Promise<void> {
-    this.db.prepare('INSERT INTO _migrations (name, checksum, applied_at) VALUES (?, ?, ?)').run(
-      name,
-      checksum,
-      new Date().toISOString(),
-    );
+  /** Script and record in one transaction (rolled back as a whole if either fails). */
+  async applyMigration({ name, checksum, sql }: MigrationScript): Promise<void> {
+    this.db.transaction(() => {
+      this.db.exec(sql);
+      this.db
+        .prepare('INSERT INTO _migrations (name, checksum, applied_at) VALUES (?, ?, ?)')
+        .run(name, checksum, new Date().toISOString());
+    })();
   }
 }
