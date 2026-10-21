@@ -38,6 +38,13 @@ export const storageMessagesTotal = new Counter({
   registers: [registry],
 });
 
+export const webhookFailuresTotal = new Counter({
+  name: 'umg_webhook_failures_total',
+  help: 'Webhook forwards that failed (non-2xx answer, network error or timeout)',
+  labelNames: ['account'] as const,
+  registers: [registry],
+});
+
 export const persistFailuresTotal = new Counter({
   name: 'umg_persist_failures_total',
   help: 'Inbound messages that could not be written to the message log',

@@ -7,6 +7,12 @@ import { matchesFilter } from '../../core/filters/envelope-filter.js';
 import type { MetricsPort } from '../../core/metrics/metrics.port.js';
 import { noopMetrics } from '../../core/metrics/metrics.port.js';
 
+/**
+ * Longest a webhook may take to answer. Inbound events are emitted per account in order and the emit
+ * awaits its handlers, so a hung endpoint would otherwise block that account's ingestion forever.
+ */
+export const WEBHOOK_TIMEOUT_MS = 10_000;
+
 export class WebhookForwarder {
   constructor(
     private readonly webhookConfigRepo: WebhookConfigRepository,
@@ -84,20 +90,26 @@ export class WebhookForwarder {
         method: 'POST',
         headers,
         body: payload,
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
 
       const durationInSeconds = (performance.now() - start) / 1000;
       this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: String(response.status) });
 
       if (!response.ok) {
+        this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
         const text = await response.text().catch(() => '');
         getLogger().error('Webhook forwarding failed', { accountId, url, httpStatus: response.status, response: text });
       }
     } catch (err) {
       const durationInSeconds = (performance.now() - start) / 1000;
       this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: 'error' });
+      this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
       const message = err instanceof Error ? err.message : String(err);
-      getLogger().error('Webhook forwarding error', { accountId, url, error: message });
+      const timedOut = err instanceof Error && err.name === 'TimeoutError';
+      getLogger().error(timedOut ? 'Webhook forwarding timed out' : 'Webhook forwarding error', {
+        accountId, url, error: message, ...(timedOut ? { timeoutMs: WEBHOOK_TIMEOUT_MS } : {}),
+      });
     }
   }
 }

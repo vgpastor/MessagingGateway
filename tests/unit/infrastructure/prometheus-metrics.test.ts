@@ -57,6 +57,13 @@ describe('PrometheusMetrics', () => {
     expect(text).toContain('umg_webhook_forward_duration_seconds_count{account="wa-acme",url="https://x",status="200"} 1');
   });
 
+  it('counts webhook failures per account', async () => {
+    metrics.incCounter('umg_webhook_failures_total', { account: 'wa-acme' });
+    metrics.incCounter('umg_webhook_failures_total', { account: 'wa-acme' });
+
+    expect(await sample('umg_webhook_failures_total', { account: 'wa-acme' })).toBe(2);
+  });
+
   it('ignores unknown metric names instead of throwing', () => {
     expect(() => metrics.incCounter('umg_nope')).not.toThrow();
     expect(() => metrics.incGauge('umg_nope')).not.toThrow();
