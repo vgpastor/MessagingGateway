@@ -83,8 +83,8 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `DATABASE_URL` | _(none)_ | PostgreSQL connection URL (required when driver=postgres) |
 | `MEDIA_DIR` | `/app/data/media` | Where inbound media files are stored (keep it inside the data volume) |
 | `MEDIA_MAX_BYTES` | `16777216` | Largest inbound media downloaded (bytes); bigger ones are skipped |
-| `MEDIA_RETENTION_DAYS` | `30` | Days media files are kept |
-| `MESSAGE_RETENTION_DAYS` | `180` | Days messages are kept in the log |
+| `MEDIA_RETENTION_DAYS` | `30` | Days media files are kept; `0` disables media deletion. Checked at startup and every 24 h |
+| `MESSAGE_RETENTION_DAYS` | `180` | Days messages are kept in the log; `0` disables message deletion. Checked at startup and every 24 h |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` |
 
 Create a `.env.local` file to override defaults:

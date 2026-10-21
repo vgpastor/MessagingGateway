@@ -114,6 +114,19 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "seq": {
+                      "type": "integer",
+                      "description": "Global, monotonically increasing sequence in the message log"
+                    },
+                    "accountSeq": {
+                      "type": "integer",
+                      "description": "Per-account contiguous sequence in the message log, starting at 1"
+                    },
+                    "sentAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the sender sent the message (provider timestamp), if known"
+                    },
                     "conversationId": {
                       "type": "string"
                     },
@@ -125,6 +138,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -139,6 +160,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -459,6 +488,19 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "seq": {
+                      "type": "integer",
+                      "description": "Global, monotonically increasing sequence in the message log"
+                    },
+                    "accountSeq": {
+                      "type": "integer",
+                      "description": "Per-account contiguous sequence in the message log, starting at 1"
+                    },
+                    "sentAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the sender sent the message (provider timestamp), if known"
+                    },
                     "conversationId": {
                       "type": "string"
                     },
@@ -470,6 +512,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -484,6 +534,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -3792,7 +3850,7 @@
         "tags": [
           "Messages"
         ],
-        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true.",
+        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq }` and ignoring the other filters.",
         "parameters": [
           {
             "schema": {
@@ -3879,11 +3937,288 @@
             "in": "query",
             "name": "offset",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "in": "query",
+            "name": "afterAccountSeq",
+            "required": false,
+            "description": "Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId."
           }
         ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "whatsapp",
+                              "telegram",
+                              "email",
+                              "sms"
+                            ]
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "inbound",
+                              "outbound"
+                            ]
+                          },
+                          "timestamp": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "description": "Global, monotonically increasing sequence in the message log"
+                          },
+                          "accountSeq": {
+                            "type": "integer",
+                            "description": "Per-account contiguous sequence in the message log, starting at 1"
+                          },
+                          "sentAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When the sender sent the message (provider timestamp), if known"
+                          },
+                          "conversationId": {
+                            "type": "string"
+                          },
+                          "sender": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "phone": {
+                                "type": "string",
+                                "description": "E.164 phone number with leading + when known"
+                              },
+                              "lid": {
+                                "type": "string",
+                                "description": "WhatsApp LID JID when the channel exposes one"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          },
+                          "recipient": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "phone": {
+                                "type": "string",
+                                "description": "E.164 phone number with leading + when known"
+                              },
+                              "lid": {
+                                "type": "string",
+                                "description": "WhatsApp LID JID when the channel exposes one"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          },
+                          "content": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "text",
+                                  "image",
+                                  "audio",
+                                  "video",
+                                  "document",
+                                  "location",
+                                  "contact",
+                                  "sticker",
+                                  "reaction",
+                                  "poll",
+                                  "interactive_response",
+                                  "system",
+                                  "unknown"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          },
+                          "context": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "quotedMessageId": {
+                                "type": "string"
+                              },
+                              "isForwarded": {
+                                "type": "boolean"
+                              },
+                              "mentions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "channelDetails": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "platform": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "platform"
+                            ]
+                          },
+                          "gateway": {
+                            "type": "object",
+                            "properties": {
+                              "receivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "adapterId": {
+                                "type": "string"
+                              },
+                              "rawPayloadRef": {
+                                "type": "string"
+                              },
+                              "account": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "alias": {
+                                    "type": "string"
+                                  },
+                                  "owner": {
+                                    "type": "string"
+                                  },
+                                  "tags": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "alias",
+                                  "owner",
+                                  "tags"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "receivedAt",
+                              "adapterId",
+                              "account"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "accountId",
+                          "channel",
+                          "direction",
+                          "timestamp",
+                          "conversationId",
+                          "sender",
+                          "recipient",
+                          "content",
+                          "gateway"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Total matches (legacy filtering only; never present with afterAccountSeq)"
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "Page size applied (legacy filtering only)"
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "description": "Offset applied (legacy filtering only)"
+                    },
+                    "nextAfterAccountSeq": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "afterAccountSeq only: cursor for the next page, or null when there is nothing more"
+                    },
+                    "lastAccountSeq": {
+                      "type": "integer",
+                      "description": "afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start \"from now\""
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
           }
         }
       }

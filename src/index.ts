@@ -19,6 +19,7 @@ import { DiskMediaService, noopMediaService, type MediaService } from './core/in
 import { toStorableRaw, restoreBaileysRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
 import { downloadBaileysMedia } from './integrations/whatsapp/baileys/baileys-media.js';
 import { DiskMediaStore } from './persistence/media/disk-media-store.js';
+import { startRetentionSchedule, type RetentionSchedule } from './core/retention/retention-job.js';
 import { noopMetrics } from './core/metrics/metrics.port.js';
 import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
@@ -261,8 +262,24 @@ async function main() {
     });
     healthCheckScheduler.start();
 
+    // Daily retention (also once now, off the startup path). Needs the message log: without it nothing is stored.
+    let retention: RetentionSchedule | undefined;
+    if (messageStore) {
+      logger.info('Retention schedule started', {
+        mediaRetentionDays: envConfig.mediaRetentionDays || 'disabled',
+        messageRetentionDays: envConfig.messageRetentionDays || 'disabled',
+      });
+      retention = startRetentionSchedule({
+        messages: messageStore,
+        media: mediaStore,
+        mediaRetentionDays: envConfig.mediaRetentionDays,
+        messageRetentionDays: envConfig.messageRetentionDays,
+      });
+    }
+
     const shutdown = async () => {
       logger.info('Shutting down gracefully...');
+      retention?.stop();
       healthCheckScheduler.stop();
       await server.close();
       process.exit(0);

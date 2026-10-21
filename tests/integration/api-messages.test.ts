@@ -160,18 +160,8 @@ let store: SqliteMessageStore;
 
 const AUTH_HEADERS = { 'x-api-key': 'test-api-key' };
 
-beforeAll(async () => {
-  // Create in-memory SQLite store
-  store = new SqliteMessageStore(':memory:');
-  await store.init();
-  await store.runMigrations();
-
-  // Seed test data
-  for (const envelope of testEnvelopes) {
-    await store.save(envelope);
-  }
-
-  // Build server with the message store wired in
+/** Builds a server around `messageStore` (accounts and providers come from the test fixtures) */
+async function buildApp(messageStore: SqliteMessageStore): Promise<FastifyInstance> {
   const accounts = loadAccountsFromYaml(
     resolve(process.cwd(), 'tests/fixtures/accounts.yaml'),
   );
@@ -183,20 +173,39 @@ beforeAll(async () => {
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
 
-  app = await createServer({
+  const server = await createServer({
     accountRepository,
     webhookConfigRepo,
     providerRegistry,
     messageRouter,
     credentialValidator,
     webhookForwarder,
-    messageStore: store,
+    messageStore,
     apiKey: 'test-api-key',
     port: 0,
     logLevel: 'silent',
   });
 
-  await app.ready();
+  await server.ready();
+  return server;
+}
+
+async function createStore(): Promise<SqliteMessageStore> {
+  const created = new SqliteMessageStore(':memory:');
+  await created.init();
+  await created.runMigrations();
+  return created;
+}
+
+beforeAll(async () => {
+  store = await createStore();
+
+  // Seed test data
+  for (const envelope of testEnvelopes) {
+    await store.save(envelope);
+  }
+
+  app = await buildApp(store);
 });
 
 afterAll(async () => {
@@ -482,5 +491,120 @@ describe('GET /api/v1/messages/stats', () => {
 
     const body = res.json();
     expect(body.total).toBe(5);
+  });
+});
+
+// ── GET /api/v1/messages?afterAccountSeq= ────────────────────
+
+describe('GET /api/v1/messages?afterAccountSeq=', () => {
+  let seqApp: FastifyInstance;
+  let seqStore: SqliteMessageStore;
+
+  const inbound = (n: number): UnifiedEnvelope => ({
+    ...testEnvelopes[0]!,
+    id: `msg-seq-${n}`,
+    accountId: 'wa-seq',
+    timestamp: new Date(`2026-04-05T11:0${n}:00Z`),
+    sentAt: new Date(`2026-04-05T11:0${n}:00Z`),
+    content: { type: 'text', body: `inbound ${n}` },
+    channelDetails: { platform: 'whatsapp', messageId: `WA-${n}` },
+    gateway: { ...testEnvelopes[0]!.gateway, account: { ...testEnvelopes[0]!.gateway.account, id: 'wa-seq' } },
+  });
+
+  beforeAll(async () => {
+    seqStore = await createStore();
+    for (const n of [1, 2, 3]) await seqStore.insertInbound(inbound(n));
+    // An outbound row saved the regular way has no accountSeq and must never appear in the paging
+    await seqStore.save({ ...inbound(4), id: 'msg-seq-out', direction: 'outbound', channelDetails: { platform: 'whatsapp' } });
+    // Another account must not leak in
+    await seqStore.insertInbound({ ...inbound(1), id: 'msg-other-1', accountId: 'wa-other', channelDetails: { platform: 'whatsapp', messageId: 'O1' } });
+    seqApp = await buildApp(seqStore);
+  });
+
+  afterAll(async () => {
+    await seqApp.close();
+    await seqStore.close();
+  });
+
+  const get = (query: string) => seqApp.inject({ method: 'GET', url: `/api/v1/messages?${query}`, headers: AUTH_HEADERS });
+
+  it('afterAccountSeq requires accountId', async () => {
+    const res = await get('afterAccountSeq=0');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('MISSING_ACCOUNT_ID');
+  });
+
+  it.each(['-1', 'abc', '1.5'])('rejects afterAccountSeq=%s with 400', async (value) => {
+    const res = await get(`accountId=wa-seq&afterAccountSeq=${value}`);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('afterAccountSeq returns ascending page and next cursor', async () => {
+    const res = await get('accountId=wa-seq&afterAccountSeq=1&limit=1');
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].accountSeq).toBe(2);
+    expect(body.nextAfterAccountSeq).toBe(2);
+    expect(body.lastAccountSeq).toBe(3);
+  });
+
+  it('answers exactly { messages, nextAfterAccountSeq, lastAccountSeq } without total', async () => {
+    const res = await get('accountId=wa-seq&afterAccountSeq=0&limit=10');
+
+    expect(Object.keys(res.json()).sort()).toEqual(['lastAccountSeq', 'messages', 'nextAfterAccountSeq']);
+  });
+
+  it('pages through everything in ascending order and ends with a null cursor', async () => {
+    const first = (await get('accountId=wa-seq&afterAccountSeq=0&limit=2')).json();
+    expect(first.messages.map((m: UnifiedEnvelope) => m.accountSeq)).toEqual([1, 2]);
+    expect(first.nextAfterAccountSeq).toBe(2);
+
+    const second = (await get(`accountId=wa-seq&afterAccountSeq=${first.nextAfterAccountSeq}&limit=2`)).json();
+    expect(second.messages.map((m: UnifiedEnvelope) => m.accountSeq)).toEqual([3]);
+    expect(second.nextAfterAccountSeq).toBeNull();
+  });
+
+  it('never returns rows without accountSeq (outbound saved via save) nor other accounts', async () => {
+    const body = (await get('accountId=wa-seq&afterAccountSeq=0&limit=100')).json();
+
+    expect(body.messages.map((m: UnifiedEnvelope) => m.id)).toEqual(['msg-seq-1', 'msg-seq-2', 'msg-seq-3']);
+  });
+
+  it('keeps accountSeq, seq, sentAt and the sender in the serialized envelopes', async () => {
+    const [first] = (await get('accountId=wa-seq&afterAccountSeq=0&limit=1')).json().messages;
+
+    expect(first.accountSeq).toBe(1);
+    expect(first.seq).toEqual(expect.any(Number));
+    expect(first.sentAt).toBe('2026-04-05T11:01:00.000Z');
+    expect(first.timestamp).toBe('2026-04-05T11:01:00.000Z');
+    expect(first.sender).toMatchObject({ id: '34600000001@s.whatsapp.net', displayName: 'Alice' });
+    expect(first.content).toMatchObject({ type: 'text', body: 'inbound 1' });
+  });
+
+  it('past the end returns an empty page that still reports lastAccountSeq', async () => {
+    const body = (await get('accountId=wa-seq&afterAccountSeq=3')).json();
+
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 3 });
+  });
+
+  it('an account with no messages reports lastAccountSeq 0', async () => {
+    const body = (await get('accountId=nobody&afterAccountSeq=0')).json();
+
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0 });
+  });
+
+  it('legacy query without afterAccountSeq unchanged', async () => {
+    const res = await get('accountId=wa-seq');
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(body.total).toBe(4);
+    expect(body.messages).toHaveLength(4);
+    expect(body.limit).toBeDefined();
+    expect(body.offset).toBeDefined();
+    expect(body).not.toHaveProperty('nextAfterAccountSeq');
+    expect(body).not.toHaveProperty('lastAccountSeq');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, utimes, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, utimes, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { DiskMediaStore } from '../../../src/persistence/media/disk-media-store.js';
@@ -59,11 +59,25 @@ describe('DiskMediaStore', () => {
     const longAgo = new Date(Date.now() - 40 * 86_400_000);
     await utimes(old.path, longAgo, longAgo);
 
-    const removed = await store.purgeOlderThan(30);
+    const purged = await store.purgeOlderThan(30);
 
-    expect(removed).toBe(1);
+    expect(purged).toEqual(['OLD']);
     expect(await store.open('OLD')).toBeUndefined();
     expect(await store.open('NEW')).toBeDefined();
+  });
+
+  it('purgeOlderThan returns media ids (not file names) and deletes stale temp files without reporting them', async () => {
+    const a = await store.write('wa-1', 'msg_a', 'jpg', Buffer.from('a'));
+    const b = await store.write('wa-2', 'msg_b', 'ogg', Buffer.from('b'));
+    const tmp = `${a.path}.1234.tmp`;
+    await writeFile(tmp, 'partial');
+    const longAgo = new Date(Date.now() - 40 * 86_400_000);
+    for (const path of [a.path, b.path, tmp]) await utimes(path, longAgo, longAgo);
+
+    const purged = await store.purgeOlderThan(30);
+
+    expect([...purged].sort()).toEqual(['msg_a', 'msg_b']);
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('purgeOlderThan removes folders that end up empty', async () => {
@@ -77,7 +91,7 @@ describe('DiskMediaStore', () => {
   });
 
   it('purgeOlderThan on a missing directory removes nothing', async () => {
-    expect(await new DiskMediaStore(join(dir, 'does-not-exist')).purgeOlderThan(1)).toBe(0);
+    expect(await new DiskMediaStore(join(dir, 'does-not-exist')).purgeOlderThan(1)).toEqual([]);
   });
 
   it('concurrent writes of the same media do not clash on a temp file', async () => {

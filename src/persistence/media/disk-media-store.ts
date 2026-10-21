@@ -16,6 +16,12 @@ function isMissing(err: unknown): boolean {
   return (err as NodeJS.ErrnoException)?.code === 'ENOENT';
 }
 
+/** `<mediaId>.<ext>` -> `<mediaId>` */
+function mediaIdOf(fileName: string): string {
+  const dot = fileName.lastIndexOf('.');
+  return dot > 0 ? fileName.slice(0, dot) : fileName;
+}
+
 async function listDir(dir: string): Promise<string[]> {
   try {
     return await readdir(dir);
@@ -75,10 +81,14 @@ export class DiskMediaStore {
     return undefined;
   }
 
-  /** Deletes files last modified more than `days` ago, and the folders left empty. Returns how many files were removed. */
-  async purgeOlderThan(days: number): Promise<number> {
+  /**
+   * Deletes files last modified more than `days` ago, and the folders left empty.
+   * Returns the (sanitized) media id of every media file removed, so the caller can
+   * mark them expired; leftover `.tmp` files are removed too but are not media.
+   */
+  async purgeOlderThan(days: number): Promise<string[]> {
     const cutoff = Date.now() - days * DAY_MS;
-    let removed = 0;
+    const purged: string[] = [];
     for (const account of await listDir(this.dir)) {
       const accountDir = join(this.dir, account);
       for (const month of await listDir(accountDir)) {
@@ -89,7 +99,7 @@ export class DiskMediaStore {
             const info = await stat(path);
             if (info.isFile() && info.mtimeMs < cutoff) {
               await unlink(path);
-              removed++;
+              if (!name.endsWith('.tmp')) purged.push(mediaIdOf(name));
             }
           } catch (err) {
             if (!isMissing(err)) throw err;
@@ -99,7 +109,7 @@ export class DiskMediaStore {
       }
       await this.removeIfEmpty(accountDir);
     }
-    return removed;
+    return purged;
   }
 
   private async removeIfEmpty(dir: string): Promise<void> {

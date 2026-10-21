@@ -23,9 +23,9 @@ export interface EnvConfig {
   metricsEnabled: boolean;
   /** Largest inbound media (bytes) that is downloaded; bigger ones are skipped. */
   mediaMaxBytes: number;
-  /** Days a stored media file is kept. */
+  /** Days a stored media file is kept. 0 disables media retention. */
   mediaRetentionDays: number;
-  /** Days a message is kept in the log. */
+  /** Days a message is kept in the log. 0 disables text retention (messages are never deleted). */
   messageRetentionDays: number;
   /** Directory (inside the data volume) where inbound media is stored. */
   mediaDir: string;
@@ -51,8 +51,8 @@ export function loadEnvConfig(): EnvConfig {
     databaseUrl: process.env['DATABASE_URL'],
     metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
     mediaMaxBytes: positiveInt('MEDIA_MAX_BYTES', 16_777_216),
-    mediaRetentionDays: positiveInt('MEDIA_RETENTION_DAYS', 30),
-    messageRetentionDays: positiveInt('MESSAGE_RETENTION_DAYS', 180),
+    mediaRetentionDays: retentionDays('MEDIA_RETENTION_DAYS', 30),
+    messageRetentionDays: retentionDays('MESSAGE_RETENTION_DAYS', 180),
     mediaDir: process.env['MEDIA_DIR'] ?? '/app/data/media',
   };
 }
@@ -61,6 +61,16 @@ export function loadEnvConfig(): EnvConfig {
 function positiveInt(name: string, fallback: number): number {
   const parsed = parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Reads a retention period in days: unset or not a number gives `fallback`;
+ * 0 (or negative) means "keep forever" and is normalized to 0.
+ */
+function retentionDays(name: string, fallback: number): number {
+  const parsed = parseInt(process.env[name] ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(parsed, 0);
 }
 
 function resolveApiKey(nodeEnv: string): string {
