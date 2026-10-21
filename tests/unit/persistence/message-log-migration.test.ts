@@ -258,3 +258,142 @@ describe('message-log migration 003 on existing data (sqlite)', () => {
     expect(await store.maxAccountSeq('acc-b')).toBe(2);
   });
 });
+
+// ── Which duplicate survives, and account_seq order by created_at ──
+//
+// Baileys upserts an empty CIPHERTEXT stub (stored as `{type:'text', body:''}`) when it
+// cannot decrypt a message and the real message arrives later with the same WhatsApp id.
+// The migration must keep the row that has the content, and number account_seq by
+// `created_at` (then seq), not by heap order alone.
+
+/** Rows in INSERTION (heap) order, deliberately out of created_at order. */
+const RANKED: Array<{ id: string; wa: string | undefined; body: string; createdAt: string }> = [
+  { id: 'x4', wa: 'D2', body: 'later duplicate', createdAt: '2026-04-05T10:05:00.000Z' },
+  { id: 'x1', wa: 'D1', body: '', createdAt: '2026-04-05T10:01:00.000Z' }, // empty stub, OLDER -> removed
+  { id: 'x2', wa: 'D1', body: 'real content', createdAt: '2026-04-05T10:02:00.000Z' }, // content -> kept
+  { id: 'x5', wa: 'D2', body: 'earlier duplicate', createdAt: '2026-04-05T10:04:00.000Z' }, // older by created_at -> kept
+  { id: 'x3', wa: undefined, body: 'oldest', createdAt: '2026-04-05T10:00:00.000Z' }, // inserted last, oldest
+];
+const RANKED_EXPECTED = ['x3', 'x2', 'x5'];
+
+function rankedColumns(row: (typeof RANKED)[number]) {
+  const details = row.wa === undefined ? null : JSON.stringify({ platform: 'whatsapp', messageId: row.wa });
+  return [
+    row.id, 'acc-c', 'whatsapp', 'inbound', 'conv-1', 'sender-1', 'Sender', 'recipient-1',
+    'text', row.body, JSON.stringify({ type: 'text', body: row.body }), null, details,
+    JSON.stringify({ adapterId: 'baileys' }), row.createdAt, row.createdAt,
+  ];
+}
+
+describe.skipIf(!PG_URL)('message-log migration 002 dedupe ranking (postgres)', () => {
+  let admin: import('pg').Pool;
+  let schema: string;
+  let legacyDir: string;
+  let store: PostgresMessageStore;
+
+  beforeEach(async () => {
+    const { Pool } = await import('pg');
+    schema = `mlogrank_${randomUUID().replace(/-/g, '')}`;
+    const url = new URL(PG_URL!);
+    url.searchParams.set('options', `-c search_path=${schema}`);
+    const root = new Pool({ connectionString: PG_URL });
+    await root.query(`CREATE SCHEMA "${schema}"`);
+    await root.end();
+    admin = new Pool({ connectionString: url.toString() });
+
+    legacyDir = await copyInitialMigration('postgres');
+    await new MigrationRunner({ scriptsDir: join(legacyDir, 'postgres'), adapter: new PostgresMigrationAdapter(admin), logger: silent }).run();
+    for (const row of RANKED) {
+      await admin.query(
+        `INSERT INTO messages (id, account_id, channel, direction, conversation_id, sender_id, sender_name,
+           recipient_id, content_type, content_preview, content_json, context_json, channel_details_json,
+           gateway_json, timestamp, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        rankedColumns(row),
+      );
+    }
+    store = new PostgresMessageStore(url.toString());
+    await store.init();
+    await store.runMigrations();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await admin.end();
+    const { Pool } = await import('pg');
+    const cleanup = new Pool({ connectionString: PG_URL });
+    await cleanup.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await cleanup.end();
+    await rm(legacyDir, { recursive: true, force: true });
+  });
+
+  it('keeps the row with content over an older empty-text stub of the same WhatsApp id', async () => {
+    const d1 = (await admin.query(`SELECT id, content_json FROM messages WHERE wa_message_id = 'D1'`)).rows;
+    expect(d1).toEqual([{ id: 'x2', content_json: { type: 'text', body: 'real content' } }]);
+  });
+
+  it('between two rows with content keeps the oldest by created_at, not the lowest seq', async () => {
+    const d2 = (await admin.query(`SELECT id FROM messages WHERE wa_message_id = 'D2'`)).rows.map((r) => r.id);
+    expect(d2).toEqual(['x5']);
+  });
+
+  it('numbers account_seq by created_at when heap order differs', async () => {
+    const rows = (await admin.query(`SELECT id, account_seq FROM messages ORDER BY account_seq`)).rows;
+    expect(rows.map((r) => r.id)).toEqual(RANKED_EXPECTED);
+    expect(rows.map((r) => Number(r.account_seq))).toEqual([1, 2, 3]);
+    expect((await admin.query(`SELECT n FROM account_counters WHERE account_id = 'acc-c'`)).rows.map((r) => Number(r.n))).toEqual([3]);
+  });
+});
+
+describe('message-log migration 003 dedupe ranking (sqlite)', () => {
+  let legacyDir: string;
+  let store: SqliteMessageStore;
+  let db: import('better-sqlite3').Database;
+
+  beforeEach(async () => {
+    const Database = (await import('better-sqlite3')).default;
+    db = new Database(':memory:');
+    legacyDir = await copyInitialMigration('sqlite');
+    await new MigrationRunner({ scriptsDir: join(legacyDir, 'sqlite'), adapter: new SqliteMigrationAdapter(db), logger: silent }).run();
+    const insert = db.prepare(
+      `INSERT INTO messages (id, account_id, channel, direction, conversation_id, sender_id, sender_name,
+         recipient_id, content_type, content_preview, content_json, context_json, channel_details_json,
+         gateway_json, timestamp, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    );
+    for (const row of RANKED) insert.run(...rankedColumns(row));
+    store = new SqliteMessageStore(':memory:');
+    (store as unknown as { db: unknown }).db = db;
+    await store.runMigrations();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await rm(legacyDir, { recursive: true, force: true });
+  });
+
+  it('keeps the content row over an older empty-text stub, the oldest by created_at otherwise', () => {
+    const byWa = db.prepare(`SELECT wa_message_id AS wa, id, content_json FROM messages WHERE wa_message_id IS NOT NULL ORDER BY wa_message_id`).all();
+    expect(byWa).toEqual([
+      { wa: 'D1', id: 'x2', content_json: JSON.stringify({ type: 'text', body: 'real content' }) },
+      { wa: 'D2', id: 'x5', content_json: JSON.stringify({ type: 'text', body: 'earlier duplicate' }) },
+    ]);
+  });
+
+  it('numbers account_seq by created_at when insertion order differs', () => {
+    const rows = db.prepare(`SELECT id, account_seq FROM messages ORDER BY account_seq`).all() as Array<{ id: string; account_seq: number }>;
+    expect(rows.map((r) => r.id)).toEqual(RANKED_EXPECTED);
+    expect(rows.map((r) => r.account_seq)).toEqual([1, 2, 3]);
+    expect(db.prepare(`SELECT n FROM account_counters WHERE account_id = 'acc-c'`).all()).toEqual([{ n: 3 }]);
+  });
+});
+
+describe('migration 002 statement order (postgres script)', () => {
+  it('drops the unused GIN index before rewriting every row', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const sql = (await readFile(join(resolveMigrationScriptsDir('postgres'), '002_message_log.sql'), 'utf8'))
+      .split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n');
+    const drop = sql.indexOf('DROP INDEX IF EXISTS idx_messages_content_json');
+    expect(drop).toBeGreaterThanOrEqual(0);
+    expect(drop).toBeLessThan(sql.indexOf('UPDATE messages'));
+  });
+});

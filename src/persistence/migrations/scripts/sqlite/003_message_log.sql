@@ -1,7 +1,9 @@
 -- Message log: global `seq`, per-account contiguous `account_seq`, WhatsApp message id dedupe,
 -- provider `sent_at`, the sender's stable identity (`sender_phone`, `sender_lid`) and the raw provider payload (SQLite).
 --
--- Existing rows are renumbered in their original insertion order (rowid).
+-- The migration runner wraps this script and its `_migrations` record in ONE transaction.
+-- Existing rows get `seq` from their insertion order (rowid) and `account_seq` is numbered
+-- per account by `created_at`, then `seq`.
 
 ALTER TABLE messages ADD COLUMN seq INTEGER;
 ALTER TABLE messages ADD COLUMN account_seq INTEGER;
@@ -17,16 +19,28 @@ UPDATE messages SET seq = rowid;
 -- WhatsApp message id lives in the channel details; empty means "unknown" (NULL never conflicts)
 UPDATE messages SET wa_message_id = NULLIF(json_extract(channel_details_json, '$.messageId'), '');
 
--- Drop duplicates (same account + WhatsApp id), keeping the oldest row (lowest seq)
+-- Drop duplicates (same account + WhatsApp id), keeping the BEST row of each group:
+-- a row with content beats an empty text stub (Baileys upserts `{type:'text', body:''}` for a
+-- message it could not decrypt and the real one arrives later with the same id), then the
+-- oldest by created_at, then the lowest seq.
 DELETE FROM messages
-  WHERE wa_message_id IS NOT NULL
-    AND seq NOT IN (
-      SELECT min(seq) FROM messages WHERE wa_message_id IS NOT NULL GROUP BY account_id, wa_message_id
-    );
+  WHERE id IN (
+    SELECT id FROM (
+      SELECT id, row_number() OVER (
+        PARTITION BY account_id, wa_message_id
+        ORDER BY CASE WHEN json_extract(content_json, '$.type') = 'text'
+                       AND COALESCE(json_extract(content_json, '$.body'), '') = '' THEN 1 ELSE 0 END,
+                 created_at, seq
+      ) AS rn
+      FROM messages
+      WHERE wa_message_id IS NOT NULL
+    )
+    WHERE rn > 1
+  );
 
--- Contiguous 1..n per account, in insertion order
+-- Contiguous 1..n per account, in arrival order (created_at, then seq)
 UPDATE messages SET account_seq = s.rn
-  FROM (SELECT id, row_number() OVER (PARTITION BY account_id ORDER BY seq) AS rn FROM messages) s
+  FROM (SELECT id, row_number() OVER (PARTITION BY account_id ORDER BY created_at, seq) AS rn FROM messages) s
   WHERE messages.id = s.id;
 
 -- Per-account counters, kept apart from `messages` so retention never makes a number get reused

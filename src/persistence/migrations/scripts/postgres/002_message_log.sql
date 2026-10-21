@@ -1,10 +1,14 @@
 -- Message log: global `seq`, per-account contiguous `account_seq`, WhatsApp message id dedupe,
 -- provider `sent_at`, the sender's stable identity (`sender_phone`, `sender_lid`) and the raw provider payload (PostgreSQL).
 --
--- Runs as ONE multi-statement simple query, i.e. a single implicit transaction:
--- either the whole upgrade of existing rows applies or nothing does.
--- Existing rows get `seq` from the table rewrite of ADD COLUMN (heap order, which is insertion
--- order for this append-only table) and `account_seq` is derived from `seq` per account.
+-- The migration runner wraps this script and its `_migrations` record in ONE transaction:
+-- either the whole upgrade of existing rows applies (and is recorded) or nothing does.
+-- Existing rows get `seq` from the table rewrite of ADD COLUMN (heap order) and `account_seq`
+-- is numbered per account by `created_at`, then `seq`.
+
+-- Unused GIN index over every message body: expensive to maintain, and dropping it first
+-- spares the full-table UPDATEs below from rewriting it for every row.
+DROP INDEX IF EXISTS idx_messages_content_json;
 
 ALTER TABLE messages
   ADD COLUMN seq BIGSERIAL,
@@ -19,15 +23,24 @@ ALTER TABLE messages
 -- WhatsApp message id lives in the channel details; empty means "unknown" (NULL never conflicts)
 UPDATE messages SET wa_message_id = NULLIF(channel_details_json->>'messageId', '');
 
--- Drop duplicates (same account + WhatsApp id), keeping the oldest row (lowest seq)
-DELETE FROM messages a USING messages b
-  WHERE a.account_id = b.account_id
-    AND a.wa_message_id = b.wa_message_id
-    AND a.seq > b.seq;
+-- Drop duplicates (same account + WhatsApp id), keeping the BEST row of each group:
+-- a row with content beats an empty text stub (Baileys upserts `{type:'text', body:''}` for a
+-- message it could not decrypt and the real one arrives later with the same id), then the
+-- oldest by created_at, then the lowest seq.
+DELETE FROM messages m USING (
+    SELECT id, row_number() OVER (
+      PARTITION BY account_id, wa_message_id
+      ORDER BY CASE WHEN content_json->>'type' = 'text' AND COALESCE(content_json->>'body', '') = '' THEN 1 ELSE 0 END,
+               created_at, seq
+    ) AS rn
+    FROM messages
+    WHERE wa_message_id IS NOT NULL
+  ) d
+  WHERE m.id = d.id AND d.rn > 1;
 
--- Contiguous 1..n per account, in insertion order
+-- Contiguous 1..n per account, in arrival order (created_at, then seq)
 UPDATE messages m SET account_seq = s.rn
-  FROM (SELECT id, row_number() OVER (PARTITION BY account_id ORDER BY seq) AS rn FROM messages) s
+  FROM (SELECT id, row_number() OVER (PARTITION BY account_id ORDER BY created_at, seq) AS rn FROM messages) s
   WHERE m.id = s.id;
 
 -- Per-account counters: the row lock on the counter serializes concurrent inserts of an account,
@@ -48,6 +61,3 @@ CREATE UNIQUE INDEX uq_messages_seq ON messages(seq);
 -- Retention (DELETE ... WHERE created_at < ...) and pending-media recovery at boot
 CREATE INDEX idx_messages_created_at ON messages(created_at);
 CREATE INDEX idx_messages_media_pending ON messages(seq) WHERE (content_json->'media'->>'status') = 'pending';
-
--- Unused GIN index over every message body: expensive to maintain on each insert
-DROP INDEX IF EXISTS idx_messages_content_json;
