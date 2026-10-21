@@ -13,10 +13,15 @@ describe('loadEnvConfig retention', () => {
     process.env = { ...saved };
   });
 
-  it('defaults to 30 days of media and 180 days of messages', () => {
+  it('defaults to 30 days of media and NO text retention (message deletion is opt-in)', () => {
     const cfg = loadEnvConfig();
     expect(cfg.mediaRetentionDays).toBe(30);
-    expect(cfg.messageRetentionDays).toBe(180);
+    expect(cfg.messageRetentionDays).toBe(0);
+  });
+
+  it('an empty MESSAGE_RETENTION_DAYS keeps text retention disabled', () => {
+    process.env['MESSAGE_RETENTION_DAYS'] = '';
+    expect(loadEnvConfig().messageRetentionDays).toBe(0);
   });
 
   it('reads explicit values', () => {
@@ -42,7 +47,9 @@ describe('loadEnvConfig retention', () => {
 
   it('garbage falls back to the default', () => {
     process.env['MESSAGE_RETENTION_DAYS'] = 'soon';
-    expect(loadEnvConfig().messageRetentionDays).toBe(180);
+    process.env['MEDIA_RETENTION_DAYS'] = 'later';
+    expect(loadEnvConfig().messageRetentionDays).toBe(0);
+    expect(loadEnvConfig().mediaRetentionDays).toBe(30);
   });
 });
 

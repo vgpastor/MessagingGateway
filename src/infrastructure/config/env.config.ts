@@ -27,7 +27,11 @@ export interface EnvConfig {
   mediaMaxBytes: number;
   /** Days a stored media file is kept. 0 disables media retention. */
   mediaRetentionDays: number;
-  /** Days a message is kept in the log. 0 disables text retention (messages are never deleted). */
+  /**
+   * Days a message is kept in the log. 0 (the default) disables text retention: messages are
+   * never deleted. Opt-in on purpose: a variable lost on the way to the container must never
+   * make the first boot delete months of history.
+   */
   messageRetentionDays: number;
   /** Directory (inside the data volume) where inbound media is stored. */
   mediaDir: string;
@@ -55,7 +59,7 @@ export function loadEnvConfig(): EnvConfig {
     metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
     mediaMaxBytes: positiveInt('MEDIA_MAX_BYTES', 16_777_216),
     mediaRetentionDays: retentionDays('MEDIA_RETENTION_DAYS', 30),
-    messageRetentionDays: retentionDays('MESSAGE_RETENTION_DAYS', 180),
+    messageRetentionDays: retentionDays('MESSAGE_RETENTION_DAYS', 0),
     mediaDir: process.env['MEDIA_DIR'] ?? '/app/data/media',
   };
 }

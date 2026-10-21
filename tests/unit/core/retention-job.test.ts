@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { runRetention, startRetentionSchedule, RETENTION_INTERVAL_MS } from '../../../src/core/retention/retention-job.js';
+import { loadEnvConfig } from '../../../src/infrastructure/config/env.config.js';
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 import { DiskMediaStore } from '../../../src/persistence/media/disk-media-store.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
@@ -124,6 +125,26 @@ describe('runRetention', () => {
       expect(deps.media.purgeOlderThan).not.toHaveBeenCalled();
       expect(deps.messages.updateMedia).not.toHaveBeenCalled();
       expect(result).toEqual({ messages: 3, media: 0 });
+    });
+
+    it('with MESSAGE_RETENTION_DAYS unset, a pass never deletes messages (text retention is opt-in)', async () => {
+      const saved = { ...process.env };
+      try {
+        process.env['API_KEY'] = 'test-key';
+        delete process.env['MESSAGE_RETENTION_DAYS'];
+        delete process.env['MEDIA_RETENTION_DAYS'];
+        const cfg = loadEnvConfig();
+        expect(cfg.messageRetentionDays).toBe(0);
+
+        const deps = makeDeps({ messageRetentionDays: cfg.messageRetentionDays, mediaRetentionDays: cfg.mediaRetentionDays });
+        const result = await runRetention(deps);
+
+        expect(deps.messages.deleteOlderThan).not.toHaveBeenCalled();
+        expect(deps.media.purgeOlderThan).toHaveBeenCalledWith(30);
+        expect(result.messages).toBe(0);
+      } finally {
+        process.env = saved;
+      }
     });
 
     it('both disabled does nothing', async () => {

@@ -42,7 +42,8 @@ services:
       DATABASE_URL: postgres://messaging:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/messaging
       MEDIA_MAX_BYTES: ${MEDIA_MAX_BYTES:-16777216}
       MEDIA_RETENTION_DAYS: ${MEDIA_RETENTION_DAYS:-30}
-      MESSAGE_RETENTION_DAYS: ${MESSAGE_RETENTION_DAYS:-180}
+      # Text retention is opt-in: 0 (default) keeps every message. Set e.g. 180 to delete older ones.
+      MESSAGE_RETENTION_DAYS: ${MESSAGE_RETENTION_DAYS:-0}
     volumes:
       - /opt/messaging-gateway/data:/app/data
     depends_on:
