@@ -13,6 +13,8 @@ import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { createBaileysMessageLookup } from './baileys-message-lookup.js';
 import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
+import { noopMetrics, type MetricsPort } from '../../../core/metrics/metrics.port.js';
+import { baileysInboundSkipReason } from './baileys-inbound-skip.js';
 import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
@@ -20,6 +22,13 @@ const socketManager = new BaileysSocketManager();
 /** Let Baileys' `getMessage` read from the message log (retries / re-sends). Call once the store exists. */
 export function setBaileysMessageStore(store: Pick<MessageLogPort, 'findByWaMessageId'> | undefined): void {
   socketManager.setMessageLookup(store ? createBaileysMessageLookup(store) : undefined);
+}
+
+let metrics: MetricsPort = noopMetrics;
+
+/** Metrics for messages dropped before the pipeline (see {@link baileysInboundSkipReason}). Call once at boot. */
+export function setBaileysMetrics(port: MetricsPort | undefined): void {
+  metrics = port ?? noopMetrics;
 }
 
 /** Resolve a WhatsApp LID to its phone JID using the account's open socket (undefined if unknown). */
@@ -72,6 +81,12 @@ export const baileysProvider: ProviderBundle = {
     socketManager.onMessage(account.id, async (event) => {
       for (const msg of event.messages) {
         if (msg.key?.fromMe) continue;
+        const skip = baileysInboundSkipReason(msg);
+        if (skip) {
+          metrics.inboundSkipped(skip);
+          getLogger().debug('Skipped inbound message', { provider: 'baileys', accountId: account.id, messageId: msg.key?.id, reason: skip });
+          continue;
+        }
         try {
           const waEvent = mapBaileysToWhatsAppEvent(msg);
           const envelope = inboundAdapter.toEnvelope(waEvent, account);

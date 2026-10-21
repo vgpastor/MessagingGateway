@@ -26,7 +26,7 @@ function envelope(id = 'MSG1', accountId = 'wa-1'): UnifiedEnvelope {
 function setup(download: MediaDownload) {
   const metrics = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(),
-    persistFailures: vi.fn(), mediaSkipped: vi.fn(), lastInbound: vi.fn(),
+    persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
   };
   const store = {
     updateMedia: vi.fn().mockResolvedValue(undefined),

@@ -58,6 +58,13 @@ export const mediaSkippedTotal = new Counter({
   registers: [registry],
 });
 
+export const inboundSkippedTotal = new Counter({
+  name: 'umg_inbound_skipped_total',
+  help: 'Inbound provider messages dropped before the pipeline (ciphertext_stub: failed to decrypt, the real one follows; empty: no content)',
+  labelNames: ['reason'] as const,
+  registers: [registry],
+});
+
 export const lastInboundTimestamp = new Gauge({
   name: 'umg_last_inbound_timestamp',
   help: 'Unix time (seconds) of the last inbound message processed per account',

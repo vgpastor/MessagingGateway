@@ -51,7 +51,7 @@ function makeEnvelope(): UnifiedEnvelope {
 function metricsSpy() {
   return {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(),
-    persistFailures: vi.fn(), mediaSkipped: vi.fn(), lastInbound: vi.fn(),
+    persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
   };
 }
 

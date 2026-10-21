@@ -6,7 +6,7 @@ import { loadEnvConfig, resolveProviderCredential } from './infrastructure/confi
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
-import { baileysProvider, resolveBaileysLidToPhone, setBaileysMessageStore } from './integrations/whatsapp/baileys/index.js';
+import { baileysProvider, resolveBaileysLidToPhone, setBaileysMessageStore, setBaileysMetrics } from './integrations/whatsapp/baileys/index.js';
 import { wwebjsProvider } from './integrations/whatsapp/wwebjs-api/index.js';
 import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
@@ -166,6 +166,7 @@ async function main() {
   const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
   const metrics: MetricsPort = envConfig.metricsEnabled ? new PrometheusMetrics() : noopMetrics;
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret, metrics);
+  setBaileysMetrics(metrics);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
   logger.info('Loaded per-account webhook configs', { count: webhookConfigs.length });

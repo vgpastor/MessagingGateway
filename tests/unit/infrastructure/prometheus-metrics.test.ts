@@ -42,6 +42,15 @@ describe('PrometheusMetrics', () => {
     expect(await sample('umg_media_skipped_total', { reason: 'download_failed' })).toBe(1);
   });
 
+  it('inboundSkipped counts per reason', async () => {
+    metrics.inboundSkipped('ciphertext_stub');
+    metrics.inboundSkipped('ciphertext_stub');
+    metrics.inboundSkipped('empty');
+
+    expect(await sample('umg_inbound_skipped_total', { reason: 'ciphertext_stub' })).toBe(2);
+    expect(await sample('umg_inbound_skipped_total', { reason: 'empty' })).toBe(1);
+  });
+
   it('lastInbound sets the per-account timestamp in seconds since epoch', async () => {
     metrics.lastInbound('wa-acme', 1_700_000_000);
 

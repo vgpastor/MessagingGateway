@@ -69,7 +69,7 @@ function setup(opts: {
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
-    mediaSkipped: vi.fn(), lastInbound: vi.fn(),
+    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
   };
   const pipeline = new InboundPipeline({ store, eventBus, media, metrics, resolveLidToPhone: opts.resolveLidToPhone, toStorableRaw: opts.toStorableRaw });
   return { pipeline, insertInbound, emitSpy, emitted, media, metrics };
@@ -282,7 +282,7 @@ describe('InboundPipeline', () => {
       const pipeline = new InboundPipeline({
         store, eventBus,
         media: { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) },
-        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(), mediaSkipped: vi.fn(), lastInbound: vi.fn() },
+        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn() },
       });
       return { pipeline, order };
     }
