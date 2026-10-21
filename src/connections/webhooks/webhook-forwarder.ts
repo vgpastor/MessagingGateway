@@ -94,7 +94,7 @@ export class WebhookForwarder {
       });
 
       const durationInSeconds = (performance.now() - start) / 1000;
-      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: String(response.status) });
+      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, status: String(response.status) });
 
       if (!response.ok) {
         this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
@@ -103,7 +103,7 @@ export class WebhookForwarder {
       }
     } catch (err) {
       const durationInSeconds = (performance.now() - start) / 1000;
-      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, url, status: 'error' });
+      this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, status: 'error' });
       this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
       const message = err instanceof Error ? err.message : String(err);
       const timedOut = err instanceof Error && err.name === 'TimeoutError';

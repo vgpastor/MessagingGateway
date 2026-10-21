@@ -13,7 +13,7 @@ export const messagesTotal = new Counter({
 export const webhookForwardDuration = new Histogram({
   name: 'umg_webhook_forward_duration_seconds',
   help: 'Webhook forward duration in seconds',
-  labelNames: ['account', 'url', 'status'] as const,
+  labelNames: ['account', 'status'] as const,
   buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
   registers: [registry],
 });

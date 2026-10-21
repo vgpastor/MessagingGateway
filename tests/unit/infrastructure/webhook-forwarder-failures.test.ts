@@ -3,6 +3,8 @@ import { WebhookForwarder } from '../../../src/connections/webhooks/webhook-forw
 import type { WebhookConfig } from '../../../src/core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../../src/core/webhooks/webhook-config.repository.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
+import { PrometheusMetrics } from '../../../src/infrastructure/metrics/prometheus-metrics.js';
+import { registry } from '../../../src/infrastructure/metrics/prometheus.js';
 
 const hook: WebhookConfig = {
   id: 'wh_t',
@@ -118,5 +120,31 @@ describe('WebhookForwarder failure handling', () => {
     await forwarder.forward(makeEnvelope());
 
     expect(metrics.incCounter).not.toHaveBeenCalled();
+  });
+});
+
+describe('WebhookForwarder metrics exposure', () => {
+  const secretHook: WebhookConfig = { ...hook, url: 'https://hook.example.com/in?token=SECRET' };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['a 2xx answer', () => Promise.resolve(new Response('ok', { status: 200 }))],
+    ['a non-2xx answer', () => Promise.resolve(new Response('boom', { status: 500 }))],
+    ['a network error', () => Promise.reject(new Error('ECONNREFUSED'))],
+  ])('never puts the webhook URL (or its token) in /metrics after %s', async (_label, answer) => {
+    registry.resetMetrics();
+    vi.stubGlobal('fetch', vi.fn(answer));
+    const forwarder = new WebhookForwarder(makeRepo(secretHook), undefined, undefined, new PrometheusMetrics());
+
+    await forwarder.forward(makeEnvelope());
+
+    const text = await registry.metrics();
+    expect(text).toContain('umg_webhook_forward_duration_seconds_count{account="wa-acme"');
+    expect(text).not.toContain('SECRET');
+    expect(text).not.toContain('hook.example.com');
+    expect(text).not.toContain('url=');
   });
 });

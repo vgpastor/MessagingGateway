@@ -50,11 +50,11 @@ describe('PrometheusMetrics', () => {
 
   it('incCounter and observeHistogram drive the registered metrics by name', async () => {
     metrics.incCounter('umg_messages_total', { direction: 'inbound', channel: 'whatsapp', account: 'wa-acme', content_type: 'text' });
-    metrics.observeHistogram('umg_webhook_forward_duration_seconds', 0.2, { account: 'wa-acme', url: 'https://x', status: '200' });
+    metrics.observeHistogram('umg_webhook_forward_duration_seconds', 0.2, { account: 'wa-acme', status: '200' });
 
     expect(await sample('umg_messages_total', { account: 'wa-acme' })).toBe(1);
     const text = await registry.metrics();
-    expect(text).toContain('umg_webhook_forward_duration_seconds_count{account="wa-acme",url="https://x",status="200"} 1');
+    expect(text).toContain('umg_webhook_forward_duration_seconds_count{account="wa-acme",status="200"} 1');
   });
 
   it('counts webhook failures per account', async () => {
