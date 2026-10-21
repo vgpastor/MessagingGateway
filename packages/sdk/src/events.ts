@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { computeBackoffMs, DEFAULT_BACKOFF_BASE_MS, DEFAULT_BACKOFF_MAX_MS } from './backoff.js';
-import { openSocket, type GatewaySocket } from './socket.js';
+import { openSocket, DEFAULT_HANDSHAKE_TIMEOUT_MS, type GatewaySocket } from './socket.js';
 import type {
   EventsConfig, SendMessageCommand, UnifiedEnvelope,
   MessageSentData, ConnectionUpdateData, MessageSendFailedData,
@@ -22,6 +22,8 @@ type EventMap = {
   'reconnecting': [attempt: number, delayMs: number];
   'raw': [event: WsEventType, data: unknown];
 };
+
+interface ServerMessage { event: string; timestamp?: string; data?: unknown; accounts?: string[]; replyTo?: string }
 
 /** No server ping and no message for this long means the connection is dead (the server pings every 30 s). */
 const HEARTBEAT_TIMEOUT_MS = 75_000;
@@ -68,6 +70,7 @@ export class MessagingGatewayEvents {
       autoReconnect: config.autoReconnect ?? true,
       reconnectBaseMs: config.reconnectBaseMs ?? config.reconnectIntervalMs ?? DEFAULT_BACKOFF_BASE_MS,
       reconnectMaxMs: config.reconnectMaxMs ?? DEFAULT_BACKOFF_MAX_MS,
+      handshakeTimeoutMs: config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
       random: config.random ?? Math.random,
     };
   }
@@ -84,11 +87,13 @@ export class MessagingGatewayEvents {
       },
       onMessage: (data) => {
         if (this.ws === socket) this.armWatchdog();
+        let msg: ServerMessage;
         try {
-          this.handleServerMessage(JSON.parse(data));
+          msg = JSON.parse(data);
         } catch {
-          // Ignore malformed messages
+          return; // Ignore malformed messages
         }
+        this.handleServerMessage(msg);
       },
       onPing: () => {
         if (this.ws === socket) this.armWatchdog();
@@ -99,22 +104,24 @@ export class MessagingGatewayEvents {
           this.ws = null;
           this.clearWatchdog();
         }
-        this.emitter.emit('disconnected', code, reason);
-        this.rejectPendingSends('WebSocket disconnected');
-
+        // Schedule the reconnect before notifying anyone: nothing a listener does may prevent it
         if (wasCurrent && this.config.autoReconnect && !this.intentionalClose) {
           this.scheduleReconnect();
         }
+        this.rejectPendingSends('WebSocket disconnected');
+        this.emit('disconnected', code, reason);
       },
       onError: (err) => {
         // Errors from a socket we already dropped (e.g. an aborted handshake) are noise,
         // and an EventEmitter 'error' nobody listens to would throw
         if (this.ws === socket && this.emitter.listenerCount('error') > 0) {
-          this.emitter.emit('error', err);
+          this.emit('error', err);
         }
       },
-    });
+    }, undefined, this.config.handshakeTimeoutMs);
     this.ws = socket;
+    // Also bound the connecting phase: an upgrade that never completes must not wedge the client
+    this.armWatchdog();
   }
 
   /** Disconnect from the WebSocket server */
@@ -177,38 +184,38 @@ export class MessagingGatewayEvents {
 
   // ── Internal ────────────────────────────────────────────────
 
-  private handleServerMessage(msg: { event: string; timestamp?: string; data?: unknown; accounts?: string[]; replyTo?: string }): void {
+  private handleServerMessage(msg: ServerMessage): void {
     const event = msg.event as WsEventType;
 
     // Emit raw for advanced consumers
-    this.emitter.emit('raw', event, msg.data);
+    this.emit('raw', event, msg.data);
 
     switch (event) {
       case 'connected':
         // The server accepted us: the connection is healthy, so backoff starts over
         this.reconnectAttempt = 0;
-        this.emitter.emit('connected');
+        this.emit('connected');
         break;
       case 'message.inbound':
-        this.emitter.emit('message.inbound', msg.data as UnifiedEnvelope);
+        this.emit('message.inbound', msg.data as UnifiedEnvelope);
         break;
       case 'message.sent':
-        this.emitter.emit('message.sent', msg.data as MessageSentData);
+        this.emit('message.sent', msg.data as MessageSentData);
         break;
       case 'message.send.failed':
-        this.emitter.emit('message.send.failed', msg.data as MessageSendFailedData);
+        this.emit('message.send.failed', msg.data as MessageSendFailedData);
         break;
       case 'connection.update':
-        this.emitter.emit('connection.update', msg.data as ConnectionUpdateData);
+        this.emit('connection.update', msg.data as ConnectionUpdateData);
         break;
       case 'subscribed':
-        this.emitter.emit('subscribed', msg.accounts ?? []);
+        this.emit('subscribed', msg.accounts ?? []);
         break;
       case 'unsubscribed':
-        this.emitter.emit('unsubscribed', msg.accounts ?? []);
+        this.emit('unsubscribed', msg.accounts ?? []);
         break;
       case 'pong':
-        this.emitter.emit('pong');
+        this.emit('pong');
         break;
     }
   }
@@ -245,7 +252,32 @@ export class MessagingGatewayEvents {
       this.reconnectTimer = null;
       this.connect();
     }, delayMs);
-    this.emitter.emit('reconnecting', this.reconnectAttempt, delayMs);
+    this.emit('reconnecting', this.reconnectAttempt, delayMs);
+  }
+
+  /**
+   * Emits to every listener in isolation: one that throws neither aborts the socket
+   * handlers nor starves the remaining listeners. The exception is reported through
+   * the `error` event instead of being swallowed.
+   */
+  private emit<K extends keyof EventMap>(event: K, ...args: EventMap[K]): void {
+    for (const listener of this.emitter.rawListeners(event)) {
+      try {
+        (listener as (...a: unknown[]) => void)(...args);
+      } catch (err) {
+        this.reportListenerError(event, err);
+      }
+    }
+  }
+
+  private reportListenerError(event: keyof EventMap, err: unknown): void {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (event !== 'error' && this.emitter.listenerCount('error') > 0) {
+      this.emit('error', error);
+      return;
+    }
+    // A throwing 'error' listener, or nobody listening: do not crash the socket loop, do not hide it
+    console.error(`[messaging-gateway-sdk] unhandled error in '${event}' listener:`, error);
   }
 
   /** (Re)starts the dead-connection timer; any server activity proves the link is alive. */

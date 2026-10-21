@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { MessagingGatewayEvents } from '../src/events.js';
 
 interface Conn { ws: ServerSocket; req: IncomingMessage }
@@ -189,5 +189,66 @@ describe('MessagingGatewayEvents heartbeat watchdog', () => {
     vi.advanceTimersByTime(1000);
     await disconnected;
     expect(client.isConnected).toBe(false);
+  });
+});
+
+describe('MessagingGatewayEvents resilience', () => {
+  it('still reconnects when a disconnected listener throws', async () => {
+    client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', reconnectBaseMs: 10, random: () => 1 });
+    const errors: Error[] = [];
+    client.on('error', (e) => errors.push(e));
+    client.on('disconnected', () => { throw new Error('listener bug'); });
+    client.connect();
+
+    (await connection(0)).ws.close();
+    await connection(1);
+
+    expect(errors.map((e) => e.message)).toEqual(['listener bug']);
+  });
+
+  it('surfaces a throwing message.inbound listener via error and keeps delivering', async () => {
+    client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', autoReconnect: false });
+    const c = client;
+    const errors: Error[] = [];
+    const delivered: string[] = [];
+    client.on('error', (e) => errors.push(e));
+    client.on('message.inbound', (env) => {
+      if (env.id === 'm1') throw new Error('consumer bug');
+    });
+    client.on('message.inbound', (env) => { delivered.push(env.id); });
+    client.connect();
+    const { ws } = await connection(0);
+    const second = next((cb) => c.on('message.inbound', (env) => { if (env.id === 'm2') cb(); }));
+    ws.send(JSON.stringify({ event: 'message.inbound', data: { id: 'm1', accountSeq: 1 } }));
+    ws.send(JSON.stringify({ event: 'message.inbound', data: { id: 'm2', accountSeq: 2 } }));
+    await second;
+
+    expect(errors.map((e) => e.message)).toEqual(['consumer bug']);
+    expect(delivered).toEqual(['m1', 'm2']); // sibling listener and the next message are unaffected
+    expect(c.isConnected).toBe(true);
+  });
+
+  it('gives up on a stalled upgrade and schedules a reconnect', async () => {
+    const stalled: Socket[] = [];
+    const tcp = createServer((s) => { stalled.push(s); }); // accepts TCP, never answers the upgrade
+    await new Promise<void>((r) => tcp.listen(0, '127.0.0.1', () => r()));
+    const port = (tcp.address() as AddressInfo).port;
+    try {
+      client = new MessagingGatewayEvents({
+        baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k',
+        handshakeTimeoutMs: 50, reconnectBaseMs: 10, random: () => 1,
+      });
+      const reconnecting = next<[number, number]>((cb) => client!.once('reconnecting', cb));
+      client.connect();
+
+      const [attempt, delay] = await reconnecting;
+      expect(attempt).toBe(1);
+      expect(delay).toBe(10);
+      await vi.waitFor(() => expect(stalled.length).toBeGreaterThanOrEqual(2)); // it dialed again
+    } finally {
+      client?.disconnect();
+      stalled.forEach((s) => s.destroy());
+      await new Promise<void>((r) => tcp.close(() => r()));
+    }
   });
 });

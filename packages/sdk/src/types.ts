@@ -394,6 +394,8 @@ export interface EventsConfig extends ClientConfig {
   reconnectBaseMs?: number;
   /** Reconnect backoff cap (ms). Default 60000. */
   reconnectMaxMs?: number;
+  /** Max time (ms) for the WebSocket upgrade to complete before the attempt is abandoned and retried. Default 15000. */
+  handshakeTimeoutMs?: number;
   /** @deprecated Reconnects now use exponential backoff with jitter. Treated as `reconnectBaseMs` when that is unset. */
   reconnectIntervalMs?: number;
   /** Uniform [0, 1) random source for backoff jitter. Mainly for deterministic tests. */

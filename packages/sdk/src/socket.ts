@@ -29,6 +29,9 @@ export interface SocketEnv {
 
 const OPEN = 1;
 
+/** Max time for the HTTP upgrade to complete before the attempt is abandoned. */
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000;
+
 function detectEnv(): SocketEnv {
   const isNode = typeof process !== 'undefined' && !!process.versions?.node;
   return { isNode, BrowserWebSocket: (globalThis as { WebSocket?: typeof globalThis.WebSocket }).WebSocket };
@@ -42,12 +45,18 @@ function detectEnv(): SocketEnv {
  *
  * The key never goes in the URL (it would end up in proxy/access logs).
  */
-export function openSocket(url: string, apiKey: string, handlers: SocketHandlers, env: SocketEnv = detectEnv()): GatewaySocket {
-  return env.isNode ? openNodeSocket(url, apiKey, handlers) : openBrowserSocket(url, apiKey, handlers, env);
+export function openSocket(
+  url: string, apiKey: string, handlers: SocketHandlers,
+  env: SocketEnv = detectEnv(), handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+): GatewaySocket {
+  return env.isNode ? openNodeSocket(url, apiKey, handlers, handshakeTimeoutMs) : openBrowserSocket(url, apiKey, handlers, env);
 }
 
-function openNodeSocket(url: string, apiKey: string, h: SocketHandlers): GatewaySocket {
-  const ws = new WebSocket(url, apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : undefined);
+function openNodeSocket(url: string, apiKey: string, h: SocketHandlers, handshakeTimeout: number): GatewaySocket {
+  const ws = new WebSocket(url, {
+    handshakeTimeout,
+    ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
+  });
   ws.on('open', () => h.onOpen());
   ws.on('message', (raw: Buffer | string) => h.onMessage(raw.toString()));
   ws.on('ping', () => h.onPing());
