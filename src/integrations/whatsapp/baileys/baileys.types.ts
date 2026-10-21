@@ -5,6 +5,7 @@ export interface BaileysProviderConfig {
   connectTimeoutMs?: number;
   qrTimeoutMs?: number;
   retryOnDisconnect?: boolean;
+  /** @deprecated Ignored: reconnection is unlimited with exponential backoff. Still accepted so existing accounts.yaml keep loading. */
   maxRetries?: number;
   markOnlineOnConnect?: boolean;
 }

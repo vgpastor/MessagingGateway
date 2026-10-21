@@ -88,10 +88,11 @@ describe('Baileys 401 loggedOut alert', () => {
     accounts.push('alert-quiet');
     const { forwarder, socket } = await setup('alert-quiet');
 
-    const before = sockets.length;
-    socket.ev.emit('connection.update', close(428)); // connectionClosed → reconnects
-    await vi.waitFor(() => expect(baileysProvider.connection!().hasConnection('alert-quiet')).toBe(true));
-    expect(sockets.length).toBe(before + 1);
+    socket.ev.emit('connection.update', close(428)); // connectionClosed → backs off, then reconnects
+    await flush();
+    // The account stays registered while it waits for its (jittered) retry; the
+    // reconnect itself is covered in baileys-socket-manager.test.ts.
+    expect(baileysProvider.connection!().hasConnection('alert-quiet')).toBe(true);
 
     await baileysProvider.connection!().disconnect('alert-quiet'); // logout() emits a 401 close
     await flush();
