@@ -8,6 +8,13 @@ TypeScript SDK for [Unified Messaging Gateway](https://github.com/vgpastor/Messa
 npm install @messaging-gateway/sdk
 ```
 
+## Compatibility
+
+- **Node.js** `>=20.19 <21 || >=22.12`: CommonJS consumers load the ESM build through `require(esm)`.
+- **Gateway:** SDK 0.4.x requires a gateway release with header/subprotocol WebSocket auth,
+  `afterAccountSeq` and the server heartbeat (the release that ships with this SDK). Against an
+  older gateway the WebSocket handshake is rejected with `4401` and the client keeps retrying.
+
 ## REST Client
 
 ```typescript

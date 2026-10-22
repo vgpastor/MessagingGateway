@@ -3,6 +3,8 @@ export const contactRefSchema = {
   properties: {
     id: { type: 'string' as const },
     displayName: { type: 'string' as const },
+    phone: { type: 'string' as const, description: 'E.164 phone number with leading + when known' },
+    lid: { type: 'string' as const, description: 'WhatsApp LID JID when the channel exposes one' },
   },
   required: ['id'] as const,
 };
@@ -70,6 +72,9 @@ export const unifiedEnvelopeSchema = {
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     direction: { type: 'string' as const, enum: ['inbound', 'outbound'] },
     timestamp: { type: 'string' as const, format: 'date-time' },
+    seq: { type: 'integer' as const, description: 'Global, monotonically increasing sequence in the message log' },
+    accountSeq: { type: 'integer' as const, description: 'Per-account contiguous sequence in the message log, starting at 1' },
+    sentAt: { type: 'string' as const, format: 'date-time', description: 'When the sender sent the message (provider timestamp), if known' },
     conversationId: { type: 'string' as const },
     sender: contactRefSchema,
     recipient: contactRefSchema,

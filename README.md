@@ -70,6 +70,7 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `PORT` | `3000` | Internal server port |
 | `HOST_PORT` | `3123` | Docker host port mapping |
 | `API_KEY` | _(none)_ | API key for auth. Empty = dev mode (no auth) |
+| `READ_API_KEY` | _(none)_ | Optional read-only key: `GET /api/v1/messages*`, `GET /api/v1/media/*` and the `/ws/events` stream (never QR codes, never send). Everything else answers `403` |
 | `WEBHOOK_CALLBACK_URL` | _(none)_ | Global webhook URL for forwarding events |
 | `WEBHOOK_CALLBACK_SECRET` | _(none)_ | HMAC secret for webhook signatures |
 | `ALERT_WEBHOOK_URL` | _(none)_ | Receives one `connection.update` (`status: auth_expired`) when an account loses its session, e.g. WhatsApp unlinked the device. Payload has a Slack-compatible `text` field |
@@ -81,7 +82,11 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | `STORAGE_DRIVER` | `sqlite` | Storage backend: `sqlite` or `postgres` |
 | `DATABASE_PATH` | `data/messages.db` | SQLite database file path |
 | `DATABASE_URL` | _(none)_ | PostgreSQL connection URL (required when driver=postgres) |
-| `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` |
+| `MEDIA_DIR` | `/app/data/media` | Where inbound media files are stored (keep it inside the data volume) |
+| `MEDIA_MAX_BYTES` | `16777216` | Largest inbound media downloaded (bytes); bigger ones are skipped |
+| `MEDIA_RETENTION_DAYS` | `30` | Days media files are kept; `0` disables media deletion. Checked at startup and every 24 h |
+| `MESSAGE_RETENTION_DAYS` | `0` | Days messages are kept in the log. Opt-in: `0` (default) never deletes messages; set e.g. `180` to delete older ones. Checked at startup and every 24 h |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` (requires the admin `API_KEY`) |
 
 Create a `.env.local` file to override defaults:
 
@@ -123,16 +128,18 @@ curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts
 curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 ```
 
+Two keys exist: `API_KEY` (admin, can do everything) and the optional `READ_API_KEY`, which can only `GET` messages and media and open the WebSocket event stream. Any other route answers `403 Forbidden` for the read key, including `/metrics`, the accounts endpoints (they expose the QR) and every write.
+
 ### Endpoints
 
 The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); when `SWAGGER_ENABLED=true` it is also served interactively at `GET /docs`. The tables below summarise it.
 
-**System** (no auth)
+**System** (`/health` and `/openapi.json` are public; `/metrics` needs the admin key)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Health check (returns status, version, uptime) |
-| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/health` | Health check: always HTTP 200; `status` is `ok` or `degraded` (any account not `active`, except deliberately `suspended`), plus `accounts` with each account status, version, uptime |
+| `GET` | `/metrics` | Prometheus metrics (admin API key required) |
 | `GET` | `/openapi.json` | OpenAPI 3 specification |
 
 **Accounts** (auth required)
@@ -166,6 +173,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `POST` | `/api/v1/messages/:id/read` | Mark a message as read |
 | `GET` | `/api/v1/messages` | Query stored messages with filters † |
 | `GET` | `/api/v1/messages/:id` | Get a stored message by ID † |
+| `GET` | `/api/v1/media/:id` | Download a message's media (`media.url`): 200 file, 202 still downloading, 410 skipped/expired † |
 | `GET` | `/api/v1/messages/search?q=` | Full-text search across messages † |
 | `GET` | `/api/v1/messages/stats` | Message count with filters † |
 | `GET` | `/api/v1/messages/analytics` | Aggregated statistics (by channel, direction, hourly) † |
@@ -200,7 +208,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `WS` | `/ws/events` | Token (query param) | Real-time event stream |
+| `WS` | `/ws/events` | API key (header or subprotocol) | Real-time event stream |
 
 ### Send a Message
 
@@ -223,7 +231,10 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 ### WebSocket
 
 ```javascript
-const ws = new WebSocket('ws://localhost:3123/ws/events?token=your-key&accounts=my-whatsapp');
+// Browsers cannot set headers: pass the key as a subprotocol. The server echoes it back.
+// Other clients can send `Authorization: Bearer <key>` or `X-API-Key: <key>` instead.
+// (`?token=<key>` still works but is deprecated: URLs end up in logs.)
+const ws = new WebSocket('ws://localhost:3123/ws/events?accounts=my-whatsapp', ['umg.your-key']);
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
@@ -237,6 +248,8 @@ ws.send(JSON.stringify({
   data: { from: 'my-whatsapp', to: '+34600000001', content: { type: 'text', body: 'Hello!' } }
 }));
 ```
+
+The server pings every client every 30 s and terminates the ones that do not answer (or whose send fails), so a half-open connection is dropped instead of silently missing events: reconnect and catch up. With the read-only key, `send` is refused and `connection.update` events carry `qr: null`.
 
 ### Inbound Message Format (Unified Envelope)
 

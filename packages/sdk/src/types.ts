@@ -37,7 +37,24 @@ export interface InteractiveResponseContent { type: 'interactive_response'; resp
 export interface SystemContent { type: 'system'; eventType: string; body?: string; affectedUsers?: string[] }
 export interface UnknownContent { type: 'unknown'; body?: string }
 
-export interface MediaInfo { id?: string; url?: string; mimeType: string; size?: number; base64?: string; filename?: string }
+export interface MediaInfo {
+  /** Provider media reference ID */
+  id?: string;
+  /** Gateway download URL; usable once `status` is `ready` */
+  url?: string;
+  mimeType: string;
+  size?: number;
+  /**
+   * Base64 content. Only meaningful on outbound send requests: inbound media is
+   * stored by the gateway and delivered via `url`, never inline.
+   */
+  base64?: string;
+  filename?: string;
+  /** Inbound download lifecycle: `pending` until stored, `ready` when `url` is usable */
+  status?: 'pending' | 'ready' | 'skipped' | 'expired';
+  /** Why an inbound media was not stored (`status: 'skipped'`) */
+  skipReason?: 'too_large' | 'download_failed';
+}
 
 // ── Message Context ─────────────────────────────────────────────
 
@@ -61,6 +78,10 @@ export interface ChannelDetails {
 export interface ContactRef {
   id: string;
   displayName?: string;
+  /** Resolved phone number, `+` followed by digits */
+  phone?: string;
+  /** WhatsApp LID (privacy-preserving id) when known */
+  lid?: string;
 }
 
 // ── Unified Envelope ────────────────────────────────────────────
@@ -71,6 +92,12 @@ export interface UnifiedEnvelope {
   channel: ChannelType;
   direction: 'inbound' | 'outbound';
   timestamp: string;
+  /** Global message-log sequence (set once the gateway has persisted the message) */
+  seq?: number;
+  /** Per-account contiguous sequence of inbound messages; gaps mean missed events (see `messages.after`) */
+  accountSeq?: number;
+  /** When the sender sent the message (ISO 8601), as opposed to `timestamp` / `gateway.receivedAt` */
+  sentAt?: string;
   conversationId: string;
   sender: ContactRef;
   recipient: ContactRef;
@@ -296,6 +323,15 @@ export interface MessageQueryResult {
   offset: number;
 }
 
+/** Result of `messages.after()`: a page of inbound messages after an `accountSeq` cursor. */
+export interface MessagesAfterResult {
+  messages: UnifiedEnvelope[];
+  /** Cursor for the next page, or `null` when the caller has caught up */
+  nextAfterAccountSeq: number | null;
+  /** Highest `accountSeq` stored for the account */
+  lastAccountSeq: number;
+}
+
 export interface MessageStats {
   totalMessages: number;
   byChannel: Record<string, number>;
@@ -354,5 +390,14 @@ export interface ClientConfig {
 export interface EventsConfig extends ClientConfig {
   accounts?: string[];
   autoReconnect?: boolean;
+  /** Reconnect backoff base (ms); the delay ceiling doubles per attempt. Default 1000. */
+  reconnectBaseMs?: number;
+  /** Reconnect backoff cap (ms). Default 60000. */
+  reconnectMaxMs?: number;
+  /** Max time (ms) for the WebSocket upgrade to complete before the attempt is abandoned and retried. Default 15000. */
+  handshakeTimeoutMs?: number;
+  /** @deprecated Reconnects now use exponential backoff with jitter. Treated as `reconnectBaseMs` when that is unset. */
   reconnectIntervalMs?: number;
+  /** Uniform [0, 1) random source for backoff jitter. Mainly for deterministic tests. */
+  random?: () => number;
 }

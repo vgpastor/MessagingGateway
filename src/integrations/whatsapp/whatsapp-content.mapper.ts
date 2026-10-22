@@ -158,10 +158,13 @@ export function buildWhatsAppEnvelope(
     channel: 'whatsapp',
     direction: 'inbound',
     timestamp: new Date(),
+    sentAt: event.sentAt,
     conversationId: event.chat.chatId,
     sender: {
       id: event.from.wid,
       displayName: event.from.pushName,
+      phone: event.from.phone,
+      lid: event.from.lid,
     },
     recipient: {
       id: account.identity.channel === 'whatsapp' ? account.identity.phoneNumber : account.id,

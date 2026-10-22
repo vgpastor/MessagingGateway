@@ -6,7 +6,7 @@ import { loadEnvConfig, resolveProviderCredential } from './infrastructure/confi
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
-import { baileysProvider } from './integrations/whatsapp/baileys/index.js';
+import { baileysProvider, resolveBaileysLidToPhone, setBaileysMessageStore, setBaileysMetrics } from './integrations/whatsapp/baileys/index.js';
 import { wwebjsProvider } from './integrations/whatsapp/wwebjs-api/index.js';
 import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
@@ -14,6 +14,15 @@ import { twilioProvider } from './integrations/sms/twilio/index.js';
 import { messagebirdProvider } from './integrations/sms/messagebird/index.js';
 import { MessageRouterService } from './core/routing/message-router.service.js';
 import { EventBus } from './core/event-bus.js';
+import { InboundPipeline } from './core/inbound/inbound-pipeline.js';
+import { DiskMediaService, noopMediaService, type MediaService } from './core/inbound/media-service.js';
+import { toStorableRaw, restoreBaileysRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
+import { downloadBaileysMedia } from './integrations/whatsapp/baileys/baileys-media.js';
+import { DiskMediaStore } from './persistence/media/disk-media-store.js';
+import { startRetentionSchedule, type RetentionSchedule } from './core/retention/retention-job.js';
+import { noopMetrics, type MetricsPort } from './core/metrics/metrics.port.js';
+import { PrometheusMetrics } from './infrastructure/metrics/prometheus-metrics.js';
+import type { FullMessageStorePort } from './core/persistence/message-store.port.js';
 import { Events, createEvent } from './core/events.js';
 import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequestPayload, MessageSendSuccessPayload, MessageSendFailurePayload } from './core/events.js';
 import { messagesTotal, connectionStatus } from './infrastructure/metrics/prometheus.js';
@@ -24,6 +33,7 @@ import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js'
 import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
+import { connectManagedProviders } from './infrastructure/connect-managed-providers.js';
 import type { ChannelAccount } from './core/accounts/channel-account.js';
 
 /** Register all supported providers and inject the credential resolver */
@@ -51,6 +61,7 @@ function wireEventBus(
   webhookForwarder: WebhookForwarder,
   accountRepository: InMemoryAccountRepository,
   messageRouter: MessageRouterService,
+  metrics: MetricsPort,
 ): WebSocketBroadcaster {
   eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, async (event) => {
     const env = event.data.envelope;
@@ -124,35 +135,7 @@ function wireEventBus(
     });
   });
 
-  return new WebSocketBroadcaster(eventBus);
-}
-
-/** Connect managed providers (e.g. Baileys) and wire their inbound events */
-async function connectManagedProviders(
-  accounts: ChannelAccount[],
-  providerRegistry: ProviderRegistry,
-  eventBus: EventBus,
-): Promise<void> {
-  const logger = getLogger();
-  const managedAccounts = accounts.filter(
-    (a) => providerRegistry.get(a.provider)?.connection && (a.status === 'active' || a.status === 'unchecked' || a.status === 'auth_expired'),
-  );
-
-  for (const account of managedAccounts) {
-    const bundle = providerRegistry.getOrThrow(account.provider);
-    try {
-      const connectionManager = bundle.connection!();
-      await connectionManager.connect(account.id, account.providerConfig);
-
-      if (bundle.wireEvents) {
-        await bundle.wireEvents(account, eventBus);
-      }
-
-      logger.info('Connected and listening for messages', { provider: account.provider, accountId: account.id });
-    } catch (err) {
-      logger.error('Failed to connect', { provider: account.provider, accountId: account.id, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  return new WebSocketBroadcaster(eventBus, metrics);
 }
 
 async function main() {
@@ -181,27 +164,54 @@ async function main() {
   const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
   const messageRouter = new MessageRouterService(accountRepository, providerRegistry, eventBus);
   const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
-  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret);
+  const metrics: MetricsPort = envConfig.metricsEnabled ? new PrometheusMetrics() : noopMetrics;
+  const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret, metrics);
+  setBaileysMetrics(metrics);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
   logger.info('Loaded per-account webhook configs', { count: webhookConfigs.length });
 
   // Wire event bus
-  const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter);
+  const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter, metrics);
   subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
 
   // Optional: persistence plugin (SQLite or PostgreSQL)
-  let messageStore: import('./core/persistence/message-store.port.js').FullMessageStorePort | undefined;
+  let messageStore: FullMessageStorePort | undefined;
   if (envConfig.storageEnabled) {
     const { createMessageStore } = await import('./persistence/message-store.factory.js');
     const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
     messageStore = await createMessageStore(envConfig);
+    setBaileysMessageStore(messageStore);
     subscribePersistence(eventBus, messageStore);
     logger.info('Persistence enabled', {
       driver: envConfig.storageDriver,
       ...(envConfig.storageDriver === 'sqlite' ? { database: envConfig.databasePath } : {}),
     });
   }
+
+  // Inbound media goes to disk (never to the database); without a message log there is nowhere to record it.
+  const mediaStore = new DiskMediaStore(envConfig.mediaDir);
+  const mediaService: MediaService = messageStore
+    ? new DiskMediaService({
+        store: messageStore,
+        files: mediaStore,
+        download: (raw, maxBytes) => downloadBaileysMedia(raw as Parameters<typeof downloadBaileysMedia>[0], maxBytes),
+        restoreRaw: restoreBaileysRaw,
+        maxBytes: envConfig.mediaMaxBytes,
+        metrics,
+      })
+    : noopMediaService;
+
+  // Inbound: filter → persist (message log) → emit → media. Persisting strictly
+  // before emitting keeps `accountSeq` gaps meaningful for consumers.
+  const inboundPipeline = new InboundPipeline({
+    store: messageStore,
+    eventBus,
+    media: mediaService,
+    metrics,
+    resolveLidToPhone: resolveBaileysLidToPhone,
+    toStorableRaw,
+  });
 
   // Health check scheduler
   const healthCheckScheduler = new HealthCheckScheduler(
@@ -212,8 +222,10 @@ async function main() {
   const server = await createServer({
     accountRepository, webhookConfigRepo, providerRegistry,
     messageRouter, credentialValidator, healthCheckScheduler,
-    webhookForwarder, wsBroadcaster, messageStore,
+    wireAccount: async (account) => { await providerRegistry.get(account.provider)?.wireEvents?.(account, eventBus, inboundPipeline); },
+    webhookForwarder, wsBroadcaster, messageStore, mediaStore,
     apiKey: envConfig.apiKey,
+    readApiKey: envConfig.readApiKey,
     port: envConfig.port, logLevel: envConfig.logLevel,
     metricsEnabled: envConfig.metricsEnabled,
   });
@@ -223,11 +235,31 @@ async function main() {
     logger.info('Unified Messaging Gateway listening', { port: envConfig.port });
     logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
-    await connectManagedProviders(accounts, providerRegistry, eventBus);
+    await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
+    // Media left pending by a previous run (crash between persisting the message and downloading it).
+    mediaService.resumePendingMedia().catch((err) => {
+      logger.error('Failed to resume pending media', { error: err instanceof Error ? err.message : String(err) });
+    });
     healthCheckScheduler.start();
+
+    // Daily retention (also once now, off the startup path). Needs the message log: without it nothing is stored.
+    let retention: RetentionSchedule | undefined;
+    if (messageStore) {
+      logger.info('Retention schedule started', {
+        mediaRetentionDays: envConfig.mediaRetentionDays || 'disabled',
+        messageRetentionDays: envConfig.messageRetentionDays || 'disabled',
+      });
+      retention = startRetentionSchedule({
+        messages: messageStore,
+        media: mediaStore,
+        mediaRetentionDays: envConfig.mediaRetentionDays,
+        messageRetentionDays: envConfig.messageRetentionDays,
+      });
+    }
 
     const shutdown = async () => {
       logger.info('Shutting down gracefully...');
+      retention?.stop();
       healthCheckScheduler.stop();
       await server.close();
       process.exit(0);

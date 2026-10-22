@@ -120,10 +120,14 @@ export interface MediaInfo {
   url?: string;
   mimeType: string;
   size?: number;
-  /** Base64-encoded media content (downloaded at inbound time) */
+  /** Base64-encoded media content (only on outbound requests; inbound media is stored on disk, see `status`/`url`) */
   base64?: string;
   /** Original filename if available */
   filename?: string;
+  /** Inbound download lifecycle: `pending` until stored, `ready` when `url` is usable */
+  status?: 'pending' | 'ready' | 'skipped' | 'expired';
+  /** Why an inbound media was not stored (`status = 'skipped'`) */
+  skipReason?: 'too_large' | 'download_failed';
 }
 
 // ── Message context ─────────────────────────────────────────────

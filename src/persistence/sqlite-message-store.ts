@@ -6,6 +6,8 @@ import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 import type {
   FullMessageStorePort,
+  InsertResult,
+  StoredEnvelope,
   MessageQuery,
   MessageQueryResult,
   MessageStats,
@@ -14,7 +16,13 @@ import type {
   ConversationHistoryOptions,
   RawConversationHistory,
 } from '../core/persistence/message-store.port.js';
-import { toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn } from '../core/persistence/message-store.utils.js';
+import type { MediaInfo } from '../core/messaging/content.js';
+import {
+  toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender, waMessageIdOf,
+} from '../core/persistence/message-store.utils.js';
+
+const COLUMNS = envelopeColumns();
 
 /**
  * SQLite-based message store using better-sqlite3.
@@ -71,11 +79,11 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const stmt = db.prepare(`
       INSERT OR REPLACE INTO messages (
         id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, recipient_id,
+        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
         content_type, content_preview, content_json,
         context_json, channel_details_json, gateway_json,
         timestamp, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const preview = extractPreview(envelope);
@@ -88,6 +96,8 @@ export class SqliteMessageStore implements FullMessageStorePort {
       envelope.conversationId,
       envelope.sender.id,
       envelope.sender.displayName ?? null,
+      envelope.sender.phone ?? null,
+      envelope.sender.lid ?? null,
       envelope.recipient.id,
       envelope.content.type,
       preview,
@@ -108,7 +118,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const offset = filters.offset ?? 0;
 
     const countRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
-    const rows = db.prepare(`SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    const rows = db.prepare(`SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
     return {
       messages: rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>)),
@@ -120,7 +130,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
 
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
     const db = this.requireDb();
-    const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+    const row = db.prepare(`SELECT ${COLUMNS} FROM messages WHERE id = ?`).get(messageId);
     return row ? this.rowToEnvelope(row as Record<string, unknown>) : undefined;
   }
 
@@ -152,7 +162,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).get(...params) as { total: number };
 
     const rows = db.prepare(
-      `SELECT m.* FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where} ORDER BY rank LIMIT ? OFFSET ?`,
+      `SELECT ${envelopeColumns('m')} FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where} ORDER BY rank LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
 
     return {
@@ -242,7 +252,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     }));
 
     const rows = db.prepare(
-      `SELECT * FROM (SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC`,
+      `SELECT * FROM (SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC`,
     ).all(...params, limit);
 
     const envelopes = rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>));
@@ -264,6 +274,127 @@ export class SqliteMessageStore implements FullMessageStorePort {
       totalMessages: totalRow.total,
       envelopes,
     };
+  }
+
+  // ── Message log ────────────────────────────────────────────────
+
+  async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
+    const db = this.requireDb();
+
+    const insert = db.prepare(`
+      INSERT INTO messages (
+        id, account_id, channel, direction, conversation_id,
+        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
+        content_type, content_preview, content_json,
+        context_json, channel_details_json, gateway_json,
+        timestamp, created_at, wa_message_id, sent_at, raw_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
+    `);
+    const bump = db.prepare(`
+      INSERT INTO account_counters (account_id, n) VALUES (?, 1)
+      ON CONFLICT (account_id) DO UPDATE SET n = n + 1
+      RETURNING n
+    `);
+    const assign = db.prepare('UPDATE messages SET account_seq = ? WHERE id = ?');
+    const readSeq = db.prepare('SELECT seq FROM messages WHERE id = ?');
+
+    const preview = extractPreview(envelope);
+
+    const run = db.transaction((): InsertResult => {
+      const info = insert.run(
+        envelope.id,
+        envelope.accountId,
+        envelope.channel,
+        envelope.direction,
+        envelope.conversationId,
+        envelope.sender.id,
+        envelope.sender.displayName ?? null,
+        envelope.sender.phone ?? null,
+        envelope.sender.lid ?? null,
+        envelope.recipient.id,
+        envelope.content.type,
+        preview,
+        JSON.stringify(envelope.content),
+        envelope.context ? JSON.stringify(envelope.context) : null,
+        envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
+        JSON.stringify(envelope.gateway),
+        toUTC(envelope.timestamp),
+        nowUTC(),
+        waMessageIdOf(envelope),
+        envelope.sentAt ? toUTC(envelope.sentAt) : null,
+        raw === undefined ? null : JSON.stringify(raw),
+      );
+      // Duplicate: nothing was written and no accountSeq is consumed
+      if (info.changes === 0) return { inserted: false };
+
+      const { n } = bump.get(envelope.accountId) as { n: number };
+      assign.run(n, envelope.id);
+      const { seq } = readSeq.get(envelope.id) as { seq: number };
+      return { inserted: true, seq, accountSeq: n };
+    });
+
+    return run();
+  }
+
+  async queryAfter(q: { accountId: string; afterAccountSeq: number; limit: number }): Promise<{
+    messages: UnifiedEnvelope[];
+    nextAfterAccountSeq: number | null;
+  }> {
+    const db = this.requireDb();
+    const limit = clampPageLimit(q.limit);
+
+    // Fetch one extra row to know whether another page exists
+    const rows = db.prepare(
+      `SELECT ${COLUMNS} FROM messages
+       WHERE account_id = ? AND account_seq > ?
+       ORDER BY account_seq ASC LIMIT ?`,
+    ).all(q.accountId, q.afterAccountSeq, limit + 1) as Array<Record<string, unknown>>;
+
+    const hasMore = rows.length > limit;
+    const messages = rows.slice(0, limit).map((r) => this.rowToEnvelope(r));
+    const last = messages[messages.length - 1];
+    return { messages, nextAfterAccountSeq: hasMore && last?.accountSeq != null ? last.accountSeq : null };
+  }
+
+  async findByWaMessageId(accountId: string, waMessageId: string): Promise<StoredEnvelope | undefined> {
+    const db = this.requireDb();
+    const row = db.prepare(
+      `SELECT ${COLUMNS}, raw_json FROM messages WHERE account_id = ? AND wa_message_id = ?`,
+    ).get(accountId, waMessageId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const raw = parseJsonColumn(row.raw_json as string | null);
+    return raw === undefined ? this.rowToEnvelope(row) : { ...this.rowToEnvelope(row), raw };
+  }
+
+  async updateMedia(id: string, media: Partial<MediaInfo>): Promise<void> {
+    const db = this.requireDb();
+    db.prepare(
+      `UPDATE messages
+       SET content_json = json_set(content_json, '$.media', json(json_patch(COALESCE(json_extract(content_json, '$.media'), '{}'), ?)))
+       WHERE id = ?`,
+    ).run(JSON.stringify(media), id);
+  }
+
+  async findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>> {
+    const db = this.requireDb();
+    const rows = db.prepare(
+      `SELECT id, account_id, raw_json FROM messages
+       WHERE json_extract(content_json, '$.media.status') = 'pending' AND raw_json IS NOT NULL
+       ORDER BY seq ASC LIMIT ?`,
+    ).all(limit) as Array<{ id: string; account_id: string; raw_json: string }>;
+    return rows.map((r) => ({ id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
+  }
+
+  async deleteOlderThan(days: number): Promise<number> {
+    const db = this.requireDb();
+    return db.prepare('DELETE FROM messages WHERE created_at < ?').run(cutoffUTC(days)).changes;
+  }
+
+  async maxAccountSeq(accountId: string): Promise<number> {
+    const db = this.requireDb();
+    const row = db.prepare('SELECT n FROM account_counters WHERE account_id = ?').get(accountId) as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   async close(): Promise<void> {
@@ -308,12 +439,13 @@ export class SqliteMessageStore implements FullMessageStorePort {
       direction: row.direction,
       timestamp: new Date(row.timestamp as string),
       conversationId: row.conversation_id as string,
-      sender: { id: row.sender_id as string, displayName: row.sender_name as string | undefined },
+      sender: readSender(row),
       recipient: { id: row.recipient_id as string },
       content: parseJsonColumnRequired(row.content_json as string),
       context: parseJsonColumn(row.context_json as string | null) ?? undefined,
       channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
       gateway: parseJsonColumnRequired(row.gateway_json as string),
+      ...readLogFields(row),
     } as UnifiedEnvelope;
   }
 }

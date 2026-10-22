@@ -3,7 +3,7 @@ import {
   getContentType,
   jidNormalizedUser,
 } from '@whiskeysockets/baileys';
-import type { proto } from '@whiskeysockets/baileys';
+import type { proto, WAMessageKey } from '@whiskeysockets/baileys';
 import type {
   WhatsAppInboundEvent,
   WhatsAppContact,
@@ -16,7 +16,8 @@ type WAMessage = proto.IWebMessageInfo;
 
 export function mapBaileysToWhatsAppEvent(message: WAMessage): WhatsAppInboundEvent {
   return {
-    messageId: message.key?.id ?? '',
+    messageId: message.key?.id || undefined,
+    sentAt: mapSentAt(message.messageTimestamp),
     from: mapContact(message),
     chat: mapChat(message),
     message: mapMessage(message),
@@ -25,16 +26,46 @@ export function mapBaileysToWhatsAppEvent(message: WAMessage): WhatsAppInboundEv
   };
 }
 
+/** Baileys timestamps are epoch seconds as number, Long ({ toNumber() }) or numeric string. */
+function mapSentAt(timestamp: WAMessage['messageTimestamp']): Date | undefined {
+  if (timestamp === null || timestamp === undefined) return undefined;
+  const seconds =
+    typeof timestamp === 'number'
+      ? timestamp
+      : typeof timestamp === 'string'
+        ? Number(timestamp)
+        : timestamp.toNumber();
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : undefined;
+}
+
+const PHONE_JID_SUFFIX = '@s.whatsapp.net';
+const LID_JID_SUFFIX = '@lid';
+
+function toPhone(jid: string | null | undefined): string | undefined {
+  if (!jid?.endsWith(PHONE_JID_SUFFIX)) return undefined;
+  const digits = jidNormalizedUser(jid).slice(0, -PHONE_JID_SUFFIX.length);
+  return digits ? `+${digits}` : undefined;
+}
+
+function toLid(jid: string | null | undefined): string | undefined {
+  if (!jid?.endsWith(LID_JID_SUFFIX)) return undefined;
+  return jidNormalizedUser(jid);
+}
+
 function mapContact(msg: WAMessage): WhatsAppContact {
   const remoteJid = msg.key?.remoteJid ?? '';
-  const fromJid = msg.key?.fromMe
-    ? jidNormalizedUser(remoteJid)
-    : msg.key?.participant
-      ? jidNormalizedUser(msg.key.participant)
-      : jidNormalizedUser(remoteJid);
+  const participant = msg.key?.participant;
+  const useParticipant = !msg.key?.fromMe && !!participant;
+  const fromJid = jidNormalizedUser(useParticipant ? participant : remoteJid);
+  // Counterpart identity WhatsApp attaches to the sender JID (phone <-> LID)
+  // (participantAlt/remoteJidAlt exist on WAMessageKey but not on the proto IMessageKey)
+  const key = msg.key as Pick<WAMessageKey, 'participantAlt' | 'remoteJidAlt'> | null | undefined;
+  const altJid = useParticipant ? key?.participantAlt : key?.remoteJidAlt;
 
   return {
     wid: fromJid,
+    phone: toPhone(fromJid) ?? toPhone(altJid),
+    lid: toLid(fromJid) ?? toLid(altJid),
     pushName: msg.pushName ?? undefined,
     isBusinessAccount: false,
     isBroadcast: remoteJid === 'status@broadcast',

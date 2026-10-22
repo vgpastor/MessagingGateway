@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Unified Messaging Gateway
  * Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.5.1
  */
 import { customFetch } from '../fetch-mutator.js';
 export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
@@ -12,14 +12,16 @@ export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealt
 export const GetHealth200Status = {
   ok: 'ok',
   degraded: 'degraded',
-  error: 'error',
 } as const;
+
+export type GetHealth200Accounts = {[key: string]: 'active' | 'suspended' | 'auth_expired' | 'error' | 'unchecked'};
 
 export type GetHealth200 = {
   status: GetHealth200Status;
   timestamp: string;
   version?: string;
   uptime?: number;
+  accounts: GetHealth200Accounts;
 };
 
 export type PostWebhooksWhatsappAccountIdInboundBody = { [key: string]: unknown };
@@ -45,11 +47,19 @@ export const PostWebhooksWhatsappAccountIdInbound200Direction = {
 export type PostWebhooksWhatsappAccountIdInbound200Sender = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200Recipient = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200ContentType = typeof PostWebhooksWhatsappAccountIdInbound200ContentType[keyof typeof PostWebhooksWhatsappAccountIdInbound200ContentType];
@@ -108,6 +118,12 @@ export type PostWebhooksWhatsappAccountIdInbound200 = {
   channel: PostWebhooksWhatsappAccountIdInbound200Channel;
   direction: PostWebhooksWhatsappAccountIdInbound200Direction;
   timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
   conversationId: string;
   sender: PostWebhooksWhatsappAccountIdInbound200Sender;
   recipient: PostWebhooksWhatsappAccountIdInbound200Recipient;
@@ -166,11 +182,19 @@ export const PostWebhooksTelegramAccountIdUpdate200Direction = {
 export type PostWebhooksTelegramAccountIdUpdate200Sender = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200Recipient = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200ContentType = typeof PostWebhooksTelegramAccountIdUpdate200ContentType[keyof typeof PostWebhooksTelegramAccountIdUpdate200ContentType];
@@ -229,6 +253,12 @@ export type PostWebhooksTelegramAccountIdUpdate200 = {
   channel: PostWebhooksTelegramAccountIdUpdate200Channel;
   direction: PostWebhooksTelegramAccountIdUpdate200Direction;
   timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
   conversationId: string;
   sender: PostWebhooksTelegramAccountIdUpdate200Sender;
   recipient: PostWebhooksTelegramAccountIdUpdate200Recipient;
@@ -1282,6 +1312,11 @@ since?: string;
 until?: string;
 limit?: string;
 offset?: string;
+/**
+ * Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.
+ * @minimum 0
+ */
+afterAccountSeq?: number;
 };
 
 export type GetApiV1MessagesDirection = typeof GetApiV1MessagesDirection[keyof typeof GetApiV1MessagesDirection];
@@ -1291,6 +1326,133 @@ export const GetApiV1MessagesDirection = {
   inbound: 'inbound',
   outbound: 'outbound',
 } as const;
+
+export type GetApiV1Messages200MessagesItemChannel = typeof GetApiV1Messages200MessagesItemChannel[keyof typeof GetApiV1Messages200MessagesItemChannel];
+
+
+export const GetApiV1Messages200MessagesItemChannel = {
+  whatsapp: 'whatsapp',
+  telegram: 'telegram',
+  email: 'email',
+  sms: 'sms',
+} as const;
+
+export type GetApiV1Messages200MessagesItemDirection = typeof GetApiV1Messages200MessagesItemDirection[keyof typeof GetApiV1Messages200MessagesItemDirection];
+
+
+export const GetApiV1Messages200MessagesItemDirection = {
+  inbound: 'inbound',
+  outbound: 'outbound',
+} as const;
+
+export type GetApiV1Messages200MessagesItemSender = {
+  id: string;
+  displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
+};
+
+export type GetApiV1Messages200MessagesItemRecipient = {
+  id: string;
+  displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
+};
+
+export type GetApiV1Messages200MessagesItemContentType = typeof GetApiV1Messages200MessagesItemContentType[keyof typeof GetApiV1Messages200MessagesItemContentType];
+
+
+export const GetApiV1Messages200MessagesItemContentType = {
+  text: 'text',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  document: 'document',
+  location: 'location',
+  contact: 'contact',
+  sticker: 'sticker',
+  reaction: 'reaction',
+  poll: 'poll',
+  interactive_response: 'interactive_response',
+  system: 'system',
+  unknown: 'unknown',
+} as const;
+
+export type GetApiV1Messages200MessagesItemContent = {
+  type: GetApiV1Messages200MessagesItemContentType;
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemContext = {
+  quotedMessageId?: string;
+  isForwarded?: boolean;
+  mentions?: string[];
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemChannelDetails = {
+  platform: string;
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemGatewayAccount = {
+  id: string;
+  alias: string;
+  owner: string;
+  tags: string[];
+};
+
+export type GetApiV1Messages200MessagesItemGateway = {
+  receivedAt: string;
+  adapterId: string;
+  rawPayloadRef?: string;
+  account: GetApiV1Messages200MessagesItemGatewayAccount;
+};
+
+export type GetApiV1Messages200MessagesItem = {
+  id: string;
+  accountId: string;
+  channel: GetApiV1Messages200MessagesItemChannel;
+  direction: GetApiV1Messages200MessagesItemDirection;
+  timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
+  conversationId: string;
+  sender: GetApiV1Messages200MessagesItemSender;
+  recipient: GetApiV1Messages200MessagesItemRecipient;
+  content: GetApiV1Messages200MessagesItemContent;
+  context?: GetApiV1Messages200MessagesItemContext;
+  channelDetails?: GetApiV1Messages200MessagesItemChannelDetails;
+  gateway: GetApiV1Messages200MessagesItemGateway;
+};
+
+export type GetApiV1Messages200 = {
+  messages: GetApiV1Messages200MessagesItem[];
+  /** Total matches (legacy filtering only; never present with afterAccountSeq) */
+  total?: number;
+  /** Page size applied (legacy filtering only) */
+  limit?: number;
+  /** Offset applied (legacy filtering only) */
+  offset?: number;
+  /** afterAccountSeq only: cursor for the next page, or null when there is nothing more */
+  nextAfterAccountSeq?: number | null;
+  /** afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start "from now" */
+  lastAccountSeq?: number;
+};
+
+export type GetApiV1Messages400 = {
+  error: string;
+  code?: string;
+  message: string;
+};
 
 export type GetApiV1MessagesId404 = {
   error: string;
@@ -1370,6 +1532,44 @@ export const GetApiV1ConversationsConversationIdContextFormat = {
   raw: 'raw',
 } as const;
 
+export type GetApiV1MediaId202Status = typeof GetApiV1MediaId202Status[keyof typeof GetApiV1MediaId202Status];
+
+
+export const GetApiV1MediaId202Status = {
+  pending: 'pending',
+} as const;
+
+export type GetApiV1MediaId202 = {
+  status: GetApiV1MediaId202Status;
+};
+
+export type GetApiV1MediaId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type GetApiV1MediaId410Status = typeof GetApiV1MediaId410Status[keyof typeof GetApiV1MediaId410Status];
+
+
+export const GetApiV1MediaId410Status = {
+  skipped: 'skipped',
+  expired: 'expired',
+} as const;
+
+export type GetApiV1MediaId410SkipReason = typeof GetApiV1MediaId410SkipReason[keyof typeof GetApiV1MediaId410SkipReason];
+
+
+export const GetApiV1MediaId410SkipReason = {
+  too_large: 'too_large',
+  download_failed: 'download_failed',
+} as const;
+
+export type GetApiV1MediaId410 = {
+  status: GetApiV1MediaId410Status;
+  skipReason?: GetApiV1MediaId410SkipReason;
+};
+
 export type getHealthResponse200 = {
   data: GetHealth200
   status: 200
@@ -1391,7 +1591,7 @@ export const getGetHealthUrl = () => {
 }
 
 /**
- * Health check endpoint
+ * Health check endpoint. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active`. `accounts` maps each account id to its status.
  */
 export const getHealth = async ( options?: Parameters<typeof customFetch>[1]): Promise<getHealthResponse> => {
 
@@ -2741,16 +2941,23 @@ export const getApiV1AccountsIdGroupsGroupId = async (id: string,
 
 
 export type getApiV1MessagesResponse200 = {
-  data: void
+  data: GetApiV1Messages200
   status: 200
+}
+
+export type getApiV1MessagesResponse400 = {
+  data: GetApiV1Messages400
+  status: 400
 }
 
 export type getApiV1MessagesResponseSuccess = (getApiV1MessagesResponse200) & {
   headers: Headers;
 };
-;
+export type getApiV1MessagesResponseError = (getApiV1MessagesResponse400) & {
+  headers: Headers;
+};
 
-export type getApiV1MessagesResponse = (getApiV1MessagesResponseSuccess)
+export type getApiV1MessagesResponse = (getApiV1MessagesResponseSuccess | getApiV1MessagesResponseError)
 
 export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
   const normalizedParams = new URLSearchParams();
@@ -2768,7 +2975,7 @@ export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
 }
 
 /**
- * Query stored messages with filters. Requires STORAGE_ENABLED=true.
+ * Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq }` and ignoring the other filters.
  */
 export const getApiV1Messages = async (params?: GetApiV1MessagesParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesResponse> => {
 
@@ -3026,6 +3233,54 @@ export const getApiV1ConversationsConversationIdContext = async (conversationId:
     params?: GetApiV1ConversationsConversationIdContextParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1ConversationsConversationIdContextResponse> => {
 
   return customFetch<getApiV1ConversationsConversationIdContextResponse>(getGetApiV1ConversationsConversationIdContextUrl(conversationId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export type getApiV1MediaIdResponse202 = {
+  data: GetApiV1MediaId202
+  status: 202
+}
+
+export type getApiV1MediaIdResponse404 = {
+  data: GetApiV1MediaId404
+  status: 404
+}
+
+export type getApiV1MediaIdResponse410 = {
+  data: GetApiV1MediaId410
+  status: 410
+}
+
+export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse202) & {
+  headers: Headers;
+};
+export type getApiV1MediaIdResponseError = (getApiV1MediaIdResponse404 | getApiV1MediaIdResponse410) & {
+  headers: Headers;
+};
+
+export type getApiV1MediaIdResponse = (getApiV1MediaIdResponseSuccess | getApiV1MediaIdResponseError)
+
+export const getGetApiV1MediaIdUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/media/${id}`
+}
+
+/**
+ * Download the media of a stored message (the `media.url` of its envelope). 200 streams the file; 202 while it is still being downloaded; 410 when it was skipped or has expired.
+ */
+export const getApiV1MediaId = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MediaIdResponse> => {
+
+  return customFetch<getApiV1MediaIdResponse>(getGetApiV1MediaIdUrl(id),
   {
     ...options,
     method: 'GET'

@@ -105,6 +105,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
         ...(Object.keys(a.providerConfig).length > 0
           ? { providerConfig: a.providerConfig }
           : {}),
+        ...(a.conversations && a.conversations !== '*' ? { conversations: a.conversations } : {}),
         metadata: {
           owner: a.metadata.owner,
           environment: a.metadata.environment,

@@ -73,6 +73,7 @@ export type {
 export type {
   MessageQuery,
   MessageQueryResult,
+  MessagesAfterResult,
   MessageStats,
   ConversationContext,
   ConversationContextOptions,

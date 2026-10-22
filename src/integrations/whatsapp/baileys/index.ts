@@ -3,17 +3,38 @@ import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { EventBus } from '../../../core/event-bus.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import { Events, createEvent } from '../../../core/events.js';
-import type { MessageInboundPayload, ConnectionUpdatePayload } from '../../../core/events.js';
+import type { ConnectionUpdatePayload } from '../../../core/events.js';
+import type { InboundPipeline } from '../../../core/inbound/inbound-pipeline.js';
 import { BaileysAdapter } from './baileys.adapter.js';
 import { BaileysHealthChecker } from './baileys.health-checker.js';
 import { BaileysConnectionManager } from './baileys.connection-manager.js';
 import { BaileysWebhookAdapter } from './baileys-webhook.adapter.js';
 import { BaileysSocketManager } from './baileys-socket.manager.js';
 import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
-import { downloadBaileysMedia } from './baileys-media.js';
+import { createBaileysMessageLookup } from './baileys-message-lookup.js';
+import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
+import { noopMetrics, type MetricsPort } from '../../../core/metrics/metrics.port.js';
+import { baileysInboundSkipReason } from './baileys-inbound-skip.js';
 import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
+
+/** Let Baileys' `getMessage` read from the message log (retries / re-sends). Call once the store exists. */
+export function setBaileysMessageStore(store: Pick<MessageLogPort, 'findByWaMessageId'> | undefined): void {
+  socketManager.setMessageLookup(store ? createBaileysMessageLookup(store) : undefined);
+}
+
+let metrics: MetricsPort = noopMetrics;
+
+/** Metrics for messages dropped before the pipeline (see {@link baileysInboundSkipReason}). Call once at boot. */
+export function setBaileysMetrics(port: MetricsPort | undefined): void {
+  metrics = port ?? noopMetrics;
+}
+
+/** Resolve a WhatsApp LID to its phone JID using the account's open socket (undefined if unknown). */
+export function resolveBaileysLidToPhone(accountId: string, lid: string): Promise<string | undefined> {
+  return socketManager.resolveLidToPhone(accountId, lid);
+}
 
 // Cache group names to avoid API calls on every message (TTL: 5 min)
 const groupNameCache = new Map<string, { name: string; expires: number }>();
@@ -46,12 +67,26 @@ export const baileysProvider: ProviderBundle = {
   health: () => new BaileysHealthChecker(socketManager),
   connection: () => new BaileysConnectionManager(socketManager),
 
-  async wireEvents(account: ChannelAccount, eventBus: EventBus): Promise<void> {
+  /**
+   * Idempotent per account: the socket manager appends handlers on every
+   * registration, so a second call would deliver each message twice. Boot wiring
+   * and hot wiring (accounts created or connected through the API) both land here.
+   * The guard is the socket manager's own record of registered handlers, so it
+   * resets when a disconnect forgets them and the account can be wired again.
+   */
+  async wireEvents(account: ChannelAccount, eventBus: EventBus, inbound: InboundPipeline): Promise<void> {
+    if (socketManager.isWired(account.id)) return;
     const inboundAdapter = new BaileysWebhookAdapter();
 
     socketManager.onMessage(account.id, async (event) => {
       for (const msg of event.messages) {
         if (msg.key?.fromMe) continue;
+        const skip = baileysInboundSkipReason(msg);
+        if (skip) {
+          metrics.inboundSkipped(skip);
+          getLogger().debug('Skipped inbound message', { provider: 'baileys', accountId: account.id, messageId: msg.key?.id, reason: skip });
+          continue;
+        }
         try {
           const waEvent = mapBaileysToWhatsAppEvent(msg);
           const envelope = inboundAdapter.toEnvelope(waEvent, account);
@@ -82,23 +117,8 @@ export const baileysProvider: ProviderBundle = {
             }
           }
 
-          // Download media if present (non-blocking: continues without media on failure)
-          if ('media' in envelope.content && envelope.content.media) {
-            const media = await downloadBaileysMedia(msg);
-            if (media) {
-              envelope.content.media.base64 = media.base64;
-              if (media.filename) envelope.content.media.filename = media.filename;
-            }
-          }
-
-          await eventBus.emit(
-            createEvent<MessageInboundPayload>(
-              Events.MESSAGE_INBOUND,
-              'baileys',
-              { envelope },
-              account.id,
-            ),
-          );
+          // Filter → persist → emit → media all happen in the pipeline
+          await inbound.handle(account, envelope, msg, event.type);
         } catch (err) {
           getLogger().error('Failed to process inbound message', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
         }

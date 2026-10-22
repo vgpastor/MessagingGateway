@@ -465,3 +465,122 @@ describe('buildWhatsAppEnvelope (from Baileys events)', () => {
     expect(envelope.gateway.account.tags).toEqual(['whatsapp', 'baileys', 'test']);
   });
 });
+
+describe('Baileys mapper: stable identity, sentAt and null message id', () => {
+  function makeGroupMessageWith(keyExtras: Record<string, unknown>) {
+    return {
+      key: {
+        remoteJid: '123@g.us',
+        fromMe: false,
+        id: 'BAILEYS_MSG_IDENT',
+        ...keyExtras,
+      },
+      pushName: 'GroupMember',
+      messageTimestamp: 1760900000,
+      message: { conversation: 'hola' },
+    };
+  }
+
+  it('maps missing key.id to undefined messageId', () => {
+    const msg = makeTextMessage('hi');
+    const event = mapBaileysToWhatsAppEvent({ ...msg, key: { ...msg.key, id: undefined } });
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(event.messageId).toBeUndefined();
+    expect(envelope.channelDetails?.messageId).toBeUndefined();
+  });
+
+  it('sets sentAt from messageTimestamp', () => {
+    const event = mapBaileysToWhatsAppEvent({ ...makeTextMessage('hi'), messageTimestamp: 1760900000 });
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sentAt?.toISOString()).toBe('2025-10-19T18:53:20.000Z');
+  });
+
+  it('sets sentAt from a Long-like or string messageTimestamp', () => {
+    const base = makeTextMessage('hi');
+    const fromLong = buildWhatsAppEnvelope(
+      mapBaileysToWhatsAppEvent({ ...base, messageTimestamp: { toNumber: () => 1760900000 } as never }),
+      testAccount,
+    );
+    const fromString = buildWhatsAppEnvelope(
+      mapBaileysToWhatsAppEvent({ ...base, messageTimestamp: '1760900000' }),
+      testAccount,
+    );
+
+    expect(fromLong.sentAt?.toISOString()).toBe('2025-10-19T18:53:20.000Z');
+    expect(fromString.sentAt?.toISOString()).toBe('2025-10-19T18:53:20.000Z');
+  });
+
+  it('leaves sentAt undefined when messageTimestamp is missing', () => {
+    const msg = makeTextMessage('hi');
+    const event = mapBaileysToWhatsAppEvent({ ...msg, messageTimestamp: undefined });
+
+    expect(buildWhatsAppEnvelope(event, testAccount).sentAt).toBeUndefined();
+  });
+
+  it('group participant @lid with participantAlt phone', () => {
+    const event = mapBaileysToWhatsAppEvent(
+      makeGroupMessageWith({
+        participant: '144980999962625@lid',
+        participantAlt: '34600111222@s.whatsapp.net',
+      }),
+    );
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sender.lid).toBe('144980999962625@lid');
+    expect(envelope.sender.phone).toBe('+34600111222');
+  });
+
+  it('group participant phone jid without alt', () => {
+    const event = mapBaileysToWhatsAppEvent(
+      makeGroupMessageWith({ participant: '34600111222@s.whatsapp.net' }),
+    );
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sender.phone).toBe('+34600111222');
+    expect(envelope.sender.lid).toBeUndefined();
+  });
+
+  it('group participant phone jid with device suffix and lid alt', () => {
+    const event = mapBaileysToWhatsAppEvent(
+      makeGroupMessageWith({
+        participant: '34600111222:7@s.whatsapp.net',
+        participantAlt: '144980999962625@lid',
+      }),
+    );
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sender.phone).toBe('+34600111222');
+    expect(envelope.sender.lid).toBe('144980999962625@lid');
+  });
+
+  it('group participant @lid without alt', () => {
+    const event = mapBaileysToWhatsAppEvent(
+      makeGroupMessageWith({ participant: '144980999962625@lid' }),
+    );
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sender.phone).toBeUndefined();
+    expect(envelope.sender.lid).toBe('144980999962625@lid');
+  });
+
+  it('DM from @lid remoteJid takes the phone from remoteJidAlt', () => {
+    const msg = makeTextMessage('hi');
+    const event = mapBaileysToWhatsAppEvent({
+      ...msg,
+      key: { ...msg.key, remoteJid: '144980999962625@lid', remoteJidAlt: '34600111222@s.whatsapp.net' },
+    });
+    const envelope = buildWhatsAppEnvelope(event, testAccount);
+
+    expect(envelope.sender.lid).toBe('144980999962625@lid');
+    expect(envelope.sender.phone).toBe('+34600111222');
+  });
+
+  it('DM from a phone jid sets phone only', () => {
+    const envelope = buildWhatsAppEnvelope(mapBaileysToWhatsAppEvent(makeTextMessage('hi')), testAccount);
+
+    expect(envelope.sender.phone).toBe('+34699000001');
+    expect(envelope.sender.lid).toBeUndefined();
+  });
+});

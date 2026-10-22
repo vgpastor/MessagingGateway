@@ -366,10 +366,9 @@ EventBus.emit('interaction.poll.updated', aggregatedResults)
 
 **Endpoint**: `GET /ws/events` (HTTP upgrade to WebSocket)
 
-**Authentication**: Token-based via query param or first message:
-```
-ws://localhost:3123/ws/events?token=<api-key>
-```
+**Authentication**: `Authorization: Bearer <key>` or `X-API-Key` header, or the `Sec-WebSocket-Protocol: umg.<key>` subprotocol (browsers; echoed back in the handshake). `?token=<key>` is still accepted but deprecated (logged as a warning). The admin key gets full access; the read-only key (`READ_API_KEY`) cannot use `send` and receives `qr: null` in `connection.update`.
+
+**Heartbeat**: every 30 s the server pings each client; one that did not answer the previous ping, or whose send fails, is terminated so the consumer reconnects and catches up (`accountSeq` gaps).
 
 **Client → Server messages**:
 ```json

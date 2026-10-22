@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 import type { WebhookForwarder } from '../../../src/connections/webhooks/webhook-forwarder.js';
+import type { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 
 // A fake WhatsApp socket per connect(): the test drives its 'connection.update'.
 const sockets: Array<{ ev: EventEmitter; logout: () => Promise<void> }> = [];
@@ -43,7 +44,7 @@ async function setup(accountId: string) {
 
   const account = { id: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {} } as unknown as ChannelAccount;
   await baileysProvider.connection!().connect(accountId, {});
-  await baileysProvider.wireEvents!(account, eventBus);
+  await baileysProvider.wireEvents!(account, eventBus, { handle: vi.fn(async () => {}) } as unknown as InboundPipeline);
   return { forwarder, socket: sockets.at(-1)! };
 }
 
@@ -87,10 +88,11 @@ describe('Baileys 401 loggedOut alert', () => {
     accounts.push('alert-quiet');
     const { forwarder, socket } = await setup('alert-quiet');
 
-    const before = sockets.length;
-    socket.ev.emit('connection.update', close(428)); // connectionClosed → reconnects
-    await vi.waitFor(() => expect(baileysProvider.connection!().hasConnection('alert-quiet')).toBe(true));
-    expect(sockets.length).toBe(before + 1);
+    socket.ev.emit('connection.update', close(428)); // connectionClosed → backs off, then reconnects
+    await flush();
+    // The account stays registered while it waits for its (jittered) retry; the
+    // reconnect itself is covered in baileys-socket-manager.test.ts.
+    expect(baileysProvider.connection!().hasConnection('alert-quiet')).toBe(true);
 
     await baileysProvider.connection!().disconnect('alert-quiet'); // logout() emits a 401 close
     await flush();

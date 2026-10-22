@@ -3,7 +3,10 @@ import type { UnifiedEnvelope } from '../../core/messaging/unified-envelope.js';
 // === WhatsApp Inbound Event (complete native contract) ===
 
 export interface WhatsAppInboundEvent {
-  messageId: string;
+  /** Provider message id; undefined when the provider did not supply one. */
+  messageId?: string;
+  /** When the message was sent, per the provider's own timestamp. */
+  sentAt?: Date;
   from: WhatsAppContact;
   chat: WhatsAppChat;
   message: WhatsAppMessage;
@@ -13,6 +16,10 @@ export interface WhatsAppInboundEvent {
 
 export interface WhatsAppContact {
   wid: string;
+  /** E.164 phone with leading `+`, when derivable from the JIDs. */
+  phone?: string;
+  /** Full `<digits>@lid` JID, when derivable from the JIDs. */
+  lid?: string;
   pushName?: string;
   profilePicUrl?: string;
   isBusinessAccount: boolean;

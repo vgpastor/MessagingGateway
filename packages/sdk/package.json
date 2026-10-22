@@ -1,6 +1,6 @@
 {
   "name": "@messaging-gateway/sdk",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "TypeScript SDK for Unified Messaging Gateway — REST client, WebSocket events, and full type definitions",
   "type": "module",
   "main": "dist/index.js",
@@ -8,7 +8,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -19,7 +20,8 @@
     "generate": "orval --config orval.config.ts",
     "build": "tsc",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "npm run build && vitest run"
   },
   "dependencies": {
     "ws": "^8.21.3"
@@ -39,7 +41,7 @@
     "websocket",
     "unified-messaging"
   ],
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20.19 <21 || >=22.12" },
   "license": "MIT",
   "repository": {
     "type": "git",

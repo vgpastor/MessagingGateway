@@ -1,4 +1,5 @@
 import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
+import type { MediaInfo } from '../messaging/content.js';
 
 // ── Core CRUD port ─────────────────────────────────────────────
 
@@ -59,7 +60,63 @@ export interface ConversationHistoryPort {
 // ── Composite port for full-featured stores ────────────────────
 
 /** Full-featured store that implements all capabilities */
-export interface FullMessageStorePort extends MessageStorePort, MessageSearchPort, MessageAnalyticsPort, ConversationHistoryPort {}
+export interface FullMessageStorePort
+  extends MessageStorePort, MessageSearchPort, MessageAnalyticsPort, ConversationHistoryPort, MessageLogPort {}
+
+// ── Message log port ───────────────────────────────────────────
+
+/** Outcome of {@link MessageLogPort.insertInbound} */
+export interface InsertResult {
+  /** false when the message was already stored (same account + WhatsApp message id) */
+  inserted: boolean;
+  /** Global, monotonically increasing sequence (only when inserted) */
+  seq?: number;
+  /** Per-account, contiguous and gap-free sequence, starting at 1 (only when inserted) */
+  accountSeq?: number;
+}
+
+/** A stored envelope plus the provider payload it was built from, when kept */
+export type StoredEnvelope = UnifiedEnvelope & { raw?: unknown };
+
+/**
+ * Durable, ordered log of inbound messages.
+ *
+ * Every inbound message gets a per-account contiguous `accountSeq` so consumers
+ * can resume from the last one they saw, and is deduplicated by WhatsApp message id.
+ */
+export interface MessageLogPort {
+  /**
+   * Atomically store an inbound message, dedupe it by (account, WhatsApp message id)
+   * and assign the next `accountSeq`. A duplicate consumes no `accountSeq`.
+   * `raw` is the provider payload (kept for media recovery and Baileys `getMessage`).
+   */
+  insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult>;
+
+  /**
+   * Messages of an account with `accountSeq` greater than `afterAccountSeq`, ascending.
+   * `limit` is capped at 500. `nextAfterAccountSeq` is the cursor for the next page,
+   * or null when there is nothing more.
+   */
+  queryAfter(q: { accountId: string; afterAccountSeq: number; limit: number }): Promise<{
+    messages: UnifiedEnvelope[];
+    nextAfterAccountSeq: number | null;
+  }>;
+
+  /** Find a stored message by its WhatsApp message id (includes the raw payload when kept) */
+  findByWaMessageId(accountId: string, waMessageId: string): Promise<StoredEnvelope | undefined>;
+
+  /** Merge media fields (status, size, url, ...) into the message's media content */
+  updateMedia(id: string, media: Partial<MediaInfo>): Promise<void>;
+
+  /** Messages whose media is still `pending`, with the raw payload needed to download it */
+  findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>>;
+
+  /** Delete messages whose `created_at` is older than `days`; returns the number removed */
+  deleteOlderThan(days: number): Promise<number>;
+
+  /** Highest `accountSeq` handed out for the account (0 if none) */
+  maxAccountSeq(accountId: string): Promise<number>;
+}
 
 // ── Query & result types ───────────────────────────────────────
 

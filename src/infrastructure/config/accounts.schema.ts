@@ -54,6 +54,7 @@ const accountSchema = z.object({
   credentialsRef: z.string().min(1).optional(),
   credentials: z.string().min(1).optional(),
   providerConfig: z.record(z.string(), z.unknown()).default({}),
+  conversations: z.union([z.literal('*'), z.array(z.string())]).default('*'),
   metadata: z.object({
     owner: z.string().min(1),
     environment: z.enum(['production', 'staging']).default('production'),

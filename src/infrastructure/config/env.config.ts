@@ -11,6 +11,8 @@ export interface EnvConfig {
   nodeEnv: string;
   logLevel: string;
   apiKey: string;
+  /** Optional read-only key: reads messages/media and subscribes to WS events, nothing else. */
+  readApiKey?: string;
   webhookCallbackUrl?: string;
   webhookCallbackSecret?: string;
   alertWebhookUrl?: string;
@@ -21,6 +23,18 @@ export interface EnvConfig {
   databasePath: string;
   databaseUrl?: string;
   metricsEnabled: boolean;
+  /** Largest inbound media (bytes) that is downloaded; bigger ones are skipped. */
+  mediaMaxBytes: number;
+  /** Days a stored media file is kept. 0 disables media retention. */
+  mediaRetentionDays: number;
+  /**
+   * Days a message is kept in the log. 0 (the default) disables text retention: messages are
+   * never deleted. Opt-in on purpose: a variable lost on the way to the container must never
+   * make the first boot delete months of history.
+   */
+  messageRetentionDays: number;
+  /** Directory (inside the data volume) where inbound media is stored. */
+  mediaDir: string;
 }
 
 export function loadEnvConfig(): EnvConfig {
@@ -32,6 +46,7 @@ export function loadEnvConfig(): EnvConfig {
     nodeEnv,
     logLevel: process.env['LOG_LEVEL'] ?? 'info',
     apiKey,
+    readApiKey: process.env['READ_API_KEY'] || undefined,
     webhookCallbackUrl: process.env['WEBHOOK_CALLBACK_URL'],
     webhookCallbackSecret: process.env['WEBHOOK_CALLBACK_SECRET'],
     alertWebhookUrl: process.env['ALERT_WEBHOOK_URL'],
@@ -42,7 +57,27 @@ export function loadEnvConfig(): EnvConfig {
     databasePath: process.env['DATABASE_PATH'] ?? 'data/messages.db',
     databaseUrl: process.env['DATABASE_URL'],
     metricsEnabled: process.env['METRICS_ENABLED'] !== 'false',
+    mediaMaxBytes: positiveInt('MEDIA_MAX_BYTES', 16_777_216),
+    mediaRetentionDays: retentionDays('MEDIA_RETENTION_DAYS', 30),
+    messageRetentionDays: retentionDays('MESSAGE_RETENTION_DAYS', 0),
+    mediaDir: process.env['MEDIA_DIR'] ?? '/app/data/media',
   };
+}
+
+/** Reads a positive integer env var, falling back to `fallback` when unset or invalid. */
+function positiveInt(name: string, fallback: number): number {
+  const parsed = parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Reads a retention period in days: unset or not a number gives `fallback`;
+ * 0 (or negative) means "keep forever" and is normalized to 0.
+ */
+function retentionDays(name: string, fallback: number): number {
+  const parsed = parseInt(process.env[name] ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(parsed, 0);
 }
 
 function resolveApiKey(nodeEnv: string): string {

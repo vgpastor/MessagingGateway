@@ -6,7 +6,7 @@ import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
 import type { HealthCheckSchedulerPort } from '../../core/accounts/health-check-scheduler.port.js';
 import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
-import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
+import type { PairingCodeCapable, ConnectionManagerPort } from '../../core/accounts/connection-manager.port.js';
 import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 import {
   accountResponseSchema,
@@ -47,6 +47,12 @@ export interface AccountsControllerDeps {
   credentialValidator: CredentialValidatorPort;
   healthCheckScheduler?: HealthCheckSchedulerPort;
   providerRegistry: ProviderLookupPort;
+  /**
+   * Subscribe an account to its provider's inbound events. Must be idempotent
+   * (the same account is wired at boot, on creation and on every connect).
+   * Without it, accounts created at runtime would receive nothing until restart.
+   */
+  wireAccount?: (account: ChannelAccount) => Promise<void>;
   /** Validate create-account request body (injected to avoid schema library coupling) */
   validateAccountBody: (body: unknown) => AccountValidationResult;
 }
@@ -84,6 +90,26 @@ export async function accountsController(
   fastify: FastifyInstance,
   deps: AccountsControllerDeps,
 ): Promise<void> {
+
+  /** Wire inbound events for an account; a failure is logged and never blocks the request. */
+  async function wire(account: ChannelAccount): Promise<void> {
+    try {
+      await deps.wireAccount?.(account);
+    } catch (err) {
+      fastify.log.error(`Failed to wire events for ${account.id}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * The ONLY way this controller opens a connection: wire first (idempotent), then
+   * connect. Handlers are forgotten on disconnect, so any connect that skipped the
+   * wiring would pair fine and then receive nothing. Wiring comes first so no
+   * early event is lost.
+   */
+  async function connectWired(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await wire(account);
+    await manager.connect(account.id, account.providerConfig);
+  }
 
   const idParamsSchema = {
     type: 'object' as const,
@@ -149,7 +175,7 @@ export async function accountsController(
     // Auto-reconnect managed providers that are disconnected
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     if (manager && !manager.hasConnection(account.id)) {
-      manager.connect(account.id, account.providerConfig).catch((err) => {
+      connectWired(account, manager).catch((err) => {
         fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
       });
     }
@@ -261,6 +287,8 @@ export async function accountsController(
     try {
       const saved = await deps.accountRepository.save(account);
       fastify.log.info(`Account created: ${saved.id}`);
+
+      await wire(saved);
 
       // Fire-and-forget health check if credentials are available
       if (saved.credentials || saved.credentialsRef) {
@@ -403,7 +431,7 @@ export async function accountsController(
       });
     }
 
-    await manager.connect(account.id, account.providerConfig);
+    await connectWired(account, manager);
 
     return sanitizeAccount(account, deps.providerRegistry);
   });
@@ -478,7 +506,7 @@ export async function accountsController(
 
     // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     }
 
     try {
@@ -597,7 +625,7 @@ export async function accountsController(
 
     try {
       await clearSession(account.id, account.providerConfig);
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     } catch (error) {
       fastify.log.error({ accountId: account.id, err: error }, 'Account session reset failed');
       return reply.status(500).send({
