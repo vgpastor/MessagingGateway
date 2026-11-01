@@ -206,6 +206,42 @@ describe('MessagingGatewayEvents reconnect', () => {
     expect(delays).toEqual([10, 10]);
   });
 
+  it('does not retry a key the server refused (4401): it reports an error and stops', async () => {
+    client = new MessagingGatewayEvents({ baseUrl, apiKey: 'wrong', reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
+    const c = client;
+    const errors: Error[] = [];
+    const reconnects: number[] = [];
+    c.on('error', (err) => errors.push(err));
+    c.on('reconnecting', (attempt) => reconnects.push(attempt));
+    const disconnected = next<[number, string]>((cb) => c.on('disconnected', cb));
+    client.connect();
+
+    const { ws } = await connection(0);
+    ws.close(4401, 'Unauthorized: invalid or missing API key');
+
+    expect((await disconnected)[0]).toBe(4401);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain('Unauthorized');
+    expect(reconnects).toEqual([]);
+    expect(conns).toHaveLength(1);
+  });
+
+  it('an explicit connect() after a 4401 tries again, for a key that was fixed on the server', async () => {
+    client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
+    const c = client;
+    const disconnected = next((cb) => c.on('disconnected', cb));
+    client.connect();
+    (await connection(0)).ws.close(4401, 'Unauthorized');
+    await disconnected;
+
+    client.connect();
+
+    await connection(1);
+    expect(conns).toHaveLength(2);
+  });
+
   it('does not reconnect after disconnect()', async () => {
     client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', reconnectBaseMs: 5, random: () => 1 });
     const c = client;
