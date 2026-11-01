@@ -266,6 +266,11 @@ export class SqliteMessageStore implements FullMessageStorePort {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING
     `);
+    const resyncCounter = db.prepare(`
+      UPDATE account_counters SET n = (SELECT COALESCE(MAX(account_seq), 0) + 1 FROM messages WHERE account_id = @accountId)
+      WHERE account_id = @accountId
+      RETURNING n
+    `);
     const readSeq = db.prepare('SELECT seq FROM messages WHERE id = ?');
     const readStored = db.prepare(`
       SELECT id, seq, account_seq FROM messages
@@ -274,14 +279,18 @@ export class SqliteMessageStore implements FullMessageStorePort {
     `);
 
     const run = db.transaction((): InsertResult => {
-      const { n } = bump.get(envelope.accountId) as { n: number };
-      const info = insert.run(...messageRowValues(envelope, raw), n);
-      if (info.changes === 0) {
+      let { n } = bump.get(envelope.accountId) as { n: number };
+      const insertWith = (number: number) => insert.run(...messageRowValues(envelope, raw), number);
+      if (insertWith(n).changes === 0) {
         const stored = readStored.get({ id: envelope.id, accountId: envelope.accountId, waMessageId: waMessageIdOf(envelope) }) as
           { id: string; seq: number; account_seq: number } | undefined;
-        // With no conflict target this also swallows a number already taken, which is no duplicate: the message would be lost.
-        if (!stored) throw new PermanentStoreError(`account_seq ${n} of account ${envelope.accountId} is already taken`);
-        throw new DuplicateMessage({ inserted: false, storedId: stored.id, seq: stored.seq, accountSeq: stored.account_seq });
+        if (stored) throw new DuplicateMessage({ inserted: false, storedId: stored.id, seq: stored.seq, accountSeq: stored.account_seq });
+
+        // With no conflict target this also swallows a number already taken, which is no duplicate: the counter is behind,
+        // and every insert of the account would fail for ever.
+        ({ n } = resyncCounter.get({ accountId: envelope.accountId }) as { n: number });
+        getLogger().error('The account counter was behind its messages: it has caught up with them', { accountId: envelope.accountId, accountSeq: n });
+        if (insertWith(n).changes === 0) throw new PermanentStoreError(`account_seq ${n} of account ${envelope.accountId} is already taken`);
       }
 
       const { seq } = readSeq.get(envelope.id) as { seq: number };

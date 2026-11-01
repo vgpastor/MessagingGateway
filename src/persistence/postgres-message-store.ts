@@ -329,16 +329,17 @@ export class PostgresMessageStore implements FullMessageStorePort {
          RETURNING n`,
         [envelope.accountId],
       );
-      const accountSeq = Number(counter.rows[0].n);
+      let accountSeq = Number(counter.rows[0].n);
 
       // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
-      const inserted = await client.query(
+      const insertWith = (number: number) => client.query(
         `INSERT INTO messages (${MESSAGE_INSERT_COLUMNS}, account_seq)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         ON CONFLICT DO NOTHING
         RETURNING seq`,
-        [...messageRowValues(envelope, raw), accountSeq],
+        [...messageRowValues(envelope, raw), number],
       );
+      let inserted = await insertWith(accountSeq);
 
       if (inserted.rowCount === 0) {
         const stored = await client.query(
@@ -347,11 +348,24 @@ export class PostgresMessageStore implements FullMessageStorePort {
            ORDER BY id = $1 DESC LIMIT 1`,
           [envelope.id, envelope.accountId, waMessageIdOf(envelope)],
         );
-        await client.query('ROLLBACK');
         const row = stored.rows[0];
-        // With no conflict target this also swallows a number already taken, which is no duplicate: the message would be lost.
-        if (!row) throw new PermanentStoreError(`account_seq ${accountSeq} of account ${envelope.accountId} is already taken`);
-        return { inserted: false, storedId: row.id, seq: Number(row.seq), accountSeq: Number(row.account_seq) };
+        if (row) {
+          await client.query('ROLLBACK');
+          return { inserted: false, storedId: row.id, seq: Number(row.seq), accountSeq: Number(row.account_seq) };
+        }
+
+        // With no conflict target this also swallows a number already taken, which is no duplicate: the counter is behind,
+        // and every insert of the account would fail for ever. The counter's row lock holds the others back meanwhile.
+        const resynced = await client.query(
+          `UPDATE account_counters SET n = (SELECT COALESCE(MAX(account_seq), 0) + 1 FROM messages WHERE account_id = $1)
+           WHERE account_id = $1
+           RETURNING n`,
+          [envelope.accountId],
+        );
+        accountSeq = Number(resynced.rows[0].n);
+        getLogger().error('The account counter was behind its messages: it has caught up with them', { accountId: envelope.accountId, accountSeq });
+        inserted = await insertWith(accountSeq);
+        if (inserted.rowCount === 0) throw new PermanentStoreError(`account_seq ${accountSeq} of account ${envelope.accountId} is already taken`);
       }
 
       await client.query('COMMIT');

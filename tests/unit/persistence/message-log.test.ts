@@ -6,7 +6,7 @@
  * (only when TEST_DATABASE_URL is set). Each Postgres test gets its own schema,
  * so runs are repeatable and isolated.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 import type { FullMessageStorePort } from '../../../src/core/persistence/message-store.port.js';
@@ -14,9 +14,12 @@ import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-stor
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
 import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT } from '../../../src/core/persistence/message-store.utils.js';
 import { PermanentStoreError } from '../../../src/core/errors.js';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import { testDatabaseUrl } from '../../helpers/test-database-url.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
+
+const originalLogger = getLogger();
 
 let envelopeCounter = 0;
 
@@ -233,16 +236,56 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       });
     });
 
-    it('a number already taken is a failure, never a duplicate that would drop the message', async () => {
-      await store.insertInbound(makeEnvelope('acc-a', 'S1'));
-      await store.insertInbound(makeEnvelope('acc-a', 'S2'));
-      await backend.rewindCounter('acc-a', 1);
+    describe('a counter behind the numbers already handed out', () => {
+      afterEach(() => setGlobalLogger(originalLogger));
 
-      const message = makeEnvelope('acc-a', 'S3');
-      await expect(store.insertInbound(message)).rejects.toBeInstanceOf(PermanentStoreError);
+      function capturingErrors() {
+        const error = vi.fn();
+        const fake = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), child: () => fake };
+        setGlobalLogger(fake as unknown as Logger);
+        return error;
+      }
 
-      expect(await store.findById(message.id)).toBeUndefined();
-      expect(await store.maxAccountSeq('acc-a')).toBe(1);
+      it('catches up with the real maximum, says so, and the message goes in with the next number', async () => {
+        for (const wa of ['S1', 'S2', 'S3']) await store.insertInbound(makeEnvelope('acc-a', wa));
+        await backend.rewindCounter('acc-a', 1);
+        const error = capturingErrors();
+
+        const result = await store.insertInbound(makeEnvelope('acc-a', 'S4'));
+
+        expect(result).toMatchObject({ inserted: true, accountSeq: 4 });
+        expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ accountId: 'acc-a', accountSeq: 4 }));
+        expect(await store.maxAccountSeq('acc-a')).toBe(4);
+        expect((await store.insertInbound(makeEnvelope('acc-a', 'S5'))).accountSeq).toBe(5);
+        expect(error).toHaveBeenCalledTimes(1);
+        const page = await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 });
+        expect(page.messages.map((m) => m.accountSeq)).toEqual([1, 2, 3, 4, 5]);
+      });
+
+      it('a real duplicate is still a duplicate: it neither takes a number nor moves the counter', async () => {
+        const held = makeEnvelope('acc-a', 'S1');
+        await store.insertInbound(held);
+        await store.insertInbound(makeEnvelope('acc-a', 'S2'));
+        await backend.rewindCounter('acc-a', 1);
+        const error = capturingErrors();
+
+        expect(await store.insertInbound(makeEnvelope('acc-a', 'S1'))).toMatchObject({ inserted: false, storedId: held.id });
+
+        expect(error).not.toHaveBeenCalled();
+        expect(await store.maxAccountSeq('acc-a')).toBe(1);
+      });
+
+      it('leaves the other accounts alone', async () => {
+        await store.insertInbound(makeEnvelope('acc-a', 'S1'));
+        await store.insertInbound(makeEnvelope('acc-a', 'S2'));
+        await store.insertInbound(makeEnvelope('acc-b', 'S1'));
+        await backend.rewindCounter('acc-a', 1);
+        capturingErrors();
+
+        await store.insertInbound(makeEnvelope('acc-a', 'S3'));
+
+        expect(await store.maxAccountSeq('acc-b')).toBe(1);
+      });
     });
 
     it('a message the database refuses is a permanent failure, and consumes no number', async () => {
