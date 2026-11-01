@@ -20,7 +20,8 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
 }));
 
-const { baileysProvider } = await import('../../src/integrations/whatsapp/baileys/index.js');
+const { createBaileysProvider } = await import('../../src/integrations/whatsapp/baileys/index.js');
+const baileysProvider = createBaileysProvider();
 const { ProviderRegistry } = await import('../../src/integrations/provider-registry.js');
 const { InMemoryAccountRepository } = await import('../../src/infrastructure/config/in-memory-account.repository.js');
 const { MessageRouterService } = await import('../../src/core/routing/message-router.service.js');

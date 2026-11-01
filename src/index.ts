@@ -6,7 +6,7 @@ import { loadEnvConfig, resolveProviderCredential } from './infrastructure/confi
 import { loadAccountsFromYaml } from './infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from './infrastructure/config/in-memory-account.repository.js';
 import { ProviderRegistry } from './integrations/provider-registry.js';
-import { baileysProvider, resolveBaileysLidToPhone, setBaileysMessageStore, setBaileysMetrics } from './integrations/whatsapp/baileys/index.js';
+import { createBaileysProvider, type BaileysProvider } from './integrations/whatsapp/baileys/index.js';
 import { wwebjsProvider } from './integrations/whatsapp/wwebjs-api/index.js';
 import { telegramBotProvider } from './integrations/telegram/bot-api/index.js';
 import { brevoProvider } from './integrations/email/brevo/index.js';
@@ -39,7 +39,7 @@ import { createGracefulShutdown, gatewayShutdownSteps } from './infrastructure/g
 import type { ChannelAccount } from './core/accounts/channel-account.js';
 
 /** Register all supported providers and inject the credential resolver */
-function createProviderRegistry(): ProviderRegistry {
+function createProviderRegistry(baileysProvider: BaileysProvider): ProviderRegistry {
   const providerRegistry = new ProviderRegistry();
   providerRegistry.register(baileysProvider);
   providerRegistry.register(wwebjsProvider);
@@ -152,7 +152,23 @@ async function main() {
   const rawAccounts = loadAccountsFromYaml(yamlPath);
 
   const eventBus = new EventBus();
-  const providerRegistry = createProviderRegistry();
+  const metrics: MetricsPort = envConfig.metricsEnabled ? new PrometheusMetrics() : noopMetrics;
+
+  // Optional: persistence plugin (SQLite or PostgreSQL)
+  let messageStore: FullMessageStorePort | undefined;
+  if (envConfig.storageEnabled) {
+    const { createMessageStore } = await import('./persistence/message-store.factory.js');
+    const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
+    messageStore = await createMessageStore(envConfig);
+    subscribePersistence(eventBus, messageStore);
+    logger.info('Persistence enabled', {
+      driver: envConfig.storageDriver,
+      ...(envConfig.storageDriver === 'sqlite' ? { database: envConfig.databasePath } : {}),
+    });
+  }
+
+  const baileysProvider = createBaileysProvider({ metrics, messageStore });
+  const providerRegistry = createProviderRegistry(baileysProvider);
 
   // Validate credentials
   const credentialValidator = new CredentialValidator(providerRegistry);
@@ -167,9 +183,7 @@ async function main() {
   const accountRepository = new InMemoryAccountRepository(accounts, yamlPath);
   const messageRouter = new MessageRouterService(accountRepository, providerRegistry, eventBus);
   const webhookConfigRepo = await FileWebhookConfigStore.create(resolve(process.cwd(), 'data/webhooks.json'));
-  const metrics: MetricsPort = envConfig.metricsEnabled ? new PrometheusMetrics() : noopMetrics;
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, envConfig.webhookCallbackUrl, envConfig.webhookCallbackSecret, metrics);
-  setBaileysMetrics(metrics);
 
   const webhookConfigs = await webhookConfigRepo.findAll();
   logger.info('Loaded per-account webhook configs', { count: webhookConfigs.length });
@@ -177,20 +191,6 @@ async function main() {
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter, metrics);
   subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
-
-  // Optional: persistence plugin (SQLite or PostgreSQL)
-  let messageStore: FullMessageStorePort | undefined;
-  if (envConfig.storageEnabled) {
-    const { createMessageStore } = await import('./persistence/message-store.factory.js');
-    const { subscribePersistence } = await import('./persistence/persistence-subscriber.js');
-    messageStore = await createMessageStore(envConfig);
-    setBaileysMessageStore(messageStore);
-    subscribePersistence(eventBus, messageStore);
-    logger.info('Persistence enabled', {
-      driver: envConfig.storageDriver,
-      ...(envConfig.storageDriver === 'sqlite' ? { database: envConfig.databasePath } : {}),
-    });
-  }
 
   // Inbound media goes to disk (never to the database); without a message log there is nowhere to record it.
   const mediaStore = new DiskMediaStore(envConfig.mediaDir);
@@ -213,7 +213,7 @@ async function main() {
     eventBus,
     media: mediaService,
     metrics,
-    resolveLidToPhone: resolveBaileysLidToPhone,
+    resolveLidToPhone: baileysProvider.resolveLidToPhone,
     toStorableRaw,
   });
 

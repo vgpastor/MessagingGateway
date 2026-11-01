@@ -30,7 +30,8 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
 }));
 
-const { baileysProvider } = await import('../../../src/integrations/whatsapp/baileys/index.js');
+const { createBaileysProvider } = await import('../../../src/integrations/whatsapp/baileys/index.js');
+const baileysProvider = createBaileysProvider();
 const { EventBus } = await import('../../../src/core/event-bus.js');
 const { CredentialValidator } = await import('../../../src/infrastructure/credential-validator.js');
 const { connectManagedProviders } = await import('../../../src/infrastructure/connect-managed-providers.js');

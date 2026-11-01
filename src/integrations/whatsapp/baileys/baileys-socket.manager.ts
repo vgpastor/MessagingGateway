@@ -48,6 +48,8 @@ function asCacheStore(cache: TtlCache<unknown>): CacheStore {
 export interface BaileysSocketManagerOptions {
   /** Jitter source for the reconnect backoff (inject a fixed value in tests). */
   random?: () => number;
+  /** Where Baileys finds messages it must re-send or retry-decrypt; absent when there is no message log. */
+  messageLookup?: BaileysMessageLookup;
 }
 
 export class BaileysSocketManager implements SocketManagerPort<BaileysProviderConfig> {
@@ -82,8 +84,6 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   private reconnectAttempts = new Map<string, number>();
   /** The process is exiting ({@link closeAll}): no socket opens from here on. */
   private closed = false;
-  /** Where Baileys finds messages it must re-send or retry-decrypt; unset until a message log exists. */
-  private messageLookup: BaileysMessageLookup | undefined;
   /**
    * Per-account caches handed to Baileys. Kept OUTSIDE {@link SocketEntry} so they
    * survive reconnects, and per account because the same WhatsApp message id can
@@ -93,11 +93,6 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   private groupMetadata = new Map<string, TtlCache<GroupMetadata>>();
 
   constructor(private readonly options: BaileysSocketManagerOptions = {}) {}
-
-  /** Back Baileys' `getMessage` with the message log (call once the store exists). */
-  setMessageLookup(lookup: BaileysMessageLookup | undefined): void {
-    this.messageLookup = lookup;
-  }
 
   async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
     if (this.closed || this.clearing.has(accountId)) {
@@ -142,9 +137,9 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       qrTimeout: config.qrTimeoutMs ?? 60_000,
       markOnlineOnConnect: config.markOnlineOnConnect ?? false,
       getMessage: async (key) => {
-        if (!key.id || !this.messageLookup) return undefined;
+        if (!key.id || !this.options.messageLookup) return undefined;
         try {
-          return await this.messageLookup(accountId, key.id);
+          return await this.options.messageLookup(accountId, key.id);
         } catch {
           return undefined; // never throw into Baileys' retry path
         }
@@ -481,8 +476,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   /**
-   * Resolve a WhatsApp LID (e.g. "266563471069327@lid") to a phone-number JID
-   * (e.g. "34643506783@s.whatsapp.net") using Baileys' built-in LID mapping store.
+   * Resolve a WhatsApp LID (e.g. "100000000000001@lid") to a phone-number JID
+   * (e.g. "34600000001@s.whatsapp.net") using Baileys' built-in LID mapping store.
    * Returns undefined if the mapping is not found.
    */
   async resolveLidToPhone(accountId: string, lid: string): Promise<string | undefined> {
@@ -592,12 +587,4 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     return resolve(process.cwd(), 'data', 'baileys-auth', accountId);
   }
 }
-
-/** Create a new BaileysSocketManager instance (useful for testing) */
-export function createBaileysSocketManager(): BaileysSocketManager {
-  return new BaileysSocketManager();
-}
-
-/** Default singleton instance */
-export const baileysSocketManager = createBaileysSocketManager();
 

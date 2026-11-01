@@ -66,9 +66,10 @@ describe('Baileys socket options', () => {
   });
 
   it('serves getMessage from the message lookup', async () => {
-    const manager = new BaileysSocketManager();
-    manager.setMessageLookup(async (accountId, waMessageId) =>
-      accountId === ACCOUNT && waMessageId === 'WA1' ? { conversation: 'hola' } : undefined);
+    const manager = new BaileysSocketManager({
+      messageLookup: async (accountId, waMessageId) =>
+        accountId === ACCOUNT && waMessageId === 'WA1' ? { conversation: 'hola' } : undefined,
+    });
     await manager.connect(ACCOUNT, {});
 
     const getMessage = captured[0]!['getMessage'];
@@ -82,9 +83,8 @@ describe('Baileys socket options', () => {
     const getMessage = captured[0]!['getMessage'];
     expect(await getMessage({ id: 'WA1' })).toBeUndefined();
 
-    manager.setMessageLookup(async () => { throw new Error('db down'); });
-    await manager.disconnect(ACCOUNT);
-    await manager.connect(ACCOUNT, {});
+    const failingManager = new BaileysSocketManager({ messageLookup: async () => { throw new Error('db down'); } });
+    await failingManager.connect(ACCOUNT, {});
     const failing = captured[1]!['getMessage'];
     expect(await failing({ id: 'WA1' })).toBeUndefined();
     expect(await failing({})).toBeUndefined();

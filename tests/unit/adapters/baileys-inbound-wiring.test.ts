@@ -20,7 +20,8 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
 }));
 
-const { baileysProvider, setBaileysMetrics } = await import('../../../src/integrations/whatsapp/baileys/index.js');
+const { createBaileysProvider } = await import('../../../src/integrations/whatsapp/baileys/index.js');
+const baileysProvider = createBaileysProvider();
 const { EventBus } = await import('../../../src/core/event-bus.js');
 const { InboundPipeline: RealInboundPipeline } = await import('../../../src/core/inbound/inbound-pipeline.js');
 const { SqliteMessageStore } = await import('../../../src/persistence/sqlite-message-store.js');
@@ -125,7 +126,6 @@ describe('Baileys inbound wiring', () => {
 describe('Baileys inbound wiring: messages that failed to decrypt', () => {
   const accounts: string[] = [];
   afterEach(async () => {
-    setBaileysMetrics(undefined);
     for (const id of accounts.splice(0)) {
       await rm(resolve(process.cwd(), 'data', 'baileys-auth', id), { recursive: true, force: true });
     }
@@ -142,14 +142,14 @@ describe('Baileys inbound wiring: messages that failed to decrypt', () => {
     eventBus.on<{ envelope: (typeof emitted)[number] }>(Events.MESSAGE_INBOUND, (e) => { emitted.push(e.data.envelope); });
     const pipeline = new RealInboundPipeline({ store, eventBus, media: noopMediaService, metrics: noopMetrics });
     const metrics = { ...noopMetrics, inboundSkipped: vi.fn() };
-    setBaileysMetrics(metrics);
+    const provider = createBaileysProvider({ metrics });
     const account = {
       id: accountId, alias: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {},
       identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
       metadata: { owner: 'org', environment: 'production', tags: [] },
     } as unknown as ChannelAccount;
-    await baileysProvider.connection!().connect(accountId, {});
-    await baileysProvider.wireEvents!(account, eventBus, pipeline);
+    await provider.connection!().connect(accountId, {});
+    await provider.wireEvents!(account, eventBus, pipeline);
     return { store, emitted, metrics, socket: sockets.at(-1)! };
   }
 
