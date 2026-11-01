@@ -99,7 +99,7 @@ describe('GET /health', () => {
     const body = response.json();
     // The fixture accounts have not been credential-checked yet (`unchecked`), so the gateway reports degraded.
     expect(body.status).toBe('degraded');
-    expect(body.accounts['wa-acme']).toBe('unchecked');
+    expect(body.accounts).toBeUndefined();
     expect(body.timestamp).toBeDefined();
     expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body.uptime).toBeGreaterThan(0);
