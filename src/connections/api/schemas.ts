@@ -228,6 +228,13 @@ export const createAccountBodySchema = {
     credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
     credentials: { type: 'string' as const, minLength: 1, description: 'Inline credential string (e.g. "user:apiKey@host:port"). Stored in YAML, used when env vars are not available.' },
     providerConfig: { type: 'object' as const, additionalProperties: true },
+    conversations: {
+      description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
+      anyOf: [
+        { type: 'string' as const, enum: ['*'] },
+        { type: 'array' as const, items: { type: 'string' as const } },
+      ],
+    },
     metadata: {
       type: 'object' as const,
       properties: {

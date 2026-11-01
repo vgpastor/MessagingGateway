@@ -1111,6 +1111,23 @@
                     "type": "object",
                     "additionalProperties": true
                   },
+                  "conversations": {
+                    "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "*"
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
+                  },
                   "metadata": {
                     "type": "object",
                     "properties": {

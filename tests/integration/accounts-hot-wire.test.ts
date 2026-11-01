@@ -321,6 +321,37 @@ describe('accounts created at runtime', () => {
     expect((await repository.findById('hot-14'))?.conversations).toEqual(conversations);
   });
 
+  it.each([
+    ['all', '*'],
+    ['one', ['34600111222@s.whatsapp.net']],
+    ['several', ['34600111222@s.whatsapp.net', '123@g.us']],
+    ['none', []],
+  ])('POST /accounts stores conversations as they came: %s', async (name, conversations) => {
+    const id = `hot-14-${name}`;
+    ids.push(id);
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody(id), conversations },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect((await repository.findById(id))?.conversations).toEqual(conversations);
+  });
+
+  it('POST /accounts refuses any other conversations, and the contract says so', async () => {
+    ids.push('hot-14b');
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody('hot-14b'), conversations: { all: true } },
+    });
+    const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
+    const body = spec.json().paths['/api/v1/accounts'].post.requestBody.content['application/json'].schema;
+
+    expect(response.statusCode).toBe(400);
+    expect(body.properties.conversations).toBeDefined();
+    expect(await repository.findById('hot-14b')).toBeUndefined();
+  });
+
   it('GET /accounts/:id/health reports a suspended account as suspended, and leaves it so', async () => {
     ids.push('hot-15');
     await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-15'))), status: 'suspended', providerConfig: {}, credentialsRef: '' });

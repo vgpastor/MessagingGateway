@@ -14,14 +14,11 @@ export const GetHealth200Status = {
   degraded: 'degraded',
 } as const;
 
-export type GetHealth200Accounts = {[key: string]: 'active' | 'suspended' | 'auth_expired' | 'error' | 'unchecked'};
-
 export type GetHealth200 = {
   status: GetHealth200Status;
   timestamp: string;
   version?: string;
   uptime?: number;
-  accounts: GetHealth200Accounts;
 };
 
 export type PostWebhooksWhatsappAccountIdInboundBody = { [key: string]: unknown };
@@ -473,6 +470,8 @@ export type PostApiV1AccountsBody = {
      */
   credentials?: string;
   providerConfig?: PostApiV1AccountsBodyProviderConfig;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   metadata: PostApiV1AccountsBodyMetadata;
 };
 
@@ -1608,7 +1607,7 @@ export const getGetHealthUrl = () => {
 }
 
 /**
- * Health check endpoint. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active`. `accounts` maps each account id to its status.
+ * Health check endpoint. Public, so it reports the general state only. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active` or has lost its connection. The detail per account is in GET /api/v1/accounts, with an API key.
  */
 export const getHealth = async ( options?: Parameters<typeof customFetch>[1]): Promise<getHealthResponse> => {
 
