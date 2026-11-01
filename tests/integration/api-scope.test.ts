@@ -1,5 +1,5 @@
 /**
- * The read-only API key may only read messages and media (and open the event stream);
+ * The read-only API key may only read messages and media (the event stream authenticates itself);
  * everything else, including /metrics and the account/QR endpoints, needs the admin key.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -37,6 +37,31 @@ describe('read-only API key', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  // A real server, so a route renamed in its controller cannot leave the allow-list behind.
+  it.each([
+    '/api/v1/messages',
+    '/api/v1/messages/ABC123',
+    '/api/v1/messages/stats',
+    '/api/v1/messages/search?q=x',
+    '/api/v1/messages/analytics',
+    '/api/v1/messages/export',
+    '/api/v1/media/ABC123',
+  ])('is allowed on GET %s', async (url) => {
+    const res = await app.inject({ method: 'GET', url, headers: READ });
+    expect(res.statusCode).not.toBe(403);
+    expect(res.statusCode).not.toBe(401);
+  });
+
+  it('cannot ask the provider for a delivery status', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/messages/ABC123/status?accountId=wa-test', headers: READ });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('cannot read the conversation context', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/conversations/c1/context', headers: READ });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('cannot POST /api/v1/accounts/:id/reset', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/v1/accounts/wa-test/reset', headers: READ });
     expect(res.statusCode).toBe(403);
@@ -60,6 +85,31 @@ describe('read-only API key', () => {
   it('cannot GET /metrics', async () => {
     const res = await app.inject({ method: 'GET', url: '/metrics', headers: READ });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('authentication runs before the body is read', () => {
+  const malformed = { 'content-type': 'application/json' };
+
+  it('answers 401 to a request without key whatever its body', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/messages/send', headers: malformed, payload: '{not json' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('answers 401 to an oversized body without key, not 413', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/messages/send', headers: malformed, payload: 'x'.repeat(2 * 1024 * 1024) });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('answers 403 to the read key whatever its body', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/messages/send', headers: { ...READ, ...malformed }, payload: '{not json' });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('still reads the body for a valid key', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/messages/send', headers: { ...ADMIN, ...malformed }, payload: '{not json' });
+    expect(res.statusCode).not.toBe(401);
+    expect(res.statusCode).not.toBe(403);
   });
 });
 

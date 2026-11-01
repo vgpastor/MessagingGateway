@@ -8,8 +8,6 @@ export type AuthScope = 'admin' | 'read';
 export interface AuthRequest {
   headers: Record<string, string | string[] | undefined>;
   method?: string;
-  /** Raw URL, query string included. */
-  url?: string;
   /** Matched route (Fastify): `url` is the route pattern, e.g. `/api/v1/messages/:id`. */
   routeOptions?: { url?: string };
   /** Set by the guard once the key is accepted. */
@@ -24,7 +22,7 @@ export interface AuthReply {
 
 export interface ApiKeys {
   adminKey: string;
-  /** Optional key that can only read messages and media and open the event stream. */
+  /** Optional key that can only read messages and media (and open the event stream, which authenticates itself). */
   readKey?: string;
 }
 
@@ -39,20 +37,25 @@ export function resolveAuthScope(provided: string | undefined, keys: ApiKeys): A
   return undefined;
 }
 
+/** Route patterns the read scope may `GET`. A new route stays closed to it until it is listed here. */
+const READ_SCOPE_ROUTES: ReadonlySet<string> = new Set([
+  '/api/v1/messages',
+  '/api/v1/messages/:id',
+  '/api/v1/messages/stats',
+  '/api/v1/messages/search',
+  '/api/v1/messages/analytics',
+  '/api/v1/messages/export',
+  '/api/v1/media/:id',
+]);
+
 /**
- * Routes the read scope may call. Anything else answers 403.
- * Judged on the matched route pattern when the router provides it, so a crafted URL cannot
- * make a different route look like a read route.
+ * Whether the read scope may call this route; anything else answers 403.
+ * Judged on the matched route pattern, never the URL, so a crafted URL cannot make a different
+ * route look like a read route. `/ws/events` is not here: it authenticates inside its controller.
  */
-export function isReadScopeAllowed(request: Pick<AuthRequest, 'method' | 'url' | 'routeOptions'>): boolean {
+export function isReadScopeAllowed(request: Pick<AuthRequest, 'method' | 'routeOptions'>): boolean {
   if (request.method?.toUpperCase() !== 'GET') return false;
-  const path = request.routeOptions?.url ?? (request.url ?? '').split('?')[0] ?? '';
-  return (
-    path === '/api/v1/messages' ||
-    path.startsWith('/api/v1/messages/') ||
-    path.startsWith('/api/v1/media/') ||
-    path === '/ws/events'
-  );
+  return READ_SCOPE_ROUTES.has(request.routeOptions?.url ?? '');
 }
 
 /**

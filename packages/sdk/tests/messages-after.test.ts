@@ -11,7 +11,7 @@ function stubFetch(body: unknown, status = 200) {
 
 describe('MessagesApi.after', () => {
   it('calls the afterAccountSeq endpoint with accountId, cursor and limit', async () => {
-    const payload = { messages: [], nextAfterAccountSeq: null, lastAccountSeq: 5 };
+    const payload = { messages: [], nextAfterAccountSeq: null, lastAccountSeq: 5, firstAccountSeq: 1 };
     const fetchMock = stubFetch(payload);
     const client = new MessagingGatewayClient({ baseUrl: 'http://gw.test/', apiKey: 'k' });
 

@@ -71,6 +71,84 @@ describe('MessagingGatewayEvents auth', () => {
   });
 });
 
+describe('MessagingGatewayEvents subscriptions', () => {
+  /** Connects, and waits until the server has the socket and has confirmed it. */
+  async function connected(accounts?: string[]) {
+    client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', accounts, reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
+    const c = client;
+    const open = next((cb) => c.on('connected', cb));
+    client.connect();
+    const conn = await connection(0);
+    conn.ws.send(JSON.stringify({ event: 'connected' }));
+    await open;
+    return { c, conn };
+  }
+
+  /** The server drops the socket; the URL the client comes back with. */
+  async function urlAfterReconnect(conn: Conn): Promise<string | undefined> {
+    conn.ws.close();
+    return (await connection(1)).req.url;
+  }
+
+  it('comes back with what subscribe() asked for, which replaces the filter as in the server', async () => {
+    const { c, conn } = await connected(['wa-1', 'wa-2']);
+
+    c.subscribe(['wa-3']);
+
+    expect(await urlAfterReconnect(conn)).toBe('/ws/events?accounts=wa-3');
+  });
+
+  it('comes back without what unsubscribe() removed', async () => {
+    const { c, conn } = await connected(['wa-1', 'wa-2']);
+
+    c.unsubscribe(['wa-1']);
+
+    expect(await urlAfterReconnect(conn)).toBe('/ws/events?accounts=wa-2');
+  });
+
+  it('keeps a subscription made with no accounts in the config', async () => {
+    const { c, conn } = await connected();
+
+    c.subscribe(['wa-1']);
+
+    expect(await urlAfterReconnect(conn)).toBe('/ws/events?accounts=wa-1');
+  });
+
+  it('an empty filter means every account, as in the server: subscribe([])', async () => {
+    const { c, conn } = await connected(['wa-1']);
+
+    c.subscribe([]);
+
+    expect(await urlAfterReconnect(conn)).toBe('/ws/events');
+  });
+
+  it('an empty filter means every account, as in the server: removing the last one', async () => {
+    const { c, conn } = await connected(['wa-1']);
+
+    c.unsubscribe(['wa-1']);
+
+    expect(await urlAfterReconnect(conn)).toBe('/ws/events');
+  });
+
+  it('leaves the array of the caller alone', async () => {
+    const accounts = ['wa-1', 'wa-2'];
+    const { c } = await connected(accounts);
+
+    c.unsubscribe(['wa-1']);
+
+    expect(accounts).toEqual(['wa-1', 'wa-2']);
+  });
+
+  it('a subscribe() that could not be sent throws and remembers nothing', async () => {
+    client = new MessagingGatewayEvents({ baseUrl, autoReconnect: false, accounts: ['wa-1'] });
+
+    expect(() => client!.subscribe(['wa-2'])).toThrow('WebSocket is not connected');
+
+    client.connect();
+    expect((await connection(0)).req.url).toBe('/ws/events?accounts=wa-1');
+  });
+});
+
 describe('MessagingGatewayEvents events', () => {
   it('emits connected and message.inbound with accountSeq', async () => {
     client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', autoReconnect: false });

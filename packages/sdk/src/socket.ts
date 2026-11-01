@@ -42,6 +42,8 @@ function detectEnv(): SocketEnv {
  *
  * - Node: the `ws` library, key sent as `Authorization: Bearer <key>`.
  * - Browser (no way to set headers): key sent as the `umg.<key>` subprotocol.
+ *   A subprotocol cannot hold every character: a key with `/` or `=`, as standard base64 has,
+ *   makes the browser throw a `SyntaxError` here. Use hex or base64url keys for browsers.
  *
  * The key never goes in the URL (it would end up in proxy/access logs).
  */

@@ -15,7 +15,7 @@ import type {
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
+  MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
   MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
 } from '../core/persistence/message-store.utils.js';
 
@@ -127,7 +127,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     const pool = this.requirePool();
 
     const { where, params } = this.buildWhere(filters);
-    const limit = filters.limit ?? 50;
+    const limit = clampPageLimit(filters.limit ?? 50, MAX_EXPORT_LIMIT);
     const offset = filters.offset ?? 0;
 
     const countRes = await pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
@@ -167,7 +167,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async search(query: string, options?: SearchOptions): Promise<MessageQueryResult> {
     const pool = this.requirePool();
 
-    const limit = options?.limit ?? 50;
+    const limit = clampPageLimit(options?.limit ?? 50);
     const offset = options?.offset ?? 0;
 
     let paramIdx = 1;
@@ -258,7 +258,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
   ): Promise<RawConversationHistory> {
     const pool = this.requirePool();
 
-    const limit = options?.limit ?? 50;
+    const limit = clampPageLimit(options?.limit ?? 50);
     const conditions = ['conversation_id = $1'];
     const params: unknown[] = [conversationId];
     let idx = 1;

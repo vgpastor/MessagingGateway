@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
@@ -211,6 +212,49 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close();
   await store.close();
+});
+
+// ── Page size and offset from the query string ───────────────
+
+describe('limit and offset of the read routes', () => {
+  const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH_HEADERS });
+
+  it.each([
+    ['/api/v1/messages?limit=abc', 200, 50],
+    ['/api/v1/messages?limit=999999', 200, 500],
+    ['/api/v1/messages?limit=0', 200, 1],
+    ['/api/v1/messages?limit=-5', 200, 1],
+    ['/api/v1/messages/search?q=order&limit=abc', 200, 50],
+    ['/api/v1/messages/search?q=order&limit=999999', 200, 500],
+    ['/api/v1/messages/export?limit=abc', 200, 1000],
+    ['/api/v1/messages/export?limit=999999', 200, 1000],
+    ['/api/v1/messages/export?limit=-5', 200, 1],
+  ])('GET %s answers %i with limit %i', async (url, status, limit) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.json().limit).toBe(limit);
+  });
+
+  it.each([
+    '/api/v1/messages?offset=abc',
+    '/api/v1/messages?offset=-1',
+    '/api/v1/messages?offset=99999999999999999999999',
+    '/api/v1/messages/search?q=order&offset=abc',
+    '/api/v1/messages/export?offset=-1',
+  ])('GET %s falls back to offset 0', async (url) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().offset).toBe(0);
+  });
+
+  it.each(['abc', '-5', '999999'])('the conversation context takes limit=%s without failing', async (limit) => {
+    const res = await get(`/api/v1/conversations/34600000001@s.whatsapp.net/context?limit=${limit}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().messages.length).toBeGreaterThan(0);
+  });
 });
 
 // ── GET /api/v1/messages ─────────────────────────────────────
@@ -594,6 +638,28 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     const body = (await get('accountId=nobody&afterAccountSeq=0')).json();
 
     expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0, firstAccountSeq: null });
+  });
+
+  it.each([
+    ['without the gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys"}', '{"platform":"whatsapp"}'],
+    ['with a partial gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys","account":{"id":"wa-old"}}', '{"platform":"whatsapp"}'],
+    ['with an empty gateway', '{}', '{"platform":"whatsapp"}'],
+    ['without the channel platform', '{"adapterId":"baileys"}', '{"messageId":"W"}'],
+  ])('a row written by an older version %s does not block the page', async (_name, gateway, channelDetails) => {
+    const id = `msg-old-${randomUUID()}`;
+    const accountId = `wa-old-${randomUUID()}`;
+    await seqStore.insertInbound({ ...inbound(1), id, accountId, channelDetails: { platform: 'whatsapp' } });
+    (seqStore as unknown as { db: import('better-sqlite3').Database }).db
+      .prepare('UPDATE messages SET gateway_json = ?, channel_details_json = ? WHERE id = ?')
+      .run(gateway, channelDetails, id);
+
+    const keyset = await get(`accountId=${accountId}&afterAccountSeq=0`);
+    const legacy = await get(`accountId=${accountId}`);
+
+    expect(keyset.statusCode).toBe(200);
+    expect(keyset.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
   });
 
   it('legacy query without afterAccountSeq unchanged', async () => {

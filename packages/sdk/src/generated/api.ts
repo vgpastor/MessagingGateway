@@ -94,22 +94,22 @@ export type PostWebhooksWhatsappAccountIdInbound200Context = {
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
+  account?: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200 = {
@@ -229,22 +229,22 @@ export type PostWebhooksTelegramAccountIdUpdate200Context = {
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
+  account?: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200 = {
@@ -1310,7 +1310,13 @@ contentType?: string;
 direction?: GetApiV1MessagesDirection;
 since?: string;
 until?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 /**
  * Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.
@@ -1395,22 +1401,22 @@ export type GetApiV1Messages200MessagesItemContext = {
  };
 
 export type GetApiV1Messages200MessagesItemChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type GetApiV1Messages200MessagesItemGatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type GetApiV1Messages200MessagesItemGateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: GetApiV1Messages200MessagesItemGatewayAccount;
+  account?: GetApiV1Messages200MessagesItemGatewayAccount;
 };
 
 export type GetApiV1Messages200MessagesItem = {
@@ -1473,7 +1479,13 @@ export type GetApiV1MessagesSearchParams = {
  */
 q: string;
 accountId?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1489,9 +1501,12 @@ since?: string;
 until?: string;
 format?: GetApiV1MessagesExportFormat;
 /**
- * Max messages to export (default: 1000)
+ * Max messages to export (default and maximum: 1000). Not a number: the default
  */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1505,7 +1520,7 @@ export const GetApiV1MessagesExportFormat = {
 
 export type GetApiV1ConversationsConversationIdContextParams = {
 /**
- * Max messages to return (default: 50)
+ * Page size (default: 50, max: 500). Not a number: the default
  */
 limit?: string;
 /**
@@ -3185,7 +3200,7 @@ export const getGetApiV1MessagesExportUrl = (params?: GetApiV1MessagesExportPara
 }
 
 /**
- * Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.
+ * Export messages in CSV or JSON format, up to 1000 per request (default and maximum): use `offset` for the rest. Requires STORAGE_ENABLED=true.
  */
 export const getApiV1MessagesExport = async (params?: GetApiV1MessagesExportParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesExportResponse> => {
 
@@ -3245,6 +3260,11 @@ export const getApiV1ConversationsConversationIdContext = async (conversationId:
 
 
 
+export type getApiV1MediaIdResponse200 = {
+  data: Blob
+  status: 200
+}
+
 export type getApiV1MediaIdResponse202 = {
   data: GetApiV1MediaId202
   status: 202
@@ -3260,7 +3280,7 @@ export type getApiV1MediaIdResponse410 = {
   status: 410
 }
 
-export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse202) & {
+export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse200 | getApiV1MediaIdResponse202) & {
   headers: Headers;
 };
 export type getApiV1MediaIdResponseError = (getApiV1MediaIdResponse404 | getApiV1MediaIdResponse410) & {

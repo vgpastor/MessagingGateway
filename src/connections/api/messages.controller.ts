@@ -2,12 +2,28 @@ import type { FastifyInstance } from 'fastify';
 import type { FullMessageStorePort } from '../../core/persistence/message-store.port.js';
 import type { ConversationContextService } from '../../core/persistence/conversation-context.service.js';
 import type { ConversationContextOptions } from '../../core/persistence/conversation-context.service.js';
+import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT, clampPageLimit } from '../../core/persistence/message-store.utils.js';
 import { errorResponseSchema, unifiedEnvelopeSchema } from './schemas.js';
 
 /** Default limit for paginated queries */
 const DEFAULT_QUERY_LIMIT = 50;
 /** Default limit for export endpoints (higher to allow bulk downloads) */
-const DEFAULT_EXPORT_LIMIT = 1000;
+const DEFAULT_EXPORT_LIMIT = MAX_EXPORT_LIMIT;
+
+const PAGE_LIMIT_DESCRIPTION = `Page size (default: ${DEFAULT_QUERY_LIMIT}, max: ${MAX_PAGE_LIMIT}). Not a number: the default`;
+const OFFSET_DESCRIPTION = 'Rows to skip (default: 0). Not a non-negative number: the default';
+
+/** Page size of a query string: the default when it is not a number, otherwise clamped to [1, max]. */
+function parseLimit(raw: string | undefined, fallback: number, max: number = MAX_PAGE_LIMIT): number {
+  const limit = parseInt(raw ?? '', 10);
+  return Number.isNaN(limit) ? fallback : clampPageLimit(limit, max);
+}
+
+/** Offset of a query string: undefined (the store's default) unless it is a non-negative integer the database can take. */
+function parseOffset(raw: string | undefined): number | undefined {
+  const offset = parseInt(raw ?? '', 10);
+  return Number.isSafeInteger(offset) && offset >= 0 ? offset : undefined;
+}
 
 /**
  * Response of `GET /api/v1/messages`. Two shapes share one schema:
@@ -83,8 +99,8 @@ export async function messagesController(
           direction: { type: 'string' as const, enum: ['inbound', 'outbound'] },
           since: { type: 'string' as const, format: 'date-time' },
           until: { type: 'string' as const, format: 'date-time' },
-          limit: { type: 'string' as const },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
           afterAccountSeq: {
             type: 'integer' as const,
             minimum: 0,
@@ -103,11 +119,10 @@ export async function messagesController(
           error: 'Bad Request', code: 'MISSING_ACCOUNT_ID', message: 'Query parameter "accountId" is required with "afterAccountSeq"',
         });
       }
-      const requested = q.limit ? parseInt(q.limit, 10) : DEFAULT_QUERY_LIMIT;
       const page = await deps.messageStore.queryAfter({
         accountId: q.accountId,
         afterAccountSeq: q.afterAccountSeq,
-        limit: Number.isNaN(requested) ? DEFAULT_QUERY_LIMIT : requested,
+        limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
       });
       // Read after the page so lastAccountSeq is never behind a message in it.
       const lastAccountSeq = await deps.messageStore.maxAccountSeq(q.accountId);
@@ -124,8 +139,8 @@ export async function messagesController(
       direction: q.direction as 'inbound' | 'outbound' | undefined,
       since: q.since ? new Date(q.since) : undefined,
       until: q.until ? new Date(q.until) : undefined,
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
+      offset: parseOffset(q.offset),
     });
   });
 
@@ -182,8 +197,8 @@ export async function messagesController(
         properties: {
           q: { type: 'string' as const, description: 'Search query (FTS5 syntax)' },
           accountId: { type: 'string' as const },
-          limit: { type: 'string' as const },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
         },
         required: ['q'] as const,
       },
@@ -195,8 +210,8 @@ export async function messagesController(
     }
     return deps.messageStore.search(q.q, {
       accountId: q.accountId,
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
+      offset: parseOffset(q.offset),
     });
   });
 
@@ -241,7 +256,7 @@ export async function messagesController(
     };
   }>('/api/v1/messages/export', {
     schema: {
-      description: `Export messages in CSV or JSON format. Default limit: ${DEFAULT_EXPORT_LIMIT}. Requires STORAGE_ENABLED=true.`,
+      description: `Export messages in CSV or JSON format, up to ${MAX_EXPORT_LIMIT} per request (default and maximum): use \`offset\` for the rest. Requires STORAGE_ENABLED=true.`,
       tags: ['Messages'],
       querystring: {
         type: 'object' as const,
@@ -250,8 +265,8 @@ export async function messagesController(
           since: { type: 'string' as const, format: 'date-time' },
           until: { type: 'string' as const, format: 'date-time' },
           format: { type: 'string' as const, enum: ['csv', 'json'], default: 'json' },
-          limit: { type: 'string' as const, description: `Max messages to export (default: ${DEFAULT_EXPORT_LIMIT})` },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: `Max messages to export (default and maximum: ${MAX_EXPORT_LIMIT}). Not a number: the default` },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
         },
       },
     },
@@ -261,8 +276,8 @@ export async function messagesController(
       accountId: q.accountId,
       since: q.since ? new Date(q.since) : undefined,
       until: q.until ? new Date(q.until) : undefined,
-      limit: q.limit ? parseInt(q.limit, 10) : DEFAULT_EXPORT_LIMIT,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_EXPORT_LIMIT, MAX_EXPORT_LIMIT),
+      offset: parseOffset(q.offset),
     });
 
     if (q.format === 'csv') {
@@ -307,7 +322,7 @@ export async function messagesController(
       querystring: {
         type: 'object' as const,
         properties: {
-          limit: { type: 'string' as const, description: `Max messages to return (default: ${DEFAULT_QUERY_LIMIT})` },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
           since: { type: 'string' as const, format: 'date-time', description: 'Only messages after this UTC timestamp' },
           accountId: { type: 'string' as const, description: 'Filter by account' },
           format: { type: 'string' as const, enum: ['openai', 'raw'], description: 'Output format (default: openai)' },
@@ -319,7 +334,7 @@ export async function messagesController(
     const { conversationId } = request.params;
     const q = request.query;
     const opts: ConversationContextOptions = {
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
       since: q.since ? new Date(q.since) : undefined,
       accountId: q.accountId,
       format: (q.format as 'openai' | 'raw') ?? 'openai',

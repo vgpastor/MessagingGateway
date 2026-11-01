@@ -12,6 +12,7 @@ import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelo
 import type { FullMessageStorePort } from '../../../src/core/persistence/message-store.port.js';
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
+import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT } from '../../../src/core/persistence/message-store.utils.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -311,6 +312,19 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       const media = ((await store.findById(env.id))?.content as unknown as { caption: string; media: Record<string, unknown> });
       expect(media.caption).toBe('foto');
       expect(media.media.filename).toBe('a.jpg');
+    });
+
+    it('caps the page size of every read, whatever the caller asks for', async () => {
+      await store.save(makeEnvelope('acc-a', 'CAP1'));
+
+      expect((await store.query({ limit: 1_000_000 })).limit).toBe(MAX_EXPORT_LIMIT);
+      expect((await store.query({ limit: -1 })).limit).toBe(1);
+      expect((await store.query({})).limit).toBe(50);
+      expect((await store.search('message', { limit: 1_000_000 })).limit).toBe(MAX_PAGE_LIMIT);
+      expect((await store.search('message', { limit: -1 })).limit).toBe(1);
+
+      const history = await store.getConversationHistory('34600000099@s.whatsapp.net', { limit: -1 });
+      expect(history.envelopes).toHaveLength(1);
     });
 
     it('insertInbound is idempotent: the same envelope again is a duplicate, with or without a WhatsApp id', async () => {

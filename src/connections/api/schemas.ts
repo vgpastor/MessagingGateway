@@ -25,13 +25,17 @@ export const messageContentSchema = {
   required: ['type'] as const,
 };
 
+/**
+ * `channelDetails` and `gateway` are stored as JSON, so a row keeps whatever shape the version that
+ * wrote it had. Serializing refuses a missing `required` field with a 500, and a page that answers 500
+ * stops its consumer for good at that row: nothing inside them is required.
+ */
 export const channelDetailsSchema = {
   type: 'object' as const,
   additionalProperties: true,
   properties: {
     platform: { type: 'string' as const },
   },
-  required: ['platform'] as const,
 };
 
 export const messageContextSchema = {
@@ -58,10 +62,8 @@ export const gatewayMetadataSchema = {
         owner: { type: 'string' as const },
         tags: { type: 'array' as const, items: { type: 'string' as const } },
       },
-      required: ['id', 'alias', 'owner', 'tags'] as const,
     },
   },
-  required: ['receivedAt', 'adapterId', 'account'] as const,
 };
 
 export const unifiedEnvelopeSchema = {
@@ -83,6 +85,7 @@ export const unifiedEnvelopeSchema = {
     channelDetails: channelDetailsSchema,
     gateway: gatewayMetadataSchema,
   },
+  // All of them come from NOT NULL columns, so every stored row has them.
   required: [
     'id', 'accountId', 'channel', 'direction', 'timestamp',
     'conversationId', 'sender', 'recipient', 'content',
