@@ -3,7 +3,7 @@ import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logge
 import { EventBus } from '../../../src/core/event-bus.js';
 import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
-import { InboundPipeline, LID_MAX_WAIT_MS } from '../../../src/core/inbound/inbound-pipeline.js';
+import { HELD_RETRY_INTERVAL_MS, InboundPipeline, LID_MAX_WAIT_MS } from '../../../src/core/inbound/inbound-pipeline.js';
 import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
 import { PERSIST_RETRY_DELAYS_MS, STORE_PROBE_INTERVAL_MS } from '../../../src/core/inbound/store-guard.js';
 import { PermanentStoreError } from '../../../src/core/errors.js';
@@ -823,6 +823,86 @@ describe('InboundPipeline', () => {
         expect(seen[0]).toBeInstanceOf(PermanentStoreError);
         expect(seen[1]).toBeUndefined();
         expect(context.insertInbound).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('while something stays in the failed log', () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+
+      const stays = { saved: 0, kept: 1, rejected: 0 };
+      const nothingLeft = { saved: 1, kept: 0, rejected: 0 };
+
+      it('looks again every 5 minutes, picking up the media of what it stores, and stops when nothing is left', async () => {
+        const { pipeline, failedLog, media } = setup();
+        vi.mocked(failedLog.replay).mockResolvedValueOnce(stays).mockResolvedValueOnce(stays).mockResolvedValueOnce(nothingLeft);
+        expect(HELD_RETRY_INTERVAL_MS).toBe(5 * 60_000);
+
+        await pipeline.replayFailed();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS - 1);
+        expect(failedLog.replay).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(failedLog.replay).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS);
+        expect(failedLog.replay).toHaveBeenCalledTimes(3);
+        expect(media.resumePendingMedia).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 3);
+        expect(failedLog.replay).toHaveBeenCalledTimes(3);
+      });
+
+      it('with nothing staying there is no timer at all', async () => {
+        const { pipeline, failedLog } = setup();
+
+        await pipeline.replayFailed();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 3);
+
+        expect(failedLog.replay).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not start another pass on top of one that is taking long', async () => {
+        const { pipeline, failedLog } = setup();
+        let finish = () => {};
+        vi.mocked(failedLog.replay)
+          .mockResolvedValueOnce(stays)
+          .mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve(stays); }));
+
+        await pipeline.replayFailed();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 4);
+        expect(failedLog.replay).toHaveBeenCalledTimes(2);
+
+        finish();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS);
+        expect(failedLog.replay).toHaveBeenCalledTimes(3);
+        await pipeline.drain(10).catch(() => {});
+      });
+
+      it('keeps looking after a pass that could not read the file', async () => {
+        const { pipeline, failedLog } = setup();
+        vi.mocked(failedLog.replay).mockResolvedValueOnce(stays).mockRejectedValueOnce(new Error('disk')).mockResolvedValueOnce(nothingLeft);
+
+        await pipeline.replayFailed();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 2);
+
+        expect(failedLog.replay).toHaveBeenCalledTimes(3);
+      });
+
+      it('a shutdown cancels it, and a pass that ends during the shutdown does not start it again', async () => {
+        const { pipeline, failedLog } = setup();
+        vi.mocked(failedLog.replay).mockResolvedValueOnce(stays);
+        await pipeline.replayFailed();
+
+        const draining = pipeline.drain(1);
+        await vi.advanceTimersByTimeAsync(5);
+        await draining;
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 2);
+        expect(failedLog.replay).toHaveBeenCalledTimes(1);
+
+        vi.mocked(failedLog.replay).mockResolvedValueOnce(stays);
+        await pipeline.replayFailed();
+        await vi.advanceTimersByTimeAsync(HELD_RETRY_INTERVAL_MS * 2);
+        expect(failedLog.replay).toHaveBeenCalledTimes(2);
       });
     });
 

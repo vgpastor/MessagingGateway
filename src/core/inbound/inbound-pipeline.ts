@@ -33,16 +33,18 @@ export interface InboundPipelineDeps {
   persistRetryDelaysMs?: readonly number[];
   /** {@link STORE_PROBE_INTERVAL_MS} by default. */
   storeProbeIntervalMs?: number;
+  /** {@link HELD_RETRY_INTERVAL_MS} by default. */
+  heldRetryIntervalMs?: number;
 }
 
 /** What became of a message on its way to the log. Storage disabled counts as stored: there is nothing to wait for. */
 type PersistOutcome = 'stored' | 'duplicate' | 'written_off';
 
 /**
- * How long after connecting the accounts to look at the failed log again. As long as a connection attempt may
- * take: by then an account that could connect has a socket, which is what a LID needs to be resolved.
+ * How often to look again while something stays in the failed log: an account may connect at any
+ * moment (a QR waits for someone), and what failed may pass, with no outage or restart to bring them back.
  */
-export const REPLAY_AFTER_CONNECT_MS = 60_000;
+export const HELD_RETRY_INTERVAL_MS = 5 * 60 * 1000;
 
 /** How long a LID may wait in the failed log to be resolved. Past this, the phone it stands for is not coming. */
 export const LID_MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -93,7 +95,8 @@ export class InboundPipeline {
   private readonly guard: StoreGuard | undefined;
   /** Write-offs started so far: how {@link recover} tells that a pass may have missed something. */
   private writeOffs = 0;
-  private replayTimer: NodeJS.Timeout | undefined;
+  private heldRetryTimer: NodeJS.Timeout | undefined;
+  private draining = false;
 
   constructor(private readonly deps: InboundPipelineDeps) {
     this.guard = deps.store && new StoreGuard(deps.store, {
@@ -127,9 +130,8 @@ export class InboundPipeline {
    * media they left `pending` is picked up by {@link MediaService.resumePendingMedia}.
    *
    * The conversation filter applies again. What it excludes, and what belongs to an account that no
-   * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays:
-   * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start,
-   * up to {@link LID_MAX_WAIT_MS}. That, and what the store explicitly refuses, go to the log of rejects. What the store
+   * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays, and
+   * {@link HELD_RETRY_INTERVAL_MS} after each pass another looks again, up to {@link LID_MAX_WAIT_MS}. That, and what the store explicitly refuses, go to the log of rejects. What the store
    * fails to take without saying why stays. What its account has behind one that stays stays too, to keep their order,
    * and the other accounts go on. It gets a later number than the live messages that arrive meanwhile.
    * Resolves to how many entries reached the log.
@@ -140,7 +142,7 @@ export class InboundPipeline {
     if (!guard || !failedLog) return 0;
     let discarded = 0;
     const heldBack = new Set<string>();
-    const { saved, kept, rejected } = await failedLog.replay(async ({ envelope, raw }) => {
+    const replaying = failedLog.replay(async ({ envelope, raw }) => {
       if (heldBack.has(envelope.accountId)) throw new Error('an earlier message of its account is still waiting');
       try {
         const reason = await this.replayRejection(envelope);
@@ -155,6 +157,11 @@ export class InboundPipeline {
         throw err;
       }
     });
+    const { saved, kept, rejected } = await replaying.catch((err: unknown) => {
+      this.retryHeldLater();
+      throw err;
+    });
+    if (kept > 0) this.retryHeldLater();
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
     if (kept > 0) this.logger.warn('Inbound messages remain in the failed log', { kept });
@@ -198,13 +205,14 @@ export class InboundPipeline {
     }
   }
 
-  /**
-   * The second pass of a start, once the accounts have had time to connect. It runs off the start-up path, so
-   * it also picks up the media of what it stores. Live messages are flowing by then: what it stores gets a later number.
-   */
-  replayAfterConnecting(delayMs: number = REPLAY_AFTER_CONNECT_MS): void {
-    this.replayTimer = setTimeout(() => void this.recoverFailedLog(), delayMs);
-    this.replayTimer.unref();
+  /** Passes run one at a time and this one starts when the last has ended, so they cannot pile up. */
+  private retryHeldLater(): void {
+    if (this.draining || this.heldRetryTimer) return;
+    this.heldRetryTimer = setTimeout(() => {
+      this.heldRetryTimer = undefined;
+      void this.recoverFailedLog();
+    }, this.deps.heldRetryIntervalMs ?? HELD_RETRY_INTERVAL_MS);
+    this.heldRetryTimer.unref();
   }
 
   /**
@@ -252,7 +260,8 @@ export class InboundPipeline {
    */
   async drain(timeoutMs: number): Promise<void> {
     this.guard?.stop();
-    clearTimeout(this.replayTimer);
+    this.draining = true;
+    clearTimeout(this.heldRetryTimer);
 
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([

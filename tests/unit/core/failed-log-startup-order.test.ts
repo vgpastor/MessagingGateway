@@ -39,7 +39,7 @@ const { createBaileysProvider } = await import('../../../src/integrations/whatsa
 const { ProviderRegistry } = await import('../../../src/integrations/provider-registry.js');
 const { connectManagedProviders } = await import('../../../src/infrastructure/connect-managed-providers.js');
 const { EventBus } = await import('../../../src/core/event-bus.js');
-const { InboundPipeline, REPLAY_AFTER_CONNECT_MS } = await import('../../../src/core/inbound/inbound-pipeline.js');
+const { InboundPipeline } = await import('../../../src/core/inbound/inbound-pipeline.js');
 const { noopMetrics } = await import('../../../src/core/metrics/metrics.port.js');
 const { FailedInboundFile } = await import('../../../src/persistence/failed-inbound-file.js');
 const { SqliteMessageStore } = await import('../../../src/persistence/sqlite-message-store.js');
@@ -91,7 +91,7 @@ describe('the failed log through a real start', () => {
     await rm(resolve(process.cwd(), 'data', 'baileys-auth', ACCOUNT_ID), { recursive: true, force: true });
   });
 
-  function start() {
+  function start(heldRetryIntervalMs?: number) {
     const provider = createBaileysProvider();
     const registry = new ProviderRegistry();
     registry.register(provider);
@@ -107,6 +107,7 @@ describe('the failed log through a real start', () => {
       resolveLidToPhone: provider.resolveLidToPhone,
       isConnected: (a: ChannelAccount) => registry.getConnectionManager(a.provider)?.getConnectionInfo(a.id).status === 'connected',
       persistRetryDelaysMs: [],
+      heldRetryIntervalMs,
     });
     return { pipeline, media, connect: () => connectManagedProviders([account], registry, eventBus, pipeline) };
   }
@@ -120,7 +121,7 @@ describe('the failed log through a real start', () => {
     await file.append({ envelope: envelope('excluded', 'other@s.whatsapp.net'), raw: undefined });
     await file.append({ envelope: envelope('orphan', PHONE_JID, 'gone'), raw: undefined });
     await file.append({ envelope: envelope('allowed', PHONE_JID), raw: undefined });
-    const { pipeline, connect, media } = start();
+    const { pipeline, connect, media } = start(1);
 
     await pipeline.replayFailed();
 
@@ -128,7 +129,6 @@ describe('the failed log through a real start', () => {
     expect(await store.count({ accountId: ACCOUNT_ID })).toBe(0);
 
     await connect();
-    pipeline.replayAfterConnecting(1);
     await vi.waitFor(() => expect(existsSync(path)).toBe(false));
 
     const page = await store.queryAfter({ accountId: ACCOUNT_ID, afterAccountSeq: 0, limit: 10 });
@@ -176,26 +176,23 @@ describe('the failed log through a real start', () => {
     await pipeline.drain(10);
   });
 
-  it('gives the accounts a margin to connect, and a shutdown cancels the second pass', async () => {
-    expect(REPLAY_AFTER_CONNECT_MS).toBeGreaterThanOrEqual(30_000);
+  it('an account that connects late, waiting for a QR, gets its LID and its queue in without a restart, behind what arrived live meanwhile', async () => {
     await file.append({ envelope: envelope('lid', KNOWN_LID), raw: undefined });
-    const { pipeline, connect } = start();
+    await file.append({ envelope: envelope('behind', PHONE_JID), raw: undefined });
+    const { pipeline, connect, media } = start(1);
+    await pipeline.replayFailed();
+
+    // Pass after pass, with no socket to resolve the LID.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(await fileIds()).toEqual(['lid', 'behind']);
+    await pipeline.handle(account, envelope('live', PHONE_JID), {});
+
     await connect();
+    await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+    await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
 
-    vi.useFakeTimers();
-    try {
-      pipeline.replayAfterConnecting();
-      await vi.advanceTimersByTimeAsync(REPLAY_AFTER_CONNECT_MS - 1);
-      expect(await store.count({ accountId: ACCOUNT_ID })).toBe(0);
-
-      const draining = pipeline.drain(1);
-      await vi.advanceTimersByTimeAsync(10);
-      await draining;
-      await vi.advanceTimersByTimeAsync(REPLAY_AFTER_CONNECT_MS);
-      expect(await store.count({ accountId: ACCOUNT_ID })).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(await fileIds()).toEqual(['lid']);
+    const page = await store.queryAfter({ accountId: ACCOUNT_ID, afterAccountSeq: 0, limit: 10 });
+    expect(page.messages.map((m) => [m.id, m.accountSeq])).toEqual([['live', 1], ['lid', 2], ['behind', 3]]);
+    await pipeline.drain(10);
   });
 });
