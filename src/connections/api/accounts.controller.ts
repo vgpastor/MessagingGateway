@@ -8,6 +8,7 @@ import type { HealthCheckSchedulerPort } from '../../core/accounts/health-check-
 import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
 import type { PairingCodeCapable, ConnectionManagerPort } from '../../core/accounts/connection-manager.port.js';
 import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
+import { applyHealthResult } from '../../core/accounts/apply-health-result.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
@@ -26,6 +27,7 @@ export interface ValidatedAccountData {
   credentialsRef?: string;
   credentials?: string;
   providerConfig: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata: {
     owner: string;
     environment: 'production' | 'staging';
@@ -172,14 +174,6 @@ export async function accountsController(
       });
     }
 
-    // Auto-reconnect managed providers that are disconnected
-    const manager = deps.providerRegistry.getConnectionManager(account.provider);
-    if (manager && !manager.hasConnection(account.id)) {
-      connectWired(account, manager).catch((err) => {
-        fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
-      });
-    }
-
     return sanitizeAccount(account, deps.providerRegistry);
   });
 
@@ -217,18 +211,11 @@ export async function accountsController(
     const result = await deps.credentialValidator.validate(account);
 
     // Auto-update identity and status if discovered from provider
-    if (result.discoveredIdentity || result.status !== account.status) {
-      await deps.accountRepository.update(account.id, {
-        status: result.status,
-        ...(result.discoveredIdentity
-          ? { identity: { ...account.identity, ...result.discoveredIdentity } as AccountIdentity }
-          : {}),
-      });
-    }
+    const status = await applyHealthResult(deps.accountRepository, account.id, result);
 
     return {
       accountId: account.id,
-      status: result.status,
+      status: status ?? result.status,
       credentialsConfigured: result.credentialsConfigured,
       detail: result.detail,
       lastChecked: new Date().toISOString(),
@@ -275,6 +262,7 @@ export async function accountsController(
       credentialsRef: data.credentialsRef ?? '',
       credentials: data.credentials,
       providerConfig: data.providerConfig,
+      conversations: data.conversations,
       metadata: {
         owner: data.metadata.owner,
         environment: data.metadata.environment,
@@ -346,6 +334,7 @@ export async function accountsController(
       (body.identity as unknown as Record<string, unknown>)['channel'] = channel;
     }
 
+    const wasSuspended = existing.status === 'suspended';
     const updated = await deps.accountRepository.update(id, body);
     fastify.log.info(`Account updated: ${id}`);
 
@@ -359,6 +348,15 @@ export async function accountsController(
     if (!updated) {
       return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found after update' });
     }
+
+    // A suspended account was left out of the boot wiring and connection, and nothing else will open them.
+    const manager = deps.providerRegistry.getConnectionManager(updated.provider);
+    if (manager && wasSuspended && updated.status !== 'suspended') {
+      connectWired(updated, manager).catch((err) => {
+        fastify.log.warn(`Connecting reactivated account ${id} failed: ${(err as Error).message}`);
+      });
+    }
+
     return sanitizeAccount(updated, deps.providerRegistry);
   });
 
@@ -382,9 +380,9 @@ export async function accountsController(
     },
   }, async (request, reply) => {
     const { id } = request.params;
-    const deleted = await deps.accountRepository.remove(id);
+    const account = await deps.accountRepository.findById(id);
 
-    if (!deleted) {
+    if (!account) {
       return reply.status(404).send({
         error: 'Not Found',
         code: 'ACCOUNT_NOT_FOUND',
@@ -392,6 +390,17 @@ export async function accountsController(
       });
     }
 
+    // Otherwise its socket would keep receiving and reconnecting with no account behind it, and an
+    // account created later with this id would inherit the session. Failing here must not stop the deletion.
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
+    try {
+      await manager?.disconnect(id);
+      await manager?.clearSession?.(id, account.providerConfig);
+    } catch (err) {
+      fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
+    }
+
+    await deps.accountRepository.remove(id);
     fastify.log.info(`Account deleted: ${id}`);
     return { deleted: true, accountId: id };
   });

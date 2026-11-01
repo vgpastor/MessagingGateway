@@ -1,18 +1,19 @@
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccount } from '../../src/core/accounts/channel-account.js';
 import type { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
 
 // A fake WhatsApp socket per makeWASocket(); the test drives its 'messages.upsert'.
-const sockets: Array<{ ev: EventEmitter }> = [];
+const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn> }> = [];
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
   default: () => {
-    const socket = { ev: new EventEmitter(), logout: async () => {}, end: () => {} };
+    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: () => {} };
     sockets.push(socket);
     return socket;
   },
@@ -178,13 +179,37 @@ describe('accounts created at runtime', () => {
     expect(sockets.length).toBeGreaterThan(before);
   }
 
-  it('wires again when GET /accounts/:id auto-reconnects after a disconnect', async () => {
+  it('GET /accounts/:id only reads: an account that was closed stays closed', async () => {
     await create('hot-7');
     await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-7/connect', headers: HEADERS });
     await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-7/disconnect', headers: HEADERS });
     const before = sockets.length;
 
     const response = await app.inject({ method: 'GET', url: '/api/v1/accounts/hot-7', headers: HEADERS });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().connection.status).toBe('disconnected');
+    expect(sockets).toHaveLength(before);
+    expect(registry.getConnectionManager('baileys')!.hasConnection('hot-7')).toBe(false);
+  });
+
+  it('GET /accounts/:id does not open a socket for an account never connected', async () => {
+    await create('hot-7b');
+    const before = sockets.length;
+
+    await app.inject({ method: 'GET', url: '/api/v1/accounts/hot-7b', headers: HEADERS });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sockets).toHaveLength(before);
+  });
+
+  it('reactivating a suspended account connects it, wired: at boot it was left out of both', async () => {
+    ids.push('hot-10');
+    await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-10'))), status: 'suspended', providerConfig: {}, credentialsRef: '' });
+    const before = sockets.length;
+
+    const response = await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10', headers: HEADERS, payload: { status: 'active' } });
     expect(response.statusCode).toBe(200);
     await waitForNewSocket(before);
 
@@ -192,6 +217,82 @@ describe('accounts created at runtime', () => {
     await flush();
 
     expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PUT that does not reactivate opens nothing', async () => {
+    await create('hot-11');
+    const before = sockets.length;
+
+    await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-11', headers: HEADERS, payload: { alias: 'renamed' } });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sockets).toHaveLength(before);
+  });
+
+  it('DELETE /accounts/:id closes the account: device unlinked, no socket, no retries, no session on disk', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await create('hot-12');
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12/connect', headers: HEADERS });
+      const socket = sockets.at(-1)!;
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-12');
+      await mkdir(authDir, { recursive: true });
+      socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+      const before = sockets.length;
+
+      const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-12', headers: HEADERS });
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(response.statusCode).toBe(200);
+      expect(socket.logout).toHaveBeenCalledTimes(1);
+      expect(registry.getConnectionManager('baileys')!.hasConnection('hot-12')).toBe(false);
+      expect(sockets).toHaveLength(before);
+      expect(existsSync(authDir)).toBe(false);
+      expect(await repository.findById('hot-12')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('DELETE /accounts/:id still deletes the account when closing it fails', async () => {
+    await create('hot-13');
+    const manager = baileysProvider.connection!();
+    const failing = vi.spyOn(registry, 'getConnectionManager').mockReturnValue({
+      ...manager, disconnect: async () => { throw new Error('socket exploded'); },
+    } as never);
+
+    const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13', headers: HEADERS });
+    failing.mockRestore();
+
+    expect(response.statusCode).toBe(200);
+    expect(await repository.findById('hot-13')).toBeUndefined();
+  });
+
+  it('DELETE /accounts/:id answers 404 for an unknown account', async () => {
+    const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/nobody', headers: HEADERS });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('POST /accounts keeps the conversations it was given', async () => {
+    ids.push('hot-14');
+    const conversations = ['34600111222@s.whatsapp.net'];
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody('hot-14'), conversations },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect((await repository.findById('hot-14'))?.conversations).toEqual(conversations);
+  });
+
+  it('GET /accounts/:id/health reports a suspended account as suspended, and leaves it so', async () => {
+    ids.push('hot-15');
+    await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-15'))), status: 'suspended', providerConfig: {}, credentialsRef: '' });
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/accounts/hot-15/health', headers: HEADERS });
+
+    expect(response.json().status).toBe('suspended');
+    expect((await repository.findById('hot-15'))?.status).toBe('suspended');
   });
 
   it('wires again when POST /accounts/:id/reset re-pairs after a disconnect', async () => {
