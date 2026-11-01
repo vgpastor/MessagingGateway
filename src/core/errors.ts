@@ -23,6 +23,12 @@ export class AccountNotFoundError extends DomainError {
   }
 }
 
+export class AccountAlreadyExistsError extends DomainError {
+  constructor(accountId: string) {
+    super(`Account '${accountId}' already exists`, 'ACCOUNT_ALREADY_EXISTS');
+  }
+}
+
 export class InvalidPayloadError extends DomainError {
   constructor(message: string) {
     super(message, 'INVALID_PAYLOAD');

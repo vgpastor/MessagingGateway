@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccount } from '../../src/core/accounts/channel-account.js';
 import type { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
@@ -683,5 +684,66 @@ describe('accounts created at runtime', () => {
     expect(created.statusCode).toBe(201);
     const connect = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-6/connect', headers: HEADERS });
     expect(connect.statusCode).toBe(200);
+  });
+});
+
+describe('an account change that cannot reach the disk', () => {
+  let app: FastifyInstance;
+  let repository: InstanceType<typeof InMemoryAccountRepository>;
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'accounts-api-'));
+    const notADirectory = join(dir, 'not-a-directory');
+    await writeFile(notADirectory, '');
+    const existing = {
+      id: 'existing', alias: 'before', channel: 'whatsapp', provider: 'baileys', status: 'active',
+      identity: { channel: 'whatsapp', phoneNumber: '+34600000001' }, credentialsRef: '', providerConfig: {},
+      metadata: { owner: 'org', environment: 'production', tags: [] },
+    } as ChannelAccount;
+    repository = new InMemoryAccountRepository([existing], join(notADirectory, 'accounts.yaml'));
+    const registry = new ProviderRegistry();
+    registry.register(baileysProvider);
+    app = await createServer({
+      accountRepository: repository,
+      webhookConfigRepo: {} as never,
+      providerRegistry: registry,
+      messageRouter: new MessageRouterService(repository, registry),
+      credentialValidator: new CredentialValidator(registry),
+      webhookForwarder: new WebhookForwarder({} as never, undefined, undefined),
+      apiKey: 'test-api-key',
+      port: 0,
+      logLevel: 'silent',
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('POST answers 500 and the account does not exist', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: newAccountBody('never-saved') });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().code).toBe('SAVE_FAILED');
+    expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/never-saved', headers: HEADERS })).statusCode).toBe(404);
+  });
+
+  it('PUT answers 500 and the account stays as it was', async () => {
+    const res = await app.inject({ method: 'PUT', url: '/api/v1/accounts/existing', headers: HEADERS, payload: { alias: 'after' } });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().code).toBe('SAVE_FAILED');
+    expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/existing', headers: HEADERS })).json().alias).toBe('before');
+  });
+
+  it('DELETE answers 500 and the account is still there', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/existing', headers: HEADERS });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().code).toBe('SAVE_FAILED');
+    expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/existing', headers: HEADERS })).statusCode).toBe(200);
   });
 });

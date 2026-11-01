@@ -257,7 +257,7 @@ async function main() {
     logger.info('Unified Messaging Gateway listening', { port: envConfig.port });
     logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
-    await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
+    await connectManagedProviders(await accountRepository.findAll(), providerRegistry, eventBus, inboundPipeline);
     if (shutdown.started) return;
     inboundPipeline.replayAfterConnecting();
 

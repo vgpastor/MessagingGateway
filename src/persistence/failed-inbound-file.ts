@@ -5,6 +5,7 @@ import { PermanentStoreError } from '../core/errors.js';
 import type { FailedInboundEntry, FailedInboundLog, FailedInboundReplay } from '../core/inbound/failed-inbound-log.js';
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
+import { syncDirectory } from '../infrastructure/fs/sync-directory.js';
 
 function parseEntry(line: string): FailedInboundEntry {
   const { envelope, raw } = JSON.parse(line) as { envelope: UnifiedEnvelope; raw?: unknown };
@@ -20,9 +21,6 @@ function parseEntry(line: string): FailedInboundEntry {
     raw,
   };
 }
-
-/** Windows cannot flush a directory (EPERM), and NTFS journals the rename anyway. */
-const CANNOT_SYNC_A_DIRECTORY = new Set(['EPERM', 'EISDIR', 'EINVAL']);
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -117,7 +115,7 @@ export class FailedInboundFile implements FailedInboundLog {
     } finally {
       await file.close();
     }
-    await this.syncDirectory();
+    await syncDirectory(dirname(this.path));
     for (const { reason } of rejected) {
       getLogger().error('Inbound entry moved to the rejected log: it will not be stored', { path: this.rejectedPath, reason });
     }
@@ -158,24 +156,6 @@ export class FailedInboundFile implements FailedInboundLog {
       await file.close();
     }
     await rename(tmp, this.path);
-    await this.syncDirectory();
-  }
-
-  /** A failure here costs nothing but the guarantee: the old file may come back after a power cut, and that is a no-op too. */
-  private async syncDirectory(): Promise<void> {
-    const directory = dirname(this.path);
-    try {
-      const handle = await open(directory, 'r');
-      try {
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-    } catch (err) {
-      const { code } = err as NodeJS.ErrnoException;
-      if (!code || !CANNOT_SYNC_A_DIRECTORY.has(code)) {
-        getLogger().warn('Failed to flush the directory of the failed log', { error: err instanceof Error ? err.message : String(err) });
-      }
-    }
+    await syncDirectory(dirname(this.path));
   }
 }

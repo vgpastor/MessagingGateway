@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import * as fsPromises from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InMemoryAccountRepository } from '../../../src/infrastructure/config/in-memory-account.repository.js';
 import { loadAccountsFromYaml } from '../../../src/infrastructure/config/accounts.loader.js';
@@ -9,7 +9,7 @@ import type { ChannelAccount } from '../../../src/core/accounts/channel-account.
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...original, rename: vi.fn(original.rename) };
+  return { ...original, rename: vi.fn(original.rename), open: vi.fn(original.open) };
 });
 
 function account(id: string): ChannelAccount {
@@ -32,6 +32,7 @@ describe('InMemoryAccountRepository persistence', () => {
 
   afterEach(async () => {
     vi.mocked(fsPromises.rename).mockClear();
+    vi.mocked(fsPromises.open).mockClear();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -81,16 +82,83 @@ describe('InMemoryAccountRepository persistence', () => {
     expect(await readFile(path, 'utf-8')).toContain('alias-4');
   });
 
-  it('a write that fails keeps the previous file, and the next one still goes through', async () => {
-    const repository = new InMemoryAccountRepository([account('wa-1')], path);
-    await repository.update('wa-1', { alias: 'first' });
-    vi.mocked(fsPromises.rename).mockRejectedValueOnce(new Error('disk full'));
+  it('flushes the directory after the rename, so a power cut cannot bring the old file back', async () => {
+    const repository = new InMemoryAccountRepository([], path);
 
-    await repository.update('wa-1', { alias: 'lost' });
-    expect(await readFile(path, 'utf-8')).toContain('first');
+    await repository.save(account('wa-1'));
 
-    await repository.update('wa-1', { alias: 'second' });
-    expect(await readFile(path, 'utf-8')).toContain('second');
-    expect(await readdir(join(dir, 'nested'))).toEqual(['accounts.yaml']);
+    const openedDirectory = vi.mocked(fsPromises.open).mock.calls.findIndex(([opened]) => opened === dirname(path));
+    expect(openedDirectory).toBeGreaterThanOrEqual(0);
+    expect(vi.mocked(fsPromises.open).mock.invocationCallOrder[openedDirectory])
+      .toBeGreaterThan(vi.mocked(fsPromises.rename).mock.invocationCallOrder[0]!);
+  });
+
+  describe('a write that fails', () => {
+    /** What a start would load from the file, against what the running gateway holds. */
+    const inStep = async (repository: InMemoryAccountRepository) => {
+      expect((await repository.findAll()).map((a) => [a.id, a.alias])).toEqual(loadAccountsFromYaml(path).map((a) => [a.id, a.alias]));
+    };
+
+    async function onDisk(): Promise<InMemoryAccountRepository> {
+      vi.mocked(fsPromises.rename).mockReset();
+      const original = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      vi.mocked(fsPromises.rename).mockImplementation(original.rename);
+      const repository = new InMemoryAccountRepository([], path);
+      await repository.save(account('wa-1'));
+      vi.mocked(fsPromises.rename).mockRejectedValueOnce(new Error('disk full'));
+      return repository;
+    }
+
+    it('rejects a save, and the account is not there', async () => {
+      const repository = await onDisk();
+
+      await expect(repository.save(account('wa-2'))).rejects.toThrow('disk full');
+
+      expect(await repository.findById('wa-2')).toBeUndefined();
+      await inStep(repository);
+    });
+
+    it('rejects an update, and the account stays as it was', async () => {
+      const repository = await onDisk();
+
+      await expect(repository.update('wa-1', { alias: 'lost' })).rejects.toThrow('disk full');
+
+      expect((await repository.findById('wa-1'))?.alias).toBe('wa-1');
+      await inStep(repository);
+    });
+
+    it('rejects a removal, and the account is still there', async () => {
+      const repository = await onDisk();
+
+      await expect(repository.remove('wa-1')).rejects.toThrow('disk full');
+
+      expect(await repository.findById('wa-1')).toBeDefined();
+      await inStep(repository);
+    });
+
+    it('keeps the previous file, and the next one goes through without what failed', async () => {
+      const repository = await onDisk();
+
+      await expect(repository.update('wa-1', { alias: 'lost' })).rejects.toThrow();
+      expect(await readFile(path, 'utf-8')).not.toContain('lost');
+
+      await repository.update('wa-1', { alias: 'second' });
+      expect(await readFile(path, 'utf-8')).toContain('second');
+      expect(await readdir(join(dir, 'nested'))).toEqual(['accounts.yaml']);
+      await inStep(repository);
+    });
+
+    it('does not spoil the writes queued behind it', async () => {
+      const repository = await onDisk();
+
+      const results = await Promise.allSettled([
+        repository.update('wa-1', { alias: 'lost' }),
+        repository.update('wa-1', { conversations: ['123@g.us'] }),
+      ]);
+
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled']);
+      expect(await repository.findById('wa-1')).toMatchObject({ alias: 'wa-1', conversations: ['123@g.us'] });
+      expect(loadAccountsFromYaml(path)[0]).toMatchObject({ alias: 'wa-1', conversations: ['123@g.us'] });
+    });
   });
 });

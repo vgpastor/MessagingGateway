@@ -9,6 +9,7 @@ import type { ProviderLookupPort } from '../../core/providers/provider-lookup.po
 import type { PairingCodeCapable, ConnectionManagerPort } from '../../core/accounts/connection-manager.port.js';
 import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
 import { applyHealthResult } from '../../core/accounts/apply-health-result.js';
+import { AccountAlreadyExistsError } from '../../core/errors.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
@@ -332,10 +333,10 @@ export async function accountsController(
       return reply.status(201).send(sanitizeAccount(saved, deps.providerRegistry));
     } catch (err) {
       const message = (err as Error).message;
-      if (message.includes('already exists')) {
+      if (err instanceof AccountAlreadyExistsError) {
         return reply.status(409).send({
           error: 'Conflict',
-          code: 'ACCOUNT_ALREADY_EXISTS',
+          code: err.code,
           message,
         });
       }
@@ -359,6 +360,7 @@ export async function accountsController(
         200: accountResponseSchema,
         400: errorResponseSchema,
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -389,7 +391,12 @@ export async function accountsController(
     }
 
     const wasSuspended = existing.status === 'suspended';
-    const updated = await deps.accountRepository.update(id, body);
+    let updated: ChannelAccount | undefined;
+    try {
+      updated = await deps.accountRepository.update(id, body);
+    } catch (err) {
+      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
+    }
     fastify.log.info(`Account updated: ${id}`);
 
     // Auto health check when credentials change
@@ -435,6 +442,7 @@ export async function accountsController(
           required: ['deleted', 'accountId'],
         },
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -459,7 +467,11 @@ export async function accountsController(
     }
     manager?.forgetAccount?.(id);
 
-    await deps.accountRepository.remove(id);
+    try {
+      await deps.accountRepository.remove(id);
+    } catch (err) {
+      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
+    }
     fastify.log.info(`Account deleted: ${id}`);
     return { deleted: true, accountId: id };
   });
