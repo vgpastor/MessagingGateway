@@ -8,12 +8,12 @@ import type { ChannelAccount } from '../../src/core/accounts/channel-account.js'
 import type { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
 
 // A fake WhatsApp socket per makeWASocket(); the test drives its 'messages.upsert'.
-const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }> = [];
+const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; requestPairingCode: ReturnType<typeof vi.fn> }> = [];
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
   default: () => {
-    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: vi.fn() };
+    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: vi.fn(), requestPairingCode: vi.fn(async () => 'ABCD1234') };
     sockets.push(socket);
     return socket;
   },
@@ -31,6 +31,8 @@ const { CredentialValidator } = await import('../../src/infrastructure/credentia
 const { createServer } = await import('../../src/infrastructure/server.js');
 const { connectManagedProviders } = await import('../../src/infrastructure/connect-managed-providers.js');
 const { EventBus } = await import('../../src/core/event-bus.js');
+
+const { createLogCapture } = await import('./helpers/test-server.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const HEADERS = { 'x-api-key': 'test-api-key' };
@@ -309,6 +311,17 @@ describe('accounts created at runtime', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('POST /accounts refuses an id that is not a safe folder name, and the contract says so', async () => {
+    const response = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: newAccountBody('..') });
+    const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
+    const body = spec.json().paths['/api/v1/accounts'].post.requestBody.content['application/json'].schema;
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('INVALID_PAYLOAD');
+    expect(await repository.findById('..')).toBeUndefined();
+    expect(body.properties.id.pattern).toBe('^[A-Za-z0-9][A-Za-z0-9_-]*$');
+  });
+
   it('POST /accounts keeps the conversations it was given', async () => {
     ids.push('hot-14');
     const conversations = ['34600111222@s.whatsapp.net'];
@@ -459,9 +472,10 @@ describe('accounts created at runtime', () => {
     await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/disconnect', headers: HEADERS });
     const before = sockets.length;
 
-    // The fake socket has no requestPairingCode, so the request ends 400; the connection is what matters.
-    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
-    expect(sockets.length).toBeGreaterThan(before);
+    const pair = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
+    await waitForNewSocket(before);
+    sockets.at(-1)!.ev.emit('connection.update', { qr: 'QR' });
+    expect((await pair).statusCode).toBe(200);
 
     sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
     await flush();
@@ -590,6 +604,55 @@ describe('accounts created at runtime', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe('INVALID_PAYLOAD');
     expect(await repository.findById('hot-14c')).toBeUndefined();
+  });
+
+  it('POST /accounts/:id/pair asks for the code only once WhatsApp has answered the handshake', async () => {
+    await create('hot-25');
+    const before = sockets.length;
+
+    const pair = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-25/pair', headers: HEADERS, payload: { phoneNumber: '+34 600 000 009' } });
+    await waitForNewSocket(before);
+    const socket = sockets.at(-1)!;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(socket.requestPairingCode).not.toHaveBeenCalled();
+
+    socket.ev.emit('connection.update', { qr: 'QR' });
+    const response = await pair;
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().pairingCode).toBe('ABCD1234');
+    expect(socket.requestPairingCode).toHaveBeenCalledWith('34600000009');
+  });
+
+  it('POST /accounts/:id/pair logs the phone masked', async () => {
+    const capture = createLogCapture();
+    const logged = await createServer({
+      accountRepository: repository,
+      webhookConfigRepo: {} as never,
+      providerRegistry: registry,
+      messageRouter: new MessageRouterService(repository, registry),
+      credentialValidator: new CredentialValidator(registry),
+      webhookForwarder: new WebhookForwarder({} as never, undefined, undefined),
+      apiKey: 'test-api-key',
+      port: 0,
+      logLevel: 'info',
+      logStream: capture.stream,
+    });
+    await logged.ready();
+    try {
+      await create('hot-26');
+      await baileysProvider.connection!().connect('hot-26', {});
+      sockets.at(-1)!.ev.emit('connection.update', { qr: 'QR' });
+
+      const response = await logged.inject({ method: 'POST', url: '/api/v1/accounts/hot-26/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
+
+      expect(response.statusCode).toBe(200);
+      expect(capture.text()).toContain('Pairing code requested');
+      expect(capture.text()).toContain('***0009');
+      expect(capture.text()).not.toContain('34600000009');
+    } finally {
+      await logged.close();
+    }
   });
 
   it('still creates and connects the account when wiring fails', async () => {

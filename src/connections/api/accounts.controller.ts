@@ -92,6 +92,11 @@ function validatedBody<T>(validate: (body: unknown) => ValidationResult<T>) {
   };
 }
 
+/** Enough to tell two numbers apart in a log, not enough to contact anyone. */
+function maskPhone(phoneNumber: string): string {
+  return `***${phoneNumber.slice(-4)}`;
+}
+
 /** A suspended account must not connect: only reactivating it does, through PUT. */
 function accountSuspended(accountId: string) {
   return {
@@ -585,7 +590,7 @@ export async function accountsController(
       const pairingCode = await (manager as unknown as PairingCodeCapable).requestPairingCode(account.id, phoneNumber);
 
       fastify.log.info(
-        { accountId: account.id, phoneNumber },
+        { accountId: account.id, phoneNumber: maskPhone(phoneNumber) },
         'Pairing code requested',
       );
 

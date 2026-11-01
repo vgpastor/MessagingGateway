@@ -62,6 +62,9 @@ const CONNECTION_REPLACED_MIN_DELAY_MS = 5 * 60 * 1000;
 /** A logout is one frame to WhatsApp, and whoever asked for it is waiting: on a bad connection it is not worth more. */
 const LOGOUT_TIMEOUT_MS = 5_000;
 
+/** How long a pairing request waits for a socket that is still connecting; the handshake takes a few seconds. */
+const PAIRING_READY_TIMEOUT_MS = 15_000;
+
 /** How long Baileys' retry counters and group metadata stay cached. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5000;
@@ -205,7 +208,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
       if (connection === 'close') {
         entry.connectionStatus = 'disconnected';
-        // Keep lastQr across reconnections so the API can still serve it
+        // It belonged to this connection: nobody can pair with it any more.
+        entry.lastQr = undefined;
         const error = lastDisconnect?.error as Boom | undefined;
         const statusCode = error?.output?.statusCode;
         const sessionLost = statusCode !== undefined && SESSION_LOST_CODES.has(statusCode);
@@ -221,8 +225,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         const isCurrent = this.sockets.get(accountId) === entry;
 
         if (shouldReconnect) {
-          // Keep the dead entry (status 'disconnected', QR intact) until the
-          // timer replaces it, so the account stays registered while it backs off.
+          // Keep the dead entry (status 'disconnected') until the timer
+          // replaces it, so the account stays registered while it backs off.
           if (isCurrent) {
             if (entry.openedAt !== undefined && Date.now() - entry.openedAt >= STABLE_CONNECTION_MS) {
               this.reconnectAttempts.delete(accountId);
@@ -513,6 +517,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       throw new Error(`No socket for account '${accountId}'. Connect first.`);
     }
 
+    await this.waitUntilPairable(accountId, entry);
+
     if (entry.connectionStatus === 'connected') {
       throw new Error(`Account '${accountId}' is already connected.`);
     }
@@ -521,6 +527,36 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
     const code = await entry.socket.requestPairingCode(cleaned);
     return code;
+  }
+
+  /**
+   * Baileys sends the request over the socket as it is: while it is still opening that throws
+   * "Connection Closed", and before the handshake ends WhatsApp could not read it. The first QR is
+   * the sign that an unpaired session got there. An open or a close also ends the wait: the caller
+   * answers those.
+   */
+  private waitUntilPairable(accountId: string, entry: SocketEntry): Promise<void> {
+    if (entry.lastQr !== undefined || entry.connectionStatus !== 'connecting') {
+      return Promise.resolve();
+    }
+    const events = entry.socket.ev;
+    return new Promise((resolve, reject) => {
+      const onUpdate = (update: Partial<BaileysEventMap['connection.update']>) => {
+        if (update.qr || update.connection === 'open' || update.connection === 'close') {
+          stop();
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        stop();
+        reject(new Error(`The connection of account '${accountId}' is not ready for pairing yet. Try again.`));
+      }, PAIRING_READY_TIMEOUT_MS);
+      const stop = () => {
+        clearTimeout(timer);
+        events.off('connection.update', onUpdate);
+      };
+      events.on('connection.update', onUpdate);
+    });
   }
 
   async getGroups(accountId: string): Promise<GroupInfo[]> {
@@ -630,16 +666,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     if (this.clearing.has(accountId) || this.ended.has(accountId)) {
       return;
     }
-    // Carry the last QR over so the API can keep serving it until a new one arrives.
-    const prevQr = this.sockets.get(accountId)?.lastQr;
     this.sockets.delete(accountId);
 
     try {
       await this.connect(accountId, config);
-      const entry = this.sockets.get(accountId);
-      if (entry && !entry.lastQr && prevQr) {
-        entry.lastQr = prevQr;
-      }
     } catch (err) {
       getLogger().error('Reconnection failed', { provider: 'baileys', accountId, error: err instanceof Error ? err.message : String(err) });
       this.scheduleReconnect(accountId, config, undefined);
