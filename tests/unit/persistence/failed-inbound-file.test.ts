@@ -15,6 +15,7 @@ import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import { noopMediaService } from '../../../src/core/inbound/media-service.js';
 import { noopMetrics } from '../../../src/core/metrics/metrics.port.js';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
+import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
 import type { MessageLogPort } from '../../../src/core/persistence/message-store.port.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 import { FailedInboundFile } from '../../../src/persistence/failed-inbound-file.js';
@@ -97,13 +98,156 @@ describe('FailedInboundFile', () => {
 
     down = false;
     await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+    await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled()); // the recovery has ended
     await pipeline.handle(account, envelope('m4', 'W4'), { n: 4 });
 
     const page = await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 });
     expect(page.messages.map((m) => [m.id, m.accountSeq])).toEqual([['m1', 1], ['m2', 2], ['m3', 3], ['m4', 4]]);
     expect(emitted).toEqual([undefined, undefined, undefined, 4]);
-    expect(media.resumePendingMedia).toHaveBeenCalled();
     await pipeline.drain(10);
+  });
+
+  describe('accountSeq keeps the order of arrival across an outage', () => {
+    /** A message log that fails while `down`, and holds the save of an id for as long as the test says. */
+    function outageRig(failedLog: FailedInboundLog = file) {
+      const rig = {
+        down: true,
+        holds: new Map<string, Promise<void>>(),
+        emitted: [] as Array<[string, number | undefined]>,
+        pipeline: undefined as unknown as InboundPipeline,
+        numbers: async () => (await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 20 })).messages.map((m) => [m.id, m.accountSeq]),
+      };
+      const log = {
+        insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+          await rig.holds.get(e.id);
+          if (rig.down) throw new Error('db down');
+          return store.insertInbound(e, r);
+        },
+        ping: async () => {
+          if (rig.down) throw new Error('db down');
+        },
+      };
+      const bus = new EventBus();
+      bus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (event) => { rig.emitted.push([event.data.envelope.id, event.data.envelope.accountSeq]); });
+      rig.pipeline = new InboundPipeline({
+        store: log as MessageLogPort, failedLog, eventBus: bus, media: noopMediaService, metrics: noopMetrics, accounts: knownAccount,
+        persistRetryDelaysMs: [], storeProbeIntervalMs: 5,
+      });
+      return rig;
+    }
+
+    const gate = () => {
+      let open = () => {};
+      const opened = new Promise<void>((resolve) => { open = resolve; });
+      return { opened, open };
+    };
+
+    afterEach(() => vi.useRealTimers());
+
+    it('what arrives while the log is replayed goes behind it, delivered live, and only then messages are stored directly', async () => {
+      const rig = outageRig();
+      await rig.pipeline.handle(account, envelope('m1', 'W1'), {});
+      await rig.pipeline.handle(account, envelope('m2', 'W2'), {});
+
+      const replaying = gate();
+      const reached = vi.fn();
+      rig.holds.set('m1', replaying.opened.then(reached));
+      rig.down = false;
+      await vi.waitFor(async () => expect(await readFile(path, 'utf8')).toContain('m1'));
+      await new Promise((resolve) => setTimeout(resolve, 30)); // the ping answered, and the pass is held at m1
+      await rig.pipeline.handle(account, envelope('during', 'W3'), {});
+      expect(await rig.numbers()).toEqual([]);
+
+      replaying.open();
+      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await rig.pipeline.handle(account, envelope('after', 'W4'), {});
+
+      expect(await rig.numbers()).toEqual([['m1', 1], ['m2', 2], ['during', 3], ['after', 4]]);
+      expect(rig.emitted).toEqual([['m1', undefined], ['m2', undefined], ['during', undefined], ['after', 4]]);
+      await rig.pipeline.drain(10);
+    });
+
+    it('holds with a cut that starts again during the recovery', async () => {
+      const rig = outageRig();
+      for (const id of ['m1', 'm2', 'm3']) await rig.pipeline.handle(account, envelope(id, `W-${id}`), {});
+
+      const atSecond = gate();
+      rig.holds.set('m2', atSecond.opened);
+      rig.down = false;
+      await vi.waitFor(async () => expect((await rig.numbers()).map(([id]) => id)).toEqual(['m1']));
+      rig.down = true;
+      atSecond.open();
+      rig.holds.delete('m2');
+      await vi.waitFor(async () => expect(JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!).envelope.id).toBe('m2'));
+
+      await rig.pipeline.handle(account, envelope('during-cut', 'W5'), {});
+      expect(await rig.numbers()).toEqual([['m1', 1]]);
+
+      rig.down = false;
+      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await rig.pipeline.handle(account, envelope('after', 'W6'), {});
+
+      expect(await rig.numbers()).toEqual([['m1', 1], ['m2', 2], ['m3', 3], ['during-cut', 4], ['after', 5]]);
+      await rig.pipeline.drain(10);
+    });
+
+    it('a message still being written when the recovery ends is stored before the next of its account, whatever the state says by then', async () => {
+      const writing = gate();
+      const slowFile: FailedInboundLog = {
+        append: async (entry) => {
+          if (entry.envelope.id === 'late') await writing.opened;
+          await file.append(entry);
+        },
+        replay: (save) => file.replay(save),
+      };
+      const rig = outageRig(slowFile);
+      await rig.pipeline.handle(account, envelope('m1', 'W1'), {});
+
+      const replaying = gate();
+      rig.holds.set('m1', replaying.opened);
+      rig.down = false;
+      await new Promise((resolve) => setTimeout(resolve, 30)); // the ping answered, and the pass is held at m1
+      const late = rig.pipeline.handle(account, envelope('late', 'W2'), {});
+      await new Promise((resolve) => setImmediate(resolve));
+      replaying.open();
+      await vi.waitFor(async () => expect((await rig.numbers()).map(([id]) => id)).toEqual(['m1']));
+      await new Promise((resolve) => setTimeout(resolve, 20)); // the recovery found nothing else, and ended
+
+      const next = rig.pipeline.handle(account, envelope('next', 'W3'), {});
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await rig.numbers()).toEqual([['m1', 1]]);
+
+      writing.open();
+      await Promise.all([late, next]);
+
+      expect(await rig.numbers()).toEqual([['m1', 1], ['late', 2], ['next', 3]]);
+      expect(rig.emitted).toEqual([['m1', undefined], ['late', undefined], ['next', 3]]);
+      expect(existsSync(path)).toBe(false);
+      await rig.pipeline.drain(10);
+    });
+
+    it('a LID waiting does not hold the recovery: it stays, and messages are stored directly', async () => {
+      const withList = { ...account, conversations: ['c@s.whatsapp.net'] } as ChannelAccount;
+      const log = { insertInbound: async (e: UnifiedEnvelope, r?: unknown) => store.insertInbound(e, r), ping: async () => {} };
+      const pipeline = new InboundPipeline({
+        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics,
+        accounts: { findById: async () => withList }, persistRetryDelaysMs: [], storeProbeIntervalMs: 1,
+      });
+      await file.append({ envelope: { ...envelope('lid', 'W1'), conversationId: '1@lid' }, raw: undefined });
+      const failing = vi.spyOn(log, 'insertInbound').mockRejectedValueOnce(new Error('blip'));
+
+      await pipeline.handle(withList, envelope('opener', 'W2'), {});
+      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(1));
+      failing.mockRestore();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await pipeline.handle(withList, envelope('after', 'W3'), {});
+
+      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq])).toEqual([['opener', 1], ['after', 2]]);
+      expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['lid']);
+      await pipeline.drain(10);
+    });
   });
 
   it('a COMMIT whose answer was lost: the retry finds the row and the message goes out with its real number', async () => {

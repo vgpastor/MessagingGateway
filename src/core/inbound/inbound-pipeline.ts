@@ -76,7 +76,8 @@ const phoneDigits = (resolved: string | undefined): string | undefined =>
  *
  * A message the log will not take ({@link StoreGuard} decides how hard to try) goes to the
  * failed log and is still delivered live, without a sequence. The failed log is stored
- * ({@link replayFailed}) as soon as the log is back after an outage, and at every start.
+ * ({@link replayFailed}) as soon as the log is back after an outage, and at every start. Until it
+ * is in ({@link recover}) new messages follow it there, so numbers keep the order of arrival.
  */
 export class InboundPipeline {
   private get logger() {
@@ -88,6 +89,8 @@ export class InboundPipeline {
   /** Accepted by {@link handle} and neither stored nor written off yet: what a shutdown must not lose. */
   private readonly unsaved = new Set<InboundMessage>();
   private readonly guard: StoreGuard | undefined;
+  /** Write-offs started so far: how {@link recover} tells that a pass may have missed something. */
+  private writeOffs = 0;
   private replayTimer: NodeJS.Timeout | undefined;
   /** Until then no LID can be resolved, however long it has waited, and that says nothing about the LID. */
   private accountsHadTimeToConnect = false;
@@ -96,7 +99,7 @@ export class InboundPipeline {
     this.guard = deps.store && new StoreGuard(deps.store, {
       retryDelaysMs: deps.persistRetryDelaysMs,
       probeIntervalMs: deps.storeProbeIntervalMs,
-      onRecovered: () => void this.recoverFailedLog(),
+      onAnswering: () => void this.recover(),
     });
   }
 
@@ -151,6 +154,30 @@ export class InboundPipeline {
       this.logger.error('Inbound messages moved to the log of rejects: they will not be stored', { rejected });
     }
     return stored;
+  }
+
+  /**
+   * After an outage: passes over the failed log until one started with nothing new on its way, which leaves only
+   * LIDs waiting. There is no `await` between that check and {@link StoreGuard.finishRecovery}, so a message that
+   * finds the log closed from here on goes straight in. One refused before it and still being written is
+   * {@link persist}'s to finish. A failed log that cannot be read must not leave a working store out of use.
+   */
+  private async recover(): Promise<void> {
+    const { guard } = this;
+    if (!guard) return;
+    let stored = 0;
+    try {
+      let startedAt: number;
+      do {
+        startedAt = this.writeOffs;
+        stored += await this.replayFailed();
+      } while (guard.recovering && this.writeOffs !== startedAt);
+      guard.finishRecovery();
+      if (stored > 0) await this.deps.media.resumePendingMedia();
+    } catch (err) {
+      guard.finishRecovery();
+      this.logger.error('Failed to recover the failed inbound log', { error: errorMessage(err) });
+    }
   }
 
   /** {@link replayFailed} away from the first pass of a start: nobody else will pick up the media of what it stores. */
@@ -314,17 +341,23 @@ export class InboundPipeline {
 
   /** Writes the message to the log and stamps `seq`/`accountSeq` on the envelope, or writes it off without them. */
   private async persist(message: InboundMessage): Promise<PersistOutcome> {
-    if (!this.guard) return 'stored';
+    const { guard } = this;
+    if (!guard) return 'stored';
     const { envelope } = message;
     const raw = this.storableRaw(message.raw);
     try {
-      const result = await this.guard.insert(envelope, raw);
+      const result = await guard.insert(envelope, raw);
       if (!result.inserted) return 'duplicate';
       envelope.seq = result.seq;
       envelope.accountSeq = result.accountSeq;
       return 'stored';
     } catch (err) {
-      if (this.unsaved.has(message)) await this.writeOff(envelope, raw, err);
+      if (this.unsaved.has(message)) {
+        await this.writeOff(envelope, raw, err);
+        this.unsaved.delete(message);
+      }
+      // The next of this account is waiting for this one, and with the log taking messages directly it would overtake it.
+      if (guard.takingDirectly) await this.recoverFailedLog();
       return 'written_off';
     }
   }
@@ -340,6 +373,7 @@ export class InboundPipeline {
 
   private async writeOff(envelope: UnifiedEnvelope, raw: unknown, cause: unknown): Promise<void> {
     const context = { accountId: envelope.accountId, messageId: envelope.id };
+    this.writeOffs += 1;
     this.deps.metrics.persistFailures();
     this.logger.error('Failed to persist inbound message, keeping it in the failed log', { ...context, error: errorMessage(cause) });
     try {

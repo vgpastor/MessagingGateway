@@ -24,12 +24,13 @@ export interface StoreGuardOptions {
   retryDelaysMs?: readonly number[];
   /** {@link STORE_PROBE_INTERVAL_MS} by default. */
   probeIntervalMs?: number;
-  /** The circuit closed: the log takes messages again. */
-  onRecovered: () => void;
+  /** The log answers again: time to store the failed log, and then call {@link StoreGuard.finishRecovery}. */
+  onAnswering: () => void;
 }
 
-/** The outage in course: the error every message gets until it is over. */
-interface Outage {
+/** Why live messages are not reaching the log: it is down, or it is taking the failed log first. And the error they get. */
+interface Diversion {
+  phase: 'down' | 'recovering';
   cause: unknown;
 }
 
@@ -37,14 +38,18 @@ interface Outage {
  * How the inbound path talks to the message log when it fails. A failure may pass, so a message
  * is retried inside its account's queue. A message that runs out of retries means the store is
  * down: the circuit opens, and from then on {@link insert} rejects at once instead of holding
- * every queue for half a minute per message. A ping every {@link STORE_PROBE_INTERVAL_MS} closes
- * it: it depends on no message, so none can keep the circuit open. The message that opened it goes
- * to the failed log like the rest.
+ * every queue for half a minute per message. A ping every {@link STORE_PROBE_INTERVAL_MS} tells when
+ * it is back: it depends on no message, so none can keep the circuit open. The message that opened it
+ * goes to the failed log like the rest.
+ *
+ * What is in the failed log arrived first. So when the ping answers the circuit does not close yet: it is
+ * recovering, the failed log goes in through {@link insertOnce}, and live messages keep rejecting, to
+ * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again.
  *
  * A failure of the message itself is not retried and opens nothing.
  */
 export class StoreGuard {
-  private outage: Outage | undefined;
+  private diversion: Diversion | undefined;
   private probeTimer: NodeJS.Timeout | undefined;
   private stopped = false;
   /** Wakes a message waiting for its next attempt. */
@@ -63,7 +68,7 @@ export class StoreGuard {
   async insert(envelope: UnifiedEnvelope, raw: unknown): Promise<InsertResult> {
     const delays = this.options.retryDelaysMs ?? PERSIST_RETRY_DELAYS_MS;
     for (let attempt = 0; ; attempt++) {
-      if (this.outage) throw this.outage.cause;
+      if (this.diversion) throw this.diversion.cause;
       try {
         const result = await this.store.insertInbound(envelope, raw);
         return attempt > 0 ? this.settleRetried(envelope, result) : result;
@@ -88,7 +93,8 @@ export class StoreGuard {
    * the circuit; a failure that is the message's rejects with a `PermanentStoreError`.
    */
   async insertOnce(envelope: UnifiedEnvelope, raw: unknown): Promise<InsertResult> {
-    if (this.outage) throw this.outage.cause;
+    if (this.stopped) throw new Error('shutting down');
+    if (this.diversion?.phase === 'down') throw this.diversion.cause;
     try {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
@@ -96,6 +102,23 @@ export class StoreGuard {
       this.open(err);
       throw err;
     }
+  }
+
+  /** The failed log is being stored, and nothing has stopped it. */
+  get recovering(): boolean {
+    return !this.stopped && this.diversion?.phase === 'recovering';
+  }
+
+  /** A live message goes straight to the log. */
+  get takingDirectly(): boolean {
+    return !this.stopped && !this.diversion;
+  }
+
+  /** Live messages reach the log again. Does nothing if the recovery was cut short meanwhile. */
+  finishRecovery(): void {
+    if (!this.recovering) return;
+    this.diversion = undefined;
+    this.logger.info('Message log is back');
   }
 
   /** For shutdown: nobody waits between attempts any more, and the store is not probed again. */
@@ -115,8 +138,8 @@ export class StoreGuard {
   }
 
   private open(cause: unknown): void {
-    if (this.outage || this.stopped) return;
-    this.outage = { cause };
+    if (this.diversion?.phase === 'down' || this.stopped) return;
+    this.diversion = { phase: 'down', cause };
     this.logger.error('Message log is down: inbound messages go to the failed log until it is back', { error: errorMessage(cause) });
     this.wakeRetries();
     this.scheduleProbe();
@@ -128,7 +151,7 @@ export class StoreGuard {
   }
 
   private async probe(): Promise<void> {
-    if (!this.outage) return;
+    if (this.diversion?.phase !== 'down') return;
     try {
       await this.store.ping();
     } catch (err) {
@@ -137,9 +160,9 @@ export class StoreGuard {
       return;
     }
     if (this.stopped) return;
-    this.outage = undefined;
-    this.logger.info('Message log is back');
-    this.options.onRecovered();
+    this.diversion = { phase: 'recovering', cause: new Error('the message log is taking the failed log first') };
+    this.logger.info('Message log answers: storing the failed log before anything new');
+    this.options.onAnswering();
   }
 
   private waitToRetry(delayMs: number): Promise<void> {
