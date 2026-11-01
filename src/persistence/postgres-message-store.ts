@@ -20,6 +20,7 @@ import {
 } from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
+type PoolConfig = import('pg').PoolConfig;
 
 const COLUMNS = envelopeColumns('postgres');
 
@@ -32,12 +33,21 @@ const CONNECTION_TIMEOUT_MS = 5_000;
  */
 const QUERY_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a transaction may sit open with nothing running. The query timeout only frees the client: a partition
+ * leaves the server holding the transaction, and with it the account's counter row, which every insert of that
+ * account needs. Postgres ends the session after this. Only {@link insertInbound} opens transactions, in milliseconds.
+ */
+const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
+
 /** A retention delete can be large, and it holds back no queue. `0` would not disable the limit: pg falls back to the pool's. */
 const RETENTION_QUERY_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface PostgresMessageStoreOptions {
   /** {@link QUERY_TIMEOUT_MS} by default. */
   queryTimeoutMs?: number;
+  /** {@link IDLE_IN_TRANSACTION_TIMEOUT_MS} by default. */
+  idleInTransactionTimeoutMs?: number;
 }
 
 /**
@@ -54,7 +64,10 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   async init(): Promise<void> {
     try {
-      this.pool = await this.createPool(this.options.queryTimeoutMs ?? QUERY_TIMEOUT_MS);
+      this.pool = await this.createPool({
+        query_timeout: this.options.queryTimeoutMs ?? QUERY_TIMEOUT_MS,
+        idle_in_transaction_session_timeout: this.options.idleInTransactionTimeoutMs ?? IDLE_IN_TRANSACTION_TIMEOUT_MS,
+      });
 
       // Verify connection
       const client = await this.pool.connect();
@@ -70,12 +83,12 @@ export class PostgresMessageStore implements FullMessageStorePort {
     }
   }
 
-  private async createPool(queryTimeoutMs?: number): Promise<PgPool> {
+  private async createPool(limits: Pick<PoolConfig, 'query_timeout' | 'idle_in_transaction_session_timeout'> = {}): Promise<PgPool> {
     const { Pool } = await import('pg');
     const pool = new Pool({
       connectionString: this.connectionString,
       connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
-      ...(queryTimeoutMs === undefined ? {} : { query_timeout: queryTimeoutMs }),
+      ...limits,
     });
     // An idle connection dying (Postgres restart) is not fatal: the pool opens another one.
     // Without a listener the 'error' event would take the whole process down.
@@ -87,7 +100,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   /**
    * Run migrations — called externally by the factory after init(). On a pool of their own, with no
-   * query timeout: a migration may rewrite a whole table, and failing it would stop the gateway from starting.
+   * limits: a migration may rewrite a whole table, and failing it would stop the gateway from starting.
    */
   async runMigrations(): Promise<void> {
     this.requirePool();

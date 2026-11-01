@@ -2,11 +2,12 @@
  * The pool's query timeout, against a real Postgres: what hangs is a statement blocked by a lock
  * held from another connection, the closest a test gets to a network partition.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient, Pool } from 'pg';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
+import { PostgresMigrationAdapter } from '../../../src/persistence/migrations/adapters/postgres-migration.adapter.js';
 
 const PG_URL = process.env.TEST_DATABASE_URL;
 const ACCOUNT = 'wa-1';
@@ -37,8 +38,8 @@ describe.skipIf(!PG_URL)('PostgresMessageStore query timeout', () => {
   let locker: PoolClient;
   let store: PostgresMessageStore;
 
-  const open = async (queryTimeoutMs: number) => {
-    const opened = new PostgresMessageStore(url, { queryTimeoutMs });
+  const open = async (queryTimeoutMs: number, idleInTransactionTimeoutMs?: number) => {
+    const opened = new PostgresMessageStore(url, { queryTimeoutMs, idleInTransactionTimeoutMs });
     await opened.init();
     return opened;
   };
@@ -126,7 +127,7 @@ describe.skipIf(!PG_URL)('PostgresMessageStore query timeout', () => {
   });
 
   it('does not apply to retention: a large delete takes its time, away from any queue', async () => {
-    const tight = await open(200);
+    const tight = await open(200, 100);
     try {
       await store.insertInbound(envelope('old'));
       await root.query(`UPDATE "${schema}".messages SET created_at = NOW() - interval '10 days'`);
@@ -141,5 +142,76 @@ describe.skipIf(!PG_URL)('PostgresMessageStore query timeout', () => {
     } finally {
       await tight.close();
     }
+  });
+
+  describe('a transaction left open', () => {
+    /** The store's own pool: a transaction this test abandons is one a partition would leave behind. */
+    const poolOf = (opened: PostgresMessageStore) => (opened as unknown as { pool: Pool }).pool;
+    const setting = async (pool: Pick<Pool, 'query'>) =>
+      (await pool.query('SHOW idle_in_transaction_session_timeout')).rows[0].idle_in_transaction_session_timeout;
+
+    it('the pool of the store closes it after 60 s by default', async () => {
+      await expect(setting(poolOf(store))).resolves.toBe('1min');
+    });
+
+    it('Postgres ends it and the lock goes with it: the next insert of the account works', async () => {
+      const short = await open(5_000, 200);
+      const abandoned = await poolOf(short).connect();
+      // on, not once: the FATAL from the server is followed by a second error when the connection closes.
+      const lost = new Promise((resolve) => abandoned.on('error', resolve));
+      try {
+        await abandoned.query('BEGIN');
+        await abandoned.query(`INSERT INTO account_counters (account_id, n) VALUES ($1, 0)`, [ACCOUNT]);
+
+        await lost;
+
+        await expect(store.insertInbound(envelope('m1'))).resolves.toMatchObject({ inserted: true, accountSeq: 1 });
+        await expect(short.insertInbound(envelope('m2'))).resolves.toMatchObject({ inserted: true, accountSeq: 2 });
+      } finally {
+        abandoned.release(new Error('abandoned'));
+        await short.close();
+      }
+    });
+
+    it('an insert whose transaction is ended this way fails and leaves nothing, and does not take the process down', async () => {
+      const short = await open(5_000, 100);
+      const pool = poolOf(short);
+      const connect = pool.connect.bind(pool) as () => Promise<PoolClient>;
+      vi.spyOn(pool, 'connect').mockImplementationOnce(async () => {
+        const client = await connect();
+        const realQuery = client.query.bind(client);
+        // The gateway stalls after BEGIN for longer than the limit.
+        client.query = (async (...args: Parameters<typeof realQuery>) => {
+          const result = await (realQuery as (...a: unknown[]) => Promise<unknown>)(...args);
+          if (args[0] === 'BEGIN') await new Promise((resolve) => setTimeout(resolve, 400));
+          return result;
+        }) as typeof client.query;
+        return client;
+      });
+      try {
+        await expect(short.insertInbound(envelope('m1'))).rejects.toThrow();
+
+        await expect(short.count({ accountId: ACCOUNT })).resolves.toBe(0);
+        await expect(short.insertInbound(envelope('m1'))).resolves.toMatchObject({ inserted: true, accountSeq: 1 });
+      } finally {
+        await short.close();
+      }
+    });
+
+    it('does not apply to migrations: a script may leave the connection idle between its steps', async () => {
+      const ensure = PostgresMigrationAdapter.prototype.ensureMigrationTable;
+      let during: string | undefined;
+      const spy = vi.spyOn(PostgresMigrationAdapter.prototype, 'ensureMigrationTable').mockImplementation(async function (this: PostgresMigrationAdapter) {
+        during = await setting((this as unknown as { pool: Pool }).pool);
+        return ensure.call(this);
+      });
+      try {
+        await store.runMigrations();
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(during).toBe('0');
+    });
   });
 });
