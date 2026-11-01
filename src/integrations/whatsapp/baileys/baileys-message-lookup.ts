@@ -1,11 +1,11 @@
 import { BufferJSON, proto } from '@whiskeysockets/baileys';
 import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
 
-/** Finds a message a socket may have to re-send or retry-decrypt; `undefined` when unknown. */
+/** Finds a message a socket may have to re-send (a recipient asks to retry one we sent) or retry-decrypt; `undefined` when unknown. */
 export type BaileysMessageLookup = (accountId: string, waMessageId: string) => Promise<proto.IMessage | undefined>;
 
 /**
- * Build the Baileys `getMessage` backing from the message log.
+ * Build the Baileys `getMessage` backing from the message log, which has both directions.
  *
  * The log keeps the raw `WebMessageInfo` as JSON (see `toStorableRaw`): buffers are
  * BufferJSON-encoded and longs are strings, so the inner `message` is revived and

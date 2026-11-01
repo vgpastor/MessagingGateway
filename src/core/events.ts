@@ -30,6 +30,8 @@ export interface MessageInboundPayload {
 
 export interface MessageOutboundPayload {
   envelope: UnifiedEnvelope;
+  /** See {@link MessageResult.providerRaw} */
+  raw?: unknown;
 }
 
 export interface ConnectionUpdatePayload {

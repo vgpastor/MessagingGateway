@@ -15,7 +15,7 @@ export function subscribePersistence(eventBus: EventBus, store: MessageStorePort
 
   eventBus.on<MessageOutboundPayload>(Events.MESSAGE_OUTBOUND, async (event) => {
     try {
-      await store.save(event.data.envelope);
+      await store.save(event.data.envelope, event.data.raw);
     } catch (err) {
       logger.error('Failed to persist outbound message', {
         messageId: event.data.envelope.id,

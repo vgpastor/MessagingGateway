@@ -36,7 +36,7 @@ export class MessageRouterService {
 
     const adapter = this.adapterFactory.create(account);
 
-    const result = await adapter.sendMessage({
+    const { providerRaw, ...result } = await adapter.sendMessage({
       to: command.to,
       content: command.content,
       accountId: account.id,
@@ -46,7 +46,7 @@ export class MessageRouterService {
 
     // Emit outbound event for persistence and webhooks
     if (this.eventBus && result.status !== 'failed') {
-      this.emitOutbound(this.eventBus, account, command, result).catch((err) => {
+      this.emitOutbound(this.eventBus, account, command, result, providerRaw).catch((err) => {
         getLogger().error('Failed to emit outbound event', {
           accountId: account.id,
           error: err instanceof Error ? err.message : String(err),
@@ -62,6 +62,7 @@ export class MessageRouterService {
     account: ChannelAccount,
     command: SendMessageCommand,
     result: MessageResult,
+    raw: unknown,
   ): Promise<void> {
     const envelope: UnifiedEnvelope = {
       id: `msg_${randomUUID()}`,
@@ -76,6 +77,10 @@ export class MessageRouterService {
       },
       recipient: { id: command.to },
       content: outboundContentToMessageContent(command.content),
+      // With the provider's payload, the provider's id is what it will ask for when it wants the message again.
+      ...(raw !== undefined && result.providerMessageId
+        ? { channelDetails: { platform: account.channel, messageId: result.providerMessageId } }
+        : {}),
       gateway: {
         receivedAt: new Date(),
         adapterId: account.provider,
@@ -92,7 +97,7 @@ export class MessageRouterService {
       createEvent<MessageOutboundPayload>(
         Events.MESSAGE_OUTBOUND,
         'router',
-        { envelope },
+        { envelope, raw },
         account.id,
       ),
     );

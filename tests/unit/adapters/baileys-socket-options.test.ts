@@ -104,6 +104,50 @@ describe('Baileys socket options', () => {
 });
 
 describe('createBaileysMessageLookup', () => {
+  it('finds a message we sent, so a recipient asking to retry gets it: adapter, router, subscriber and log for real', async () => {
+    const { createBaileysMessageLookup } = await import('../../../src/integrations/whatsapp/baileys/baileys-message-lookup.js');
+    const { BaileysAdapter } = await import('../../../src/integrations/whatsapp/baileys/baileys.adapter.js');
+    const { MessageRouterService } = await import('../../../src/core/routing/message-router.service.js');
+    const { EventBus } = await import('../../../src/core/event-bus.js');
+    const { subscribePersistence } = await import('../../../src/persistence/persistence-subscriber.js');
+    const { SqliteMessageStore } = await import('../../../src/persistence/sqlite-message-store.js');
+    const { proto } = await import('@whiskeysockets/baileys');
+
+    const store = new SqliteMessageStore(':memory:');
+    await store.init();
+    await store.runMigrations();
+    const eventBus = new EventBus();
+    subscribePersistence(eventBus, store);
+
+    const sent = proto.WebMessageInfo.fromObject({
+      key: { remoteJid: '34600111222@s.whatsapp.net', id: 'SENT1', fromMe: true },
+      message: { conversation: 'hola, soy el gateway' },
+      messageTimestamp: 1760900000,
+    });
+    const socket = { sendMessage: async () => sent };
+    const adapter = new BaileysAdapter({ accountId: ACCOUNT }, ACCOUNT, undefined, { getSocket: () => socket } as never);
+    const account = {
+      id: ACCOUNT, alias: 'a', channel: 'whatsapp', provider: 'baileys', status: 'active', providerConfig: {},
+      identity: { channel: 'whatsapp', phoneNumber: '+34600000001' }, credentialsRef: '',
+      metadata: { owner: 'o', environment: 'test', tags: [] },
+    };
+    const router = new MessageRouterService(
+      { findById: async () => account } as never,
+      { create: () => adapter } as never,
+      eventBus,
+    );
+
+    const result = await router.send({ fromAccountId: ACCOUNT, to: '34600111222', content: { type: 'text', body: 'hola, soy el gateway' } });
+
+    expect(result).not.toHaveProperty('providerRaw'); // callers (the API) never see the stored payload
+    expect(result.messageId).toBe('SENT1');
+    await vi.waitFor(async () => expect(await store.findByWaMessageId(ACCOUNT, 'SENT1')).toBeDefined());
+    const message = await createBaileysMessageLookup(store)(ACCOUNT, 'SENT1');
+    expect(message?.conversation).toBe('hola, soy el gateway');
+    expect((await store.findByWaMessageId(ACCOUNT, 'SENT1'))?.accountSeq).toBeUndefined();
+    await store.close();
+  });
+
   it('revives the stored raw message into a proto message with its buffers', async () => {
     const { createBaileysMessageLookup } = await import('../../../src/integrations/whatsapp/baileys/baileys-message-lookup.js');
     const mediaKey = Buffer.alloc(32, 7);
