@@ -93,6 +93,40 @@ describe('InMemoryAccountRepository persistence', () => {
       .toBeGreaterThan(vi.mocked(fsPromises.rename).mock.invocationCallOrder[0]!);
   });
 
+  describe('what is observed of an account', () => {
+    it('reaches the disk like any change', async () => {
+      const repository = new InMemoryAccountRepository([account('wa-1')], path);
+
+      const updated = await repository.observe('wa-1', () => ({ status: 'auth_expired' }));
+
+      expect(updated?.status).toBe('auth_expired');
+      expect(loadAccountsFromYaml(path)[0]?.status).toBe('auth_expired');
+    });
+
+    it('with no change to make, or no account, writes nothing', async () => {
+      const repository = new InMemoryAccountRepository([account('wa-1')], path);
+
+      expect((await repository.observe('wa-1', () => undefined))?.id).toBe('wa-1');
+      expect(await repository.observe('nobody', () => ({ status: 'active' }))).toBeUndefined();
+
+      expect(vi.mocked(fsPromises.rename)).not.toHaveBeenCalled();
+    });
+
+    it('stands in memory if the write fails, and the next write that goes through takes it to the disk', async () => {
+      const repository = new InMemoryAccountRepository([account('wa-1')], path);
+      await repository.update('wa-1', { alias: 'first' });
+      vi.mocked(fsPromises.rename).mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(repository.observe('wa-1', () => ({ status: 'auth_expired' }))).resolves.toMatchObject({ status: 'auth_expired' });
+
+      expect((await repository.findById('wa-1'))?.status).toBe('auth_expired');
+      expect(loadAccountsFromYaml(path)[0]?.status).toBe('active');
+
+      await repository.update('wa-1', { alias: 'second' });
+      expect(loadAccountsFromYaml(path)[0]).toMatchObject({ alias: 'second', status: 'auth_expired' });
+    });
+  });
+
   describe('a write that fails', () => {
     /** What a start would load from the file, against what the running gateway holds. */
     const inStep = async (repository: InMemoryAccountRepository) => {

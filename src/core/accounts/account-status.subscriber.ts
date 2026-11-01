@@ -13,15 +13,18 @@ import type { ChannelAccountRepository } from './channel-account.repository.js';
 export function subscribeAccountStatus(eventBus: EventBus, accounts: ChannelAccountRepository): void {
   eventBus.on<ConnectionUpdatePayload>(Events.CONNECTION_UPDATE, async (event) => {
     const { accountId, status } = event.data;
-    const account = await accounts.findById(accountId);
-    if (!account || account.status === 'suspended') return;
+    const next = status === 'connected' ? 'active' : status === 'auth_expired' ? 'auth_expired' : undefined;
+    if (!next) return;
 
-    if (status === 'connected' && account.status !== 'active') {
-      await accounts.update(accountId, { status: 'active' });
-      getLogger().info('Status auto-updated to active (connected)', { accountId });
-    } else if (status === 'auth_expired' && account.status !== 'auth_expired') {
-      await accounts.update(accountId, { status: 'auth_expired' });
-      getLogger().warn('Status auto-updated to auth_expired (session revoked)', { accountId });
-    }
+    let changed = false;
+    await accounts.observe(accountId, (account) => {
+      if (account.status === 'suspended' || account.status === next) return undefined;
+      changed = true;
+      return { status: next };
+    });
+    if (!changed) return;
+
+    if (next === 'active') getLogger().info('Status auto-updated to active (connected)', { accountId });
+    else getLogger().warn('Status auto-updated to auth_expired (session revoked)', { accountId });
   });
 }

@@ -2,11 +2,23 @@ import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { AccountAlreadyExistsError } from '../../core/errors.js';
+import { getLogger } from '../../core/logger/logger.port.js';
 import type { ChannelType } from '../../core/messaging/channel.types.js';
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
 import { matchesRoutingCriteria } from '../../core/routing/routing-rules.js';
 import { syncDirectory } from '../fs/sync-directory.js';
+
+function withChanges(account: ChannelAccount, partial: Partial<Omit<ChannelAccount, 'id'>>): ChannelAccount {
+  return {
+    ...account,
+    ...partial,
+    id: account.id,
+    metadata: partial.metadata
+      ? { ...account.metadata, ...partial.metadata }
+      : account.metadata,
+  };
+}
 
 export class InMemoryAccountRepository implements ChannelAccountRepository {
   private accounts: ChannelAccount[];
@@ -65,15 +77,27 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
       const current = accounts.find((a) => a.id === id);
       if (!current) return { accounts, result: undefined };
 
-      const updated: ChannelAccount = {
-        ...current,
-        ...partial,
-        id: current.id,
-        metadata: partial.metadata
-          ? { ...current.metadata, ...partial.metadata }
-          : current.metadata,
-      };
+      const updated = withChanges(current, partial);
       return { accounts: accounts.map((a) => (a === current ? updated : a)), result: updated };
+    });
+  }
+
+  observe(id: string, change: (account: ChannelAccount) => Partial<Omit<ChannelAccount, 'id'>> | undefined): Promise<ChannelAccount | undefined> {
+    return this.inTurn(async () => {
+      const current = this.accounts.find((a) => a.id === id);
+      const partial = current && change(current);
+      if (!current || !partial) return current;
+
+      const updated = withChanges(current, partial);
+      this.accounts = this.accounts.map((a) => (a === current ? updated : a));
+      if (this.persistPath) {
+        await this.writeAtomically(this.persistPath, this.toYaml(this.accounts)).catch((err: unknown) => {
+          getLogger().error('Failed to persist what was observed of an account: it stands in memory until the next write', {
+            accountId: id, path: this.persistPath, error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return updated;
     });
   }
 
@@ -89,7 +113,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
    * rejects and changes nothing. Changes wait for the one in progress and start from its outcome, one at a time.
    */
   private commit<T>(change: (accounts: ChannelAccount[]) => { accounts: ChannelAccount[]; result: T }): Promise<T> {
-    const run = this.lastWrite.then(async () => {
+    return this.inTurn(async () => {
       const { accounts, result } = change(this.accounts);
       if (accounts !== this.accounts) {
         if (this.persistPath) await this.writeAtomically(this.persistPath, this.toYaml(accounts));
@@ -97,6 +121,10 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
       }
       return result;
     });
+  }
+
+  private inTurn<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.lastWrite.then(operation);
     this.lastWrite = run.then(() => {}, () => {});
     return run;
   }
