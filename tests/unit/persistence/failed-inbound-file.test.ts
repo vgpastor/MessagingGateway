@@ -77,6 +77,9 @@ describe('FailedInboundFile', () => {
         if (down) throw new Error('db down');
         return store.insertInbound(e, r);
       },
+      ping: async () => {
+        if (down) throw new Error('db down');
+      },
     };
     const emitted: Array<number | undefined> = [];
     const bus = new EventBus();

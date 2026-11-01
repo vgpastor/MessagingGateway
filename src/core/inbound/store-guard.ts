@@ -6,7 +6,7 @@ import type { InsertResult, MessageLogPort } from '../persistence/message-store.
 /** Waits between attempts to store a message: 5 retries over about 30 s, inside the account's queue. */
 export const PERSIST_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
 
-/** How often a real insert checks whether the message log is back, while the circuit is open. */
+/** How often a ping checks whether the message log is back, while the circuit is open. */
 export const STORE_PROBE_INTERVAL_MS = 30_000;
 
 /** Failures that say something about the message, not about the store: another attempt would end the same. */
@@ -24,10 +24,8 @@ export interface StoreGuardOptions {
   onRecovered: () => void;
 }
 
-/** The outage in course: what proves it is over, and the error every message gets until then. */
+/** The outage in course: the error every message gets until it is over. */
 interface Outage {
-  envelope: UnifiedEnvelope;
-  raw: unknown;
   cause: unknown;
 }
 
@@ -35,8 +33,9 @@ interface Outage {
  * How the inbound path talks to the message log when it fails. A failure may pass, so a message
  * is retried inside its account's queue. A message that runs out of retries means the store is
  * down: the circuit opens, and from then on {@link insert} rejects at once instead of holding
- * every queue for half a minute per message. A real insert every {@link STORE_PROBE_INTERVAL_MS}
- * closes it: the message that opened it, so that account's numbers keep the order they came in.
+ * every queue for half a minute per message. A ping every {@link STORE_PROBE_INTERVAL_MS} closes
+ * it: it depends on no message, so none can keep the circuit open. The message that opened it goes
+ * to the failed log like the rest.
  *
  * A failure of the message itself is not retried and opens nothing.
  */
@@ -52,7 +51,7 @@ export class StoreGuard {
   }
 
   constructor(
-    private readonly store: Pick<MessageLogPort, 'insertInbound'>,
+    private readonly store: Pick<MessageLogPort, 'insertInbound' | 'ping'>,
     private readonly options: StoreGuardOptions,
   ) {}
 
@@ -68,7 +67,7 @@ export class StoreGuard {
         if (isPermanentFailure(err)) throw err;
         const delay = delays[attempt];
         if (delay === undefined) {
-          this.open(envelope, raw, err);
+          this.open(err);
           throw err;
         }
         if (this.stopped) throw err;
@@ -86,7 +85,7 @@ export class StoreGuard {
     try {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
-      if (!isPermanentFailure(err)) this.open(envelope, raw, err);
+      if (!isPermanentFailure(err)) this.open(err);
       throw err;
     }
   }
@@ -107,9 +106,9 @@ export class StoreGuard {
     return { inserted: true, seq: result.seq, accountSeq: result.accountSeq };
   }
 
-  private open(envelope: UnifiedEnvelope, raw: unknown, cause: unknown): void {
+  private open(cause: unknown): void {
     if (this.outage || this.stopped) return;
-    this.outage = { envelope, raw, cause };
+    this.outage = { cause };
     this.logger.error('Message log is down: inbound messages go to the failed log until it is back', { error: errorMessage(cause) });
     this.wakeRetries();
     this.scheduleProbe();
@@ -122,16 +121,12 @@ export class StoreGuard {
 
   private async probe(): Promise<void> {
     if (!this.outage) return;
-    const { envelope, raw } = this.outage;
     try {
-      await this.store.insertInbound(envelope, raw);
+      await this.store.ping();
     } catch (err) {
-      if (!isPermanentFailure(err)) {
-        this.logger.warn('Message log still down', { error: errorMessage(err) });
-        if (!this.stopped) this.scheduleProbe();
-        return;
-      }
-      // It answered: what it refused is this message, which stays in the failed log.
+      this.logger.warn('Message log still down', { error: errorMessage(err) });
+      if (!this.stopped) this.scheduleProbe();
+      return;
     }
     if (this.stopped) return;
     this.outage = undefined;

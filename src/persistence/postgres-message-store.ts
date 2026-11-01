@@ -306,6 +306,10 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   // ── Message log ────────────────────────────────────────────────
 
+  async ping(): Promise<void> {
+    await this.requirePool().query('SELECT 1');
+  }
+
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
     const pool = this.requirePool();
     const client = await pool.connect();

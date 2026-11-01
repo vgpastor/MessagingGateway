@@ -71,7 +71,8 @@ function setup(opts: {
     if (opts.insert instanceof Error) throw opts.insert;
     return opts.insert ?? { inserted: true, seq: 10, accountSeq: 3 };
   });
-  const store = opts.insert === null ? undefined : ({ insertInbound } as unknown as MessageLogPort);
+  const ping = vi.fn(async (): Promise<void> => {});
+  const store = opts.insert === null ? undefined : ({ insertInbound, ping } as unknown as MessageLogPort);
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
@@ -85,7 +86,7 @@ function setup(opts: {
     toStorableRaw: opts.toStorableRaw,
     persistRetryDelaysMs: opts.persistRetryDelaysMs ?? [],
   });
-  return { pipeline, insertInbound, emitSpy, emitted, media, metrics, failedLog };
+  return { pipeline, insertInbound, ping, emitSpy, emitted, media, metrics, failedLog };
 }
 
 const raw = { key: { id: 'WAID1' } } as never;
@@ -358,6 +359,7 @@ describe('InboundPipeline', () => {
     async function withOpenCircuit() {
       const context = setup({ persistRetryDelaysMs: [] });
       context.insertInbound.mockRejectedValue(new Error('db down'));
+      context.ping.mockRejectedValue(new Error('db down'));
       await context.pipeline.handle(makeAccount(), makeEnvelope({ id: 'opener' }), { raw: 'opener' });
       context.insertInbound.mockClear();
       vi.mocked(context.failedLog.append).mockClear();
@@ -406,17 +408,16 @@ describe('InboundPipeline', () => {
       expect(insertInbound).toHaveBeenCalledTimes(5);
     });
 
-    it('tries a real save every 30 s, of the message that opened it, and stays open while it fails', async () => {
-      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
+    it('asks the store every 30 s with a ping, which touches no message, and stays open while it fails', async () => {
+      const { pipeline, insertInbound, ping, failedLog } = await withOpenCircuit();
 
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS - 1);
-      expect(insertInbound).not.toHaveBeenCalled();
+      expect(ping).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      expect(insertInbound).toHaveBeenCalledTimes(1);
-      expect(insertInbound).toHaveBeenCalledWith(expect.objectContaining({ id: 'opener' }), { raw: 'opener' });
+      expect(ping).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
-      expect(insertInbound).toHaveBeenCalledTimes(2);
-      insertInbound.mockClear();
+      expect(ping).toHaveBeenCalledTimes(2);
+      expect(insertInbound).not.toHaveBeenCalled();
 
       await pipeline.handle(makeAccount(), makeEnvelope({ id: 'still-out' }), raw);
       expect(insertInbound).not.toHaveBeenCalled();
@@ -424,13 +425,28 @@ describe('InboundPipeline', () => {
       expect(failedLog.replay).not.toHaveBeenCalled();
     });
 
-    it('closes when the save works: the failed log is recovered at once, with its media, and messages reach the store again', async () => {
-      const { pipeline, insertInbound, failedLog, media, emitted } = await withOpenCircuit();
+    it('the message that opened the circuit goes to the failed log like the rest, and the probe does not store it', async () => {
+      const context = setup({ persistRetryDelaysMs: [] });
+      context.insertInbound.mockRejectedValue(new Error('db down'));
+
+      await context.pipeline.handle(makeAccount(), makeEnvelope({ id: 'opener' }), raw);
+      expect(vi.mocked(context.failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['opener']);
+      context.insertInbound.mockClear();
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(context.ping).toHaveBeenCalledTimes(1);
+      expect(context.insertInbound).not.toHaveBeenCalled();
+    });
+
+    it('closes when the ping answers: the failed log is recovered at once, with its media, and messages reach the store again', async () => {
+      const { pipeline, insertInbound, ping, failedLog, media, emitted } = await withOpenCircuit();
       vi.mocked(failedLog.replay).mockImplementation(async (save) => {
         await save({ envelope: makeEnvelope({ id: 'opener' }), raw: {} });
         return { saved: 1, kept: 0 };
       });
       insertInbound.mockResolvedValue({ inserted: true, seq: 20, accountSeq: 9 });
+      ping.mockResolvedValue();
 
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
@@ -444,17 +460,8 @@ describe('InboundPipeline', () => {
       expect(emitted.map((e) => [e.id, e.accountSeq])).toEqual([['after', 9]]);
     });
 
-    it('closes too when the save is refused for the message itself: the store answered', async () => {
-      const { insertInbound, failedLog } = await withOpenCircuit();
-      insertInbound.mockRejectedValue(new PermanentStoreError('value too long'));
-
-      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
-
-      expect(failedLog.replay).toHaveBeenCalledTimes(1);
-    });
-
     it('opens again if the store falls during the recovery, and leaves the rest of the log for the next one', async () => {
-      const { insertInbound, failedLog } = await withOpenCircuit();
+      const { insertInbound, ping, failedLog } = await withOpenCircuit();
       const results: string[] = [];
       vi.mocked(failedLog.replay).mockImplementation(async (save) => {
         for (const id of ['first', 'second', 'third']) {
@@ -462,28 +469,25 @@ describe('InboundPipeline', () => {
         }
         return { saved: 1, kept: 2 };
       });
+      ping.mockResolvedValue();
       insertInbound
-        .mockResolvedValueOnce({ inserted: false }) // the probe
         .mockResolvedValueOnce({ inserted: true, seq: 1, accountSeq: 1 })
         .mockRejectedValueOnce(new Error('down again'));
 
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
       expect(results).toEqual(['first:ok', 'second:kept', 'third:kept']);
-      expect(insertInbound).toHaveBeenCalledTimes(3);
+      expect(insertInbound).toHaveBeenCalledTimes(2);
 
       vi.mocked(failedLog.replay).mockClear();
-      insertInbound.mockClear();
-      insertInbound.mockResolvedValue({ inserted: false });
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
-      expect((insertInbound.mock.calls[0] as unknown as [UnifiedEnvelope])[0].id).toBe('second');
       expect(failedLog.replay).toHaveBeenCalledTimes(1);
     });
 
     it('does not resume media when the recovery stored nothing', async () => {
-      const { insertInbound, failedLog, media } = await withOpenCircuit();
-      insertInbound.mockResolvedValue({ inserted: false });
+      const { ping, failedLog, media } = await withOpenCircuit();
+      ping.mockResolvedValue();
 
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
@@ -492,8 +496,8 @@ describe('InboundPipeline', () => {
     });
 
     it('survives a recovery that fails', async () => {
-      const { insertInbound, failedLog } = await withOpenCircuit();
-      insertInbound.mockResolvedValue({ inserted: false });
+      const { ping, failedLog } = await withOpenCircuit();
+      ping.mockResolvedValue();
       vi.mocked(failedLog.replay).mockRejectedValue(new Error('disk gone'));
 
       await expect(vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS)).resolves.toBeDefined();
@@ -502,25 +506,25 @@ describe('InboundPipeline', () => {
     });
 
     it('a shutdown stops the probing and starts no recovery', async () => {
-      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
+      const { pipeline, ping, failedLog } = await withOpenCircuit();
 
       await pipeline.drain(10);
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS * 2);
 
-      expect(insertInbound).not.toHaveBeenCalled();
+      expect(ping).not.toHaveBeenCalled();
       expect(failedLog.replay).not.toHaveBeenCalled();
     });
 
     it('a shutdown during the probe starts no recovery either', async () => {
-      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
-      let answer = (_result: InsertResult) => {};
-      insertInbound.mockImplementation(() => new Promise<InsertResult>((resolve) => { answer = resolve; }));
+      const { pipeline, ping, failedLog } = await withOpenCircuit();
+      let answer = () => {};
+      ping.mockImplementation(() => new Promise<void>((resolve) => { answer = resolve; }));
 
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
       const draining = pipeline.drain(10);
       await vi.advanceTimersByTimeAsync(10);
       await draining;
-      answer({ inserted: false });
+      answer();
       await flush();
 
       expect(failedLog.replay).not.toHaveBeenCalled();

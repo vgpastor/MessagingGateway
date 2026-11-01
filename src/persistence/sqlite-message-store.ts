@@ -247,6 +247,10 @@ export class SqliteMessageStore implements FullMessageStorePort {
 
   // ── Message log ────────────────────────────────────────────────
 
+  async ping(): Promise<void> {
+    this.requireDb().prepare('SELECT 1').get();
+  }
+
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
     const db = this.requireDb();
 

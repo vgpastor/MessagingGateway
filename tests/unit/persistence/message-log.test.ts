@@ -168,6 +168,14 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect((await store.getStats()).totalMessages).toBe(4);
     });
 
+    it('ping answers while the store is open and rejects when it is not', async () => {
+      await expect(backend.store.ping()).resolves.toBeUndefined();
+
+      await backend.store.close();
+
+      await expect(backend.store.ping()).rejects.toThrow();
+    });
+
     it('insertInbound assigns contiguous accountSeq per account', async () => {
       const a = [];
       for (const id of ['A1', 'A2', 'A3']) a.push(await store.insertInbound(makeEnvelope('acc-a', id)));
