@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { DiskMediaService, type MediaDownload } from '../../../src/core/inbound/media-service.js';
+import { DiskMediaService, DOWNLOAD_RETRY_DELAYS_MS, type MediaDownload } from '../../../src/core/inbound/media-service.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 
 const MAX = 16_777_216;
@@ -23,7 +23,7 @@ function envelope(id = 'MSG1', accountId = 'wa-1'): UnifiedEnvelope {
   } as UnifiedEnvelope;
 }
 
-function setup(download: MediaDownload) {
+function setup(download: MediaDownload, retry: readonly number[] = []) {
   const metrics = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(),
     persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
@@ -35,7 +35,7 @@ function setup(download: MediaDownload) {
   };
   const files = { write: vi.fn().mockResolvedValue({ path: '/media/x.jpg', size: 10 }) };
   const restoreRaw = vi.fn((stored: unknown) => ({ restored: stored }));
-  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX, metrics });
+  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX, metrics, retryDelaysMs: retry });
   return { service, store, files, restoreRaw, metrics };
 }
 
@@ -117,6 +117,100 @@ describe('DiskMediaService.process', () => {
     store.updateMedia.mockRejectedValue(new Error('db down'));
 
     await expect(service.process(envelope(), {})).resolves.toBeUndefined();
+  });
+});
+
+describe('DiskMediaService when a download fails', () => {
+  it('retries a transient failure: it ends up ready and is never recorded as skipped', async () => {
+    const download = vi.fn<MediaDownload>()
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValue({ data: Buffer.alloc(10), mimeType: 'image/jpeg' });
+    const { service, store, metrics } = setup(download, [0, 0, 0]);
+
+    await service.process(envelope(), {});
+
+    expect(download).toHaveBeenCalledTimes(3);
+    expect(store.updateMedia).toHaveBeenCalledTimes(1);
+    expect(store.updateMedia).toHaveBeenCalledWith('MSG1', expect.objectContaining({ status: 'ready' }));
+    expect(metrics.mediaSkipped).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed write too', async () => {
+    const download = vi.fn<MediaDownload>().mockResolvedValue({ data: Buffer.alloc(3), mimeType: 'image/png' });
+    const { service, store, files } = setup(download, [0]);
+    files.write.mockRejectedValueOnce(new Error('disk full'));
+
+    await service.process(envelope(), {});
+
+    expect(store.updateMedia).toHaveBeenCalledWith('MSG1', expect.objectContaining({ status: 'ready' }));
+  });
+
+  it('marks download_failed once, only when the retries run out', async () => {
+    const download = vi.fn<MediaDownload>().mockRejectedValue(new Error('gone'));
+    const { service, store, metrics } = setup(download, [0, 0]);
+
+    await service.process(envelope(), {});
+
+    expect(download).toHaveBeenCalledTimes(3);
+    expect(store.updateMedia).toHaveBeenCalledTimes(1);
+    expect(store.updateMedia).toHaveBeenCalledWith('MSG1', { status: 'skipped', skipReason: 'download_failed' });
+    expect(metrics.mediaSkipped).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the media pending while it waits for the next attempt, and waits the configured time', async () => {
+    vi.useFakeTimers();
+    try {
+      const download = vi.fn<MediaDownload>()
+        .mockRejectedValueOnce(new Error('blip'))
+        .mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' });
+      const { service, store } = setup(download, DOWNLOAD_RETRY_DELAYS_MS);
+
+      const done = service.process(envelope(), {});
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_RETRY_DELAYS_MS[0]! - 1);
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(store.updateMedia).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(download).toHaveBeenCalledTimes(2);
+      expect(store.updateMedia).toHaveBeenCalledWith('MSG1', expect.objectContaining({ status: 'ready' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a media waiting to retry does not hold a download slot', async () => {
+    const download = vi.fn<MediaDownload>(async (raw) => {
+      if ((raw as { id: string }).id === 'flaky' && download.mock.calls.length === 1) throw new Error('blip');
+      return { data: Buffer.alloc(1), mimeType: 'image/jpeg' };
+    });
+    const store = {
+      updateMedia: vi.fn().mockResolvedValue(undefined),
+      findPendingMedia: vi.fn().mockResolvedValue([]),
+      findById: vi.fn().mockResolvedValue(envelope()),
+    };
+    const service = new DiskMediaService({
+      store, files: { write: vi.fn().mockResolvedValue({ path: 'x', size: 1 }) }, download, maxBytes: MAX, concurrency: 1, retryDelaysMs: [60_000],
+    });
+
+    void service.process(envelope('FLAKY'), { id: 'flaky' });
+    await new Promise((r) => setImmediate(r));
+    await service.process(envelope('NEXT'), { id: 'next' });
+
+    expect(store.updateMedia).toHaveBeenCalledWith('NEXT', expect.objectContaining({ status: 'ready' }));
+  });
+
+  it('does not retry a stored raw that cannot be restored: that will not change', async () => {
+    const download = vi.fn<MediaDownload>();
+    const { service, store, restoreRaw } = setup(download, [0, 0]);
+    store.findPendingMedia.mockResolvedValueOnce([{ id: 'BAD', accountId: 'wa-1', raw: 'garbage' }]).mockResolvedValue([]);
+    restoreRaw.mockImplementation(() => { throw new Error('bad raw'); });
+
+    await service.resumePendingMedia();
+
+    expect(download).not.toHaveBeenCalled();
+    expect(store.updateMedia).toHaveBeenCalledWith('BAD', { status: 'skipped', skipReason: 'download_failed' });
   });
 });
 

@@ -8,6 +8,7 @@ const downloadContentFromMessage = {
   reset() { downloadCalls.length = 0; downloadImpl = async () => { throw new Error('unexpected download'); }; },
   resolves(value: unknown) { downloadImpl = async () => value; },
   rejects(error: Error) { downloadImpl = async () => { throw error; }; },
+  hangs() { downloadImpl = () => new Promise(() => {}); },
   calls: downloadCalls,
 };
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => {
@@ -87,6 +88,24 @@ describe('downloadBaileysMedia', () => {
 
     expect(result).toBeUndefined();
     expect(downloadContentFromMessage.calls).toHaveLength(0);
+  });
+
+  it('gives up and stops the transfer when the stream stalls', async () => {
+    let destroyed = false;
+    const stream = new Readable({ read() { /* never produces a byte */ } });
+    stream.on('close', () => { destroyed = true; });
+    downloadContentFromMessage.resolves(stream);
+
+    await expect(downloadBaileysMedia(videoMsg(10), MAX, 10)).rejects.toThrow('timed out');
+
+    await new Promise((r) => setImmediate(r));
+    expect(destroyed).toBe(true);
+  });
+
+  it('gives up when the CDN never answers', async () => {
+    downloadContentFromMessage.hangs();
+
+    await expect(downloadBaileysMedia(videoMsg(10), MAX, 10)).rejects.toThrow('timed out');
   });
 
   it('lets download errors propagate so the caller can record download_failed', async () => {

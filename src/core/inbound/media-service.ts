@@ -57,6 +57,8 @@ export interface DiskMediaServiceDeps {
   concurrency?: number;
   /** Rows fetched per page when resuming. Default 100. */
   resumeBatchSize?: number;
+  /** Waits between attempts to store a media. {@link DOWNLOAD_RETRY_DELAYS_MS} by default. */
+  retryDelaysMs?: readonly number[];
   /** Counts skipped media. No-op by default. */
   metrics?: MetricsPort;
 }
@@ -64,7 +66,15 @@ export interface DiskMediaServiceDeps {
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_RESUME_BATCH = 100;
 
+/**
+ * A failed download is often a network or CDN hiccup: it only becomes final after these waits
+ * (about 13 minutes). Meanwhile the media stays `pending`, so a restart picks it up again.
+ */
+export const DOWNLOAD_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000, 120_000, 600_000];
+
 export const mediaUrl = (mediaId: string): string => `/api/v1/media/${mediaId}`;
+
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
  * Stores inbound media on disk and records the outcome on the message
@@ -101,22 +111,44 @@ export class DiskMediaService implements MediaService {
     return picked;
   }
 
-  /** `getRaw` runs inside the guard: a stored raw that cannot be restored fails that media only. */
+  /** `getRaw` runs inside the guard: a stored raw that cannot be restored fails that media only, and for good. */
   private async run(mediaId: string, accountId: string, getRaw: () => unknown): Promise<void> {
     if (this.inFlight.has(mediaId)) return;
     this.inFlight.add(mediaId);
     try {
+      let raw: unknown;
+      try {
+        raw = getRaw();
+      } catch (err) {
+        this.logger.warn('Stored raw message cannot be restored', { accountId, mediaId, error: errorMessage(err) });
+        await this.markSkipped(mediaId, accountId, 'download_failed');
+        return;
+      }
+      await this.storeWithRetries(mediaId, accountId, raw);
+    } finally {
+      this.inFlight.delete(mediaId);
+    }
+  }
+
+  /** The download slot is only held during an attempt: a media waiting to retry blocks no other. */
+  private async storeWithRetries(mediaId: string, accountId: string, raw: unknown): Promise<void> {
+    const delays = this.deps.retryDelaysMs ?? DOWNLOAD_RETRY_DELAYS_MS;
+    for (let attempt = 0; ; attempt++) {
+      const delay = delays[attempt];
       await this.acquire();
       try {
-        await this.store(mediaId, accountId, getRaw());
+        await this.store(mediaId, accountId, raw);
+        return;
       } catch (err) {
-        this.logger.warn('Media download failed', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });
-        await this.markSkipped(mediaId, accountId, 'download_failed');
+        this.logger.warn('Media download failed', { accountId, mediaId, attempt: attempt + 1, retryInMs: delay, error: errorMessage(err) });
+        if (delay === undefined) {
+          await this.markSkipped(mediaId, accountId, 'download_failed');
+          return;
+        }
       } finally {
         this.release();
       }
-    } finally {
-      this.inFlight.delete(mediaId);
+      await new Promise((resolve) => { setTimeout(resolve, delay).unref(); });
     }
   }
 
@@ -153,7 +185,7 @@ export class DiskMediaService implements MediaService {
       (this.deps.metrics ?? noopMetrics).mediaSkipped(skipReason);
     } catch (err) {
       if (propagate) throw err;
-      this.logger.error('Failed to record media failure', { accountId, mediaId, error: err instanceof Error ? err.message : String(err) });
+      this.logger.error('Failed to record media failure', { accountId, mediaId, error: errorMessage(err) });
     }
   }
 
