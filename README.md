@@ -33,16 +33,21 @@ docker run -d --name messaging-gateway \
 ```bash
 git clone https://github.com/vgpastor/MessagingGateway.git
 cd MessagingGateway
+
+# 1. Configure: set API_KEY in .env, the gateway does not start without it
+cp .env.example .env
+mkdir -p data
 cp accounts.yaml.example data/accounts.yaml
 docker compose up -d
 
 # 2. Connect WhatsApp (scan QR)
-curl -X POST http://localhost:3123/api/v1/accounts/my-whatsapp/connect
-# Check QR: curl http://localhost:3123/api/v1/accounts/my-whatsapp
+curl -X POST -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts/my-whatsapp/connect
+# Check QR: curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts/my-whatsapp
 
 # 3. Send a message
 curl -X POST http://localhost:3123/api/v1/messages/send \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
   -d '{"from":"my-whatsapp","to":"+34600000001","content":{"type":"text","body":"Hello!"}}'
 ```
 
@@ -69,8 +74,8 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 |---|---|---|
 | `PORT` | `3000` | Internal server port |
 | `HOST_PORT` | `3123` | Docker host port mapping |
-| `API_KEY` | _(none)_ | API key for auth. Empty = dev mode (no auth) |
-| `READ_API_KEY` | _(none)_ | Optional read-only key: `GET /api/v1/messages*`, `GET /api/v1/media/*` and the `/ws/events` stream (never QR codes, never send). Everything else answers `403` |
+| `API_KEY` | _(none)_ | API key for auth. Required: there is no mode without auth. The gateway refuses to start without it, except with `NODE_ENV=development`, which uses a fixed development key that works nowhere else |
+| `READ_API_KEY` | _(none)_ | Optional read-only key: the stored-message reads, `GET /api/v1/media/:id` and the `/ws/events` stream (never QR codes, never send). Everything else answers `403` |
 | `WEBHOOK_CALLBACK_URL` | _(none)_ | Global webhook URL for forwarding events |
 | `WEBHOOK_CALLBACK_SECRET` | _(none)_ | HMAC secret for webhook signatures |
 | `ALERT_WEBHOOK_URL` | _(none)_ | Receives one `connection.update` (`status: auth_expired`) when an account loses its session, e.g. WhatsApp unlinked the device. Payload has a Slack-compatible `text` field |
@@ -118,7 +123,7 @@ accounts:
 
 ### Authentication
 
-When `API_KEY` is set, all `/api/v1/*` endpoints require authentication:
+All `/api/v1/*` endpoints require authentication:
 
 ```bash
 # Via header
@@ -128,19 +133,19 @@ curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts
 curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 ```
 
-Two keys exist: `API_KEY` (admin, can do everything) and the optional `READ_API_KEY`, which can only `GET` messages and media and open the WebSocket event stream. Any other route answers `403 Forbidden` for the read key, including `/metrics`, the accounts endpoints (they expose the QR) and every write.
+Two keys exist: `API_KEY` (admin, can do everything) and the optional `READ_API_KEY`, which can only open the WebSocket event stream and `GET` these routes: `/api/v1/messages`, `/api/v1/messages/:id`, `/api/v1/messages/stats`, `/search`, `/analytics` and `/export` under it, and `/api/v1/media/:id`. Any other route answers `403 Forbidden` for the read key, including `/metrics`, the accounts endpoints (they expose the QR), `/api/v1/messages/:id/status`, `/api/v1/conversations/:id/context` and every write.
 
 ### Endpoints
 
-The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); when `SWAGGER_ENABLED=true` it is also served interactively at `GET /docs`. The tables below summarise it.
+The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); with `SWAGGER_ENABLED=true` or `NODE_ENV` other than `production` it is also served interactively at `GET /docs`. The tables below summarise it.
 
-**System** (`/health` and `/openapi.json` are public; `/metrics` needs the admin key)
+**System** (`/health` is public; `/metrics` needs the admin key; `/openapi.json` is public but only exists with `SWAGGER_ENABLED=true` or `NODE_ENV` other than `production`)
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Health check: always HTTP 200; `status` is `ok` or `degraded` (any account not `active`, except deliberately `suspended`), plus `accounts` with each account status, version, uptime |
 | `GET` | `/metrics` | Prometheus metrics (admin API key required) |
-| `GET` | `/openapi.json` | OpenAPI 3 specification |
+| `GET` | `/openapi.json` | OpenAPI 3 specification (see above) |
 
 **Accounts** (auth required)
 
@@ -181,6 +186,8 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `GET` | `/api/v1/conversations/:id/context` | AI-ready conversation history † |
 
 † Requires message persistence (`STORAGE_ENABLED=true`); otherwise these routes are not registered.
+
+The reads take `limit`: 50 by default and 500 at most, or 1000 (both default and maximum) on the export, which pages with `offset`. A `limit` or `offset` that is not a number gets the default.
 
 **Webhook configuration** (auth required) — forward events to your systems
 
@@ -232,6 +239,7 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 
 ```javascript
 // Browsers cannot set headers: pass the key as a subprotocol. The server echoes it back.
+// A browser throws a SyntaxError if the key has `/` or `=`, as standard base64 does: use hex or base64url.
 // Other clients can send `Authorization: Bearer <key>` or `X-API-Key: <key>` instead.
 // (`?token=<key>` still works but is deprecated: URLs end up in logs.)
 const ws = new WebSocket('ws://localhost:3123/ws/events?accounts=my-whatsapp', ['umg.your-key']);
@@ -336,6 +344,20 @@ curl -H "X-API-Key: your-key" \
 curl -H "X-API-Key: your-key" \
   "http://localhost:3123/api/v1/messages/export?format=csv" -o messages.csv
 ```
+
+#### Consume the log without losing messages
+
+Every stored inbound message has an `accountSeq`, contiguous per account. Keep the last one you processed and, when you start, reconnect or see a gap, read what follows it:
+
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages?accountId=my-whatsapp&afterAccountSeq=41&limit=500"
+# { "messages": [...], "nextAfterAccountSeq": 541, "lastAccountSeq": 900, "firstAccountSeq": 1 }
+```
+
+Repeat with `nextAfterAccountSeq` until it is `null`. `lastAccountSeq` is where to start to get only what comes from now on. If your cursor is below `firstAccountSeq`, retention removed the messages in between: that jump is not a loss.
+
+**Deduplicate by `id`.** A message the gateway could not store is still delivered live, without `accountSeq`, and is stored at the next start: it then comes again, with the same `id`, when you catch up. The same message can reach you twice, so an `accountSeq` alone does not tell you whether you have already seen it.
 
 #### AI-ready conversation context
 
