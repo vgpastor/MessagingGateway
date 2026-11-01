@@ -116,6 +116,8 @@ describe('FailedInboundFile', () => {
         holds: new Map<string, Promise<void>>(),
         emitted: [] as Array<[string, number | undefined]>,
         pipeline: undefined as unknown as InboundPipeline,
+        /** Called when a recovery that stored something has ended. */
+        media: { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) },
         numbers: async () => (await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 20 })).messages.map((m) => [m.id, m.accountSeq]),
       };
       const log = {
@@ -131,7 +133,7 @@ describe('FailedInboundFile', () => {
       const bus = new EventBus();
       bus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (event) => { rig.emitted.push([event.data.envelope.id, event.data.envelope.accountSeq]); });
       rig.pipeline = new InboundPipeline({
-        store: log as MessageLogPort, failedLog, eventBus: bus, media: noopMediaService, metrics: noopMetrics, accounts: knownAccount,
+        store: log as MessageLogPort, failedLog, eventBus: bus, media: rig.media, metrics: noopMetrics, accounts: knownAccount,
         persistRetryDelaysMs: [], storeProbeIntervalMs: 5,
       });
       return rig;
@@ -160,8 +162,8 @@ describe('FailedInboundFile', () => {
       expect(await rig.numbers()).toEqual([]);
 
       replaying.open();
-      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(() => expect(rig.media.resumePendingMedia).toHaveBeenCalledTimes(1));
+      expect(existsSync(path)).toBe(false);
       await rig.pipeline.handle(account, envelope('after', 'W4'), {});
 
       expect(await rig.numbers()).toEqual([['m1', 1], ['m2', 2], ['during', 3], ['after', 4]]);
@@ -186,8 +188,8 @@ describe('FailedInboundFile', () => {
       expect(await rig.numbers()).toEqual([['m1', 1]]);
 
       rig.down = false;
-      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(() => expect(rig.media.resumePendingMedia).toHaveBeenCalledTimes(2));
+      expect(existsSync(path)).toBe(false);
       await rig.pipeline.handle(account, envelope('after', 'W6'), {});
 
       expect(await rig.numbers()).toEqual([['m1', 1], ['m2', 2], ['m3', 3], ['during-cut', 4], ['after', 5]]);
@@ -213,8 +215,7 @@ describe('FailedInboundFile', () => {
       const late = rig.pipeline.handle(account, envelope('late', 'W2'), {});
       await new Promise((resolve) => setImmediate(resolve));
       replaying.open();
-      await vi.waitFor(async () => expect((await rig.numbers()).map(([id]) => id)).toEqual(['m1']));
-      await new Promise((resolve) => setTimeout(resolve, 20)); // the recovery found nothing else, and ended
+      await vi.waitFor(() => expect(rig.media.resumePendingMedia).toHaveBeenCalledTimes(1)); // it found nothing else, and ended
 
       const next = rig.pipeline.handle(account, envelope('next', 'W3'), {});
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -232,17 +233,17 @@ describe('FailedInboundFile', () => {
     it('a LID waiting does not hold the recovery: it stays, and messages are stored directly', async () => {
       const withList = { ...account, conversations: ['c@s.whatsapp.net'] } as ChannelAccount;
       const log = { insertInbound: async (e: UnifiedEnvelope, r?: unknown) => store.insertInbound(e, r), ping: async () => {} };
+      const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
       const pipeline = new InboundPipeline({
-        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics,
+        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics,
         accounts: { findById: async () => withList }, persistRetryDelaysMs: [], storeProbeIntervalMs: 1,
       });
       await file.append({ envelope: { ...envelope('lid', 'W1'), conversationId: '1@lid' }, raw: undefined });
       const failing = vi.spyOn(log, 'insertInbound').mockRejectedValueOnce(new Error('blip'));
 
       await pipeline.handle(withList, envelope('opener', 'W2'), {});
-      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(1));
+      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalledTimes(1));
       failing.mockRestore();
-      await new Promise((resolve) => setTimeout(resolve, 10));
       await pipeline.handle(withList, envelope('after', 'W3'), {});
 
       expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq])).toEqual([['opener', 1], ['after', 2]]);
@@ -255,10 +256,14 @@ describe('FailedInboundFile', () => {
     const rejectedIds = async () => (await readFile(join(dir, 'nested', 'failed-inbound.rejected.jsonl'), 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(JSON.parse(line).line).envelope.id as string);
 
-    function pipelineWith(insertInbound: (e: UnifiedEnvelope, r?: unknown) => Promise<unknown>) {
+    const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
+
+    beforeEach(() => media.resumePendingMedia.mockClear());
+
+    function pipelineWith(insertInbound: (e: UnifiedEnvelope, r?: unknown) => Promise<unknown>, ping = async () => {}) {
       return new InboundPipeline({
-        store: { insertInbound, ping: async () => {} } as unknown as MessageLogPort,
-        failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics, accounts: knownAccount,
+        store: { insertInbound, ping } as unknown as MessageLogPort,
+        failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics, accounts: knownAccount,
         persistRetryDelaysMs: [0], storeProbeIntervalMs: 1,
       });
     }
@@ -272,8 +277,9 @@ describe('FailedInboundFile', () => {
       await pipeline.handle(account, envelope('typed', 'W1'), {});
       await pipeline.handle(account, envelope('during', 'W2'), {});
 
-      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(1));
+      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
+      expect(existsSync(path)).toBe(false);
       await pipeline.handle(account, envelope('after', 'W3'), {});
 
       expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq]))
@@ -307,20 +313,23 @@ describe('FailedInboundFile', () => {
       await pipeline.drain(10);
     });
 
-    it('with a store that takes nothing it gives up one entry at a time, never the whole log at once', async () => {
-      for (const id of ['m1', 'm2', 'm3', 'm4', 'm5']) await file.append({ envelope: envelope(id, `W-${id}`), raw: undefined });
-      const attempts: string[] = [];
-      const pipeline = pipelineWith(async (e) => {
-        attempts.push(e.id);
-        throw new Error('read-only transaction');
-      });
+    it('with a store that takes nothing it gives up one entry per few pings, never the whole log at once', async () => {
+      for (const id of ['m1', 'm2', 'm3', 'm4']) await file.append({ envelope: envelope(id, `W-${id}`), raw: undefined });
+      let answers = MAX_RECOVERY_FAILURES;
+      const pipeline = pipelineWith(
+        async () => { throw new Error('read-only transaction'); },
+        async () => {
+          answers -= 1;
+          if (answers < 0) throw new Error('the test is over');
+        },
+      );
 
       await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(() => expect(attempts.filter((id) => id === 'm1').length).toBe(MAX_RECOVERY_FAILURES));
-      await vi.waitFor(async () => expect(await rejectedIds()).toEqual(['m1']));
-      const left = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id);
+      await vi.waitFor(() => expect(existsSync(join(dir, 'nested', 'failed-inbound.rejected.jsonl'))).toBe(true));
+      await vi.waitFor(async () => expect(JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!).envelope.id).toBe('m2'));
 
-      expect(left.slice(0, 2)).toEqual(['m2', 'm3']);
+      expect(await rejectedIds()).toEqual(['m1']);
+      expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['m2', 'm3', 'm4', 'opener']);
       await pipeline.drain(10);
     });
   });
