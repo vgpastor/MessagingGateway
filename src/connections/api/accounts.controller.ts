@@ -457,8 +457,15 @@ export async function accountsController(
       });
     }
 
+    // First: an account that stays must keep its socket and its session.
+    try {
+      await deps.accountRepository.remove(id);
+    } catch (err) {
+      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
+    }
+
     // Otherwise its socket would keep receiving and reconnecting with no account behind it, and an
-    // account created later with this id would inherit the session. Failing here must not stop the deletion.
+    // account created later with this id would inherit the session. Failing here does not undo the deletion.
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     try {
       if (manager) await logOut(account, manager);
@@ -466,12 +473,6 @@ export async function accountsController(
       fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
     }
     manager?.forgetAccount?.(id);
-
-    try {
-      await deps.accountRepository.remove(id);
-    } catch (err) {
-      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
-    }
     fastify.log.info(`Account deleted: ${id}`);
     return { deleted: true, accountId: id };
   });

@@ -327,6 +327,22 @@ describe('accounts created at runtime', () => {
     expect(await repository.findById('hot-13')).toBeUndefined();
   });
 
+  it('DELETE /accounts/:id removes the account first, and closes it after', async () => {
+    await create('hot-13b');
+    const manager = baileysProvider.connection!();
+    let stillThereWhenClosing: unknown = 'not closed';
+    const closing = vi.spyOn(registry, 'getConnectionManager').mockReturnValue({
+      ...manager,
+      disconnect: async () => { stillThereWhenClosing = await repository.findById('hot-13b'); },
+    } as never);
+
+    const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13b', headers: HEADERS });
+    closing.mockRestore();
+
+    expect(response.statusCode).toBe(200);
+    expect(stillThereWhenClosing).toBeUndefined();
+  });
+
   it('DELETE /accounts/:id answers 404 for an unknown account', async () => {
     const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/nobody', headers: HEADERS });
     expect(response.statusCode).toBe(404);
@@ -778,11 +794,20 @@ describe('an account change that cannot reach the disk', () => {
     expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/existing', headers: HEADERS })).json().alias).toBe('before');
   });
 
-  it('DELETE answers 500 and the account is still there', async () => {
+  it('DELETE answers 500, the account is still there, and its socket and session are left alone', async () => {
+    const manager = baileysProvider.connection!();
+    const disconnect = vi.spyOn(manager, 'disconnect');
+    const clearSession = vi.spyOn(manager, 'clearSession' as never);
+    const forgetAccount = vi.spyOn(manager, 'forgetAccount' as never);
+
     const res = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/existing', headers: HEADERS });
 
     expect(res.statusCode).toBe(500);
     expect(res.json().code).toBe('SAVE_FAILED');
     expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/existing', headers: HEADERS })).statusCode).toBe(200);
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(forgetAccount).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });
