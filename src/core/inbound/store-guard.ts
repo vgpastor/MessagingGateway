@@ -9,9 +9,20 @@ export const PERSIST_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 
 /** How often a ping checks whether the message log is back, while the circuit is open. */
 export const STORE_PROBE_INTERVAL_MS = 30_000;
 
-/** Failures that say something about the message, not about the store: another attempt would end the same. */
+/**
+ * How many recoveries in a row the same entry of the failed log may fail right after a ping answered, before it
+ * is taken for the message's fault. Each one waits for the next ping, so giving up on a whole log takes a while
+ * if it is the store that answers and does not write (read-only, disk full), and only the entry at the head pays.
+ */
+export const MAX_RECOVERY_FAILURES = 3;
+
+/**
+ * Failures that say something about the message, not about the store: another attempt would end the same.
+ * Not a `TypeError`: a library may throw one for a lost connection. One that is really the message's ends
+ * up opening the circuit, and {@link MAX_RECOVERY_FAILURES} takes it out of the way.
+ */
 const isPermanentFailure = (err: unknown): boolean =>
-  err instanceof PermanentStoreError || err instanceof TypeError || err instanceof RangeError;
+  err instanceof PermanentStoreError || err instanceof RangeError;
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -44,12 +55,15 @@ interface Diversion {
  *
  * What is in the failed log arrived first. So when the ping answers the circuit does not close yet: it is
  * recovering, the failed log goes in through {@link insertOnce}, and live messages keep rejecting, to
- * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again.
+ * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again, unless the
+ * same entry has been the one to fail too many times: then it is refused, so one message cannot keep every account out.
  *
  * A failure of the message itself is not retried and opens nothing.
  */
 export class StoreGuard {
   private diversion: Diversion | undefined;
+  /** The entry that last failed during a recovery, and how many in a row. */
+  private suspect: { id: string; failures: number } | undefined;
   private probeTimer: NodeJS.Timeout | undefined;
   private stopped = false;
   /** Wakes a message waiting for its next attempt. */
@@ -99,6 +113,7 @@ export class StoreGuard {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
       if (isPermanentFailure(err)) throw asRefusal(err);
+      if (this.recovering && this.failedTooOften(envelope)) throw asRefusal(err);
       this.open(err);
       throw err;
     }
@@ -135,6 +150,12 @@ export class StoreGuard {
   private settleRetried(envelope: UnifiedEnvelope, result: InsertResult): InsertResult {
     if (result.inserted || result.storedId !== envelope.id) return result;
     return { inserted: true, seq: result.seq, accountSeq: result.accountSeq };
+  }
+
+  private failedTooOften(envelope: UnifiedEnvelope): boolean {
+    const failures = this.suspect?.id === envelope.id ? this.suspect.failures + 1 : 1;
+    this.suspect = { id: envelope.id, failures };
+    return failures >= MAX_RECOVERY_FAILURES;
   }
 
   private open(cause: unknown): void {

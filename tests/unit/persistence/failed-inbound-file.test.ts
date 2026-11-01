@@ -13,6 +13,7 @@ import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
 import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import { noopMediaService } from '../../../src/core/inbound/media-service.js';
+import { MAX_RECOVERY_FAILURES } from '../../../src/core/inbound/store-guard.js';
 import { noopMetrics } from '../../../src/core/metrics/metrics.port.js';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
@@ -246,6 +247,80 @@ describe('FailedInboundFile', () => {
 
       expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq])).toEqual([['opener', 1], ['after', 2]]);
       expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['lid']);
+      await pipeline.drain(10);
+    });
+  });
+
+  describe('a store that answers the ping and fails a message without saying it is the message', () => {
+    const rejectedIds = async () => (await readFile(join(dir, 'nested', 'failed-inbound.rejected.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(JSON.parse(line).line).envelope.id as string);
+
+    function pipelineWith(insertInbound: (e: UnifiedEnvelope, r?: unknown) => Promise<unknown>) {
+      return new InboundPipeline({
+        store: { insertInbound, ping: async () => {} } as unknown as MessageLogPort,
+        failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics, accounts: knownAccount,
+        persistRetryDelaysMs: [0], storeProbeIntervalMs: 1,
+      });
+    }
+
+    it('a deterministic TypeError opens the circuit, the ping closes it soon after, and nothing is lost', async () => {
+      const pipeline = pipelineWith(async (e, r) => {
+        if (e.id === 'typed') throw new TypeError('Cannot read properties of null');
+        return store.insertInbound(e, r);
+      });
+
+      await pipeline.handle(account, envelope('typed', 'W1'), {});
+      await pipeline.handle(account, envelope('during', 'W2'), {});
+
+      await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await pipeline.handle(account, envelope('after', 'W3'), {});
+
+      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq]))
+        .toEqual([['during', 1], ['after', 2]]);
+      expect(await rejectedIds()).toEqual(['typed']);
+      await pipeline.drain(10);
+    });
+
+    it('a failure that passes costs nothing: the entry gets in, in its place', async () => {
+      let blips = 2;
+      let failures = 2;
+      await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
+      await file.append({ envelope: envelope('m2', 'W2'), raw: undefined });
+      const pipeline = pipelineWith(async (e, r) => {
+        if (e.id === 'opener' && blips > 0) {
+          blips -= 1;
+          throw new Error('blip');
+        }
+        if (e.id === 'm1' && failures > 0) {
+          failures -= 1;
+          throw new Error('still settling');
+        }
+        return store.insertInbound(e, r);
+      });
+
+      await pipeline.handle(account, envelope('opener', 'W0'), {});
+      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(3));
+
+      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => m.id)).toEqual(['m1', 'm2', 'opener']);
+      expect(existsSync(join(dir, 'nested', 'failed-inbound.rejected.jsonl'))).toBe(false);
+      await pipeline.drain(10);
+    });
+
+    it('with a store that takes nothing it gives up one entry at a time, never the whole log at once', async () => {
+      for (const id of ['m1', 'm2', 'm3', 'm4', 'm5']) await file.append({ envelope: envelope(id, `W-${id}`), raw: undefined });
+      const attempts: string[] = [];
+      const pipeline = pipelineWith(async (e) => {
+        attempts.push(e.id);
+        throw new Error('read-only transaction');
+      });
+
+      await pipeline.handle(account, envelope('opener', 'W0'), {});
+      await vi.waitFor(() => expect(attempts.filter((id) => id === 'm1').length).toBe(MAX_RECOVERY_FAILURES));
+      await vi.waitFor(async () => expect(await rejectedIds()).toEqual(['m1']));
+      const left = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id);
+
+      expect(left.slice(0, 2)).toEqual(['m2', 'm3']);
       await pipeline.drain(10);
     });
   });

@@ -280,7 +280,6 @@ describe('InboundPipeline', () => {
 
     it.each([
       ['a row the database refuses', new PermanentStoreError('invalid input syntax')],
-      ['a TypeError', new TypeError('bad value')],
       ['a RangeError', new RangeError('Invalid time value')],
     ])('does not retry %s: it goes to the failed log at once, delivered live, and the store stays in use', async (_name, failure) => {
       const { pipeline, insertInbound, emitted, metrics, failedLog } = setup({ persistRetryDelaysMs: [60_000, 60_000] });
@@ -293,6 +292,20 @@ describe('InboundPipeline', () => {
       expect(vi.mocked(failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['bad']);
       expect(metrics.persistFailures).toHaveBeenCalledTimes(1);
       expect(emitted.map((e) => [e.id, e.accountSeq])).toEqual([['bad', undefined], ['next', 3]]);
+    });
+
+    it('retries a TypeError, which a library may throw for a lost connection, and with the retries spent it opens the circuit', async () => {
+      const { pipeline, insertInbound, failedLog } = setup({ persistRetryDelaysMs: [0, 0] });
+      insertInbound.mockRejectedValue(new TypeError('Cannot read properties of null'));
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'typed' }), raw);
+      expect(insertInbound).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['typed']);
+
+      insertInbound.mockClear();
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'diverted' }), raw);
+      expect(insertInbound).not.toHaveBeenCalled();
+      await pipeline.drain(10);
     });
 
     it('counts as stored a retry that finds this same message: the COMMIT went through and only the answer was lost', async () => {
