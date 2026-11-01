@@ -394,6 +394,85 @@ describe('accounts created at runtime', () => {
     expect(inbound.handle).toHaveBeenCalledTimes(1);
   });
 
+  describe('PUT /accounts/:id validates what it stores', () => {
+    async function put(id: string, payload: unknown) {
+      return app.inject({ method: 'PUT', url: `/api/v1/accounts/${id}`, headers: HEADERS, payload: payload as object });
+    }
+
+    it.each([
+      ['a word as conversations', { conversations: 'todo' }],
+      ['a number as conversations', { conversations: 5 }],
+      ['a list of numbers as conversations', { conversations: [1, 2] }],
+      ['an identity of no channel', { identity: { foo: 'bar' } }],
+      ['an identity that is not an object', { identity: 'wa' }],
+      ['an unknown field', { nickname: 'x' }],
+      ['an empty alias', { alias: '' }],
+      ['an empty owner', { metadata: { owner: '' } }],
+      ['half a rate limit', { metadata: { rateLimit: { maxPerMinute: 1 } } }],
+    ])('refuses %s and changes nothing', async (_name, payload) => {
+      await create('hot-16');
+      const before = JSON.stringify(await repository.findById('hot-16'));
+
+      const response = await put('hot-16', payload);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe('INVALID_PAYLOAD');
+      expect(JSON.stringify(await repository.findById('hot-16'))).toBe(before);
+      await repository.remove('hot-16');
+    });
+
+    it('takes valid conversations, and a change of the alias alone resets nothing', async () => {
+      await create('hot-17');
+      const conversations = ['123@g.us'];
+
+      expect((await put('hot-17', { status: 'active', conversations })).statusCode).toBe(200);
+      expect((await put('hot-17', { alias: 'renamed' })).statusCode).toBe(200);
+
+      const stored = await repository.findById('hot-17');
+      expect(stored?.alias).toBe('renamed');
+      expect(stored?.conversations).toEqual(conversations);
+      expect(stored?.status).toBe('active');
+    });
+
+    it('refuses a provider that needs credentials on an account that has none: the next start could not load it', async () => {
+      await create('hot-18');
+
+      const response = await put('hot-18', { provider: 'twilio' });
+
+      expect(response.statusCode).toBe(400);
+      expect((await repository.findById('hot-18'))?.provider).toBe('baileys');
+    });
+
+    it('keeps the channel of the account in the identity, and the fields of an SMS one', async () => {
+      await create('hot-19');
+
+      const response = await put('hot-19', { identity: { phoneNumber: '+34600000002', senderId: 'ACME' } });
+
+      expect(response.statusCode).toBe(200);
+      expect((await repository.findById('hot-19'))?.identity).toEqual({ channel: 'whatsapp', phoneNumber: '+34600000002', senderId: 'ACME' });
+    });
+
+    it('declares conversations and refuses other fields in the contract', async () => {
+      const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
+      const body = spec.json().paths['/api/v1/accounts/{id}'].put.requestBody.content['application/json'].schema;
+
+      expect(body.properties.conversations.anyOf).toBeDefined();
+      expect(body.additionalProperties).toBe(false);
+    });
+  });
+
+  it('POST /accounts refuses a word as conversations, which the schema step would turn into a list', async () => {
+    ids.push('hot-14c');
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody('hot-14c'), conversations: 'todo' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('INVALID_PAYLOAD');
+    expect(await repository.findById('hot-14c')).toBeUndefined();
+  });
+
   it('still creates and connects the account when wiring fails', async () => {
     wireSpy.mockRejectedValueOnce(new Error('wire exploded'));
     ids.push('hot-6');

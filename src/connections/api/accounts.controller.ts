@@ -1,6 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { ChannelAccount, AccountStatus } from '../../core/accounts/channel-account.js';
+import { hasRequiredCredentials, MISSING_CREDENTIALS_MESSAGE, type ChannelAccount, type AccountStatus } from '../../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
@@ -37,10 +37,23 @@ export interface ValidatedAccountData {
   };
 }
 
-/** Result of validating a create-account request body */
-export interface AccountValidationResult {
+/** Validated shape of an update: only what the request changes. */
+export interface ValidatedAccountUpdate {
+  alias?: string;
+  provider?: string;
+  status?: string;
+  identity?: Record<string, unknown>;
+  credentialsRef?: string;
+  credentials?: string;
+  providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
+  metadata?: Partial<ValidatedAccountData['metadata']>;
+}
+
+/** Result of validating an account request body */
+export interface ValidationResult<T> {
   success: boolean;
-  data?: ValidatedAccountData;
+  data?: T;
   error?: string;
 }
 
@@ -56,7 +69,27 @@ export interface AccountsControllerDeps {
    */
   wireAccount?: (account: ChannelAccount) => Promise<void>;
   /** Validate create-account request body (injected to avoid schema library coupling) */
-  validateAccountBody: (body: unknown) => AccountValidationResult;
+  validateAccountBody: (body: unknown) => ValidationResult<ValidatedAccountData>;
+  /** Validate update-account request body: what passes can be written and loaded back at the next start. */
+  validateAccountUpdate: (body: unknown) => ValidationResult<ValidatedAccountUpdate>;
+}
+
+/**
+ * Replaces the body with what the validator returns, or answers 400. It runs before Fastify's schema step
+ * because that step coerces: `"todo"` or `5` would arrive here as the valid lists `["todo"]` and `["5"]`.
+ */
+function validatedBody<T>(validate: (body: unknown) => ValidationResult<T>) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = validate(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'INVALID_PAYLOAD',
+        message: parsed.error ?? 'Invalid account payload',
+      });
+    }
+    request.body = parsed.data;
+  };
 }
 
 function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
@@ -224,6 +257,7 @@ export async function accountsController(
 
   // POST /api/v1/accounts — create a new account
   fastify.post('/api/v1/accounts', {
+    preValidation: validatedBody(deps.validateAccountBody),
     schema: {
       description: 'Create a new messaging account',
       tags: ['Accounts'],
@@ -236,18 +270,7 @@ export async function accountsController(
       },
     },
   }, async (request, reply) => {
-    const body = request.body as Record<string, unknown>;
-
-    const parsed = deps.validateAccountBody(body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: 'Bad Request',
-        code: 'INVALID_PAYLOAD',
-        message: parsed.error ?? 'Invalid account payload',
-      });
-    }
-
-    const data = parsed.data!;
+    const data = request.body as ValidatedAccountData;
     const channel = data.channel as ChannelType;
 
     const account: ChannelAccount = {
@@ -305,6 +328,7 @@ export async function accountsController(
 
   // PUT /api/v1/accounts/:id — update an existing account
   fastify.put<{ Params: { id: string } }>('/api/v1/accounts/:id', {
+    preValidation: validatedBody(deps.validateAccountUpdate),
     schema: {
       description: 'Update an existing messaging account',
       tags: ['Accounts'],
@@ -312,6 +336,7 @@ export async function accountsController(
       body: updateAccountBodySchema,
       response: {
         200: accountResponseSchema,
+        400: errorResponseSchema,
         404: errorResponseSchema,
       },
     },
@@ -328,10 +353,18 @@ export async function accountsController(
       });
     }
 
+    const credentialsOwner = {
+      provider: body.provider ?? existing.provider,
+      credentialsRef: body.credentialsRef ?? existing.credentialsRef,
+      credentials: body.credentials ?? existing.credentials,
+    };
+    if (!hasRequiredCredentials(credentialsOwner)) {
+      return reply.status(400).send({ error: 'Bad Request', code: 'INVALID_PAYLOAD', message: MISSING_CREDENTIALS_MESSAGE });
+    }
+
     // If identity is provided, ensure channel discriminator is set
     if (body.identity) {
-      const channel = (body as Record<string, unknown>)['channel'] ?? existing.channel;
-      (body.identity as unknown as Record<string, unknown>)['channel'] = channel;
+      (body.identity as unknown as Record<string, unknown>)['channel'] = existing.channel;
     }
 
     const wasSuspended = existing.status === 'suspended';

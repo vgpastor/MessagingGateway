@@ -121,7 +121,7 @@ accounts:
       tags: [whatsapp, main]
 ```
 
-`conversations` (also accepted by `POST /api/v1/accounts`) limits which inbound conversations an account keeps: `'*'`, the default, keeps them all; a list of chat/group JIDs drops every other conversation before it is stored.
+`conversations` (also accepted by `POST /api/v1/accounts` and `PUT /api/v1/accounts/:id`) limits which inbound conversations an account keeps: `'*'`, the default, keeps them all; a list of chat/group JIDs drops every other conversation before it is stored.
 
 ## API Reference
 

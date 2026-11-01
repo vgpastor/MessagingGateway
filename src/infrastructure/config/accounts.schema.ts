@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { hasRequiredCredentials, MISSING_CREDENTIALS_MESSAGE } from '../../core/accounts/channel-account.js';
 
 const channelTypes = ['whatsapp', 'telegram', 'email', 'sms'] as const;
 
@@ -14,9 +15,11 @@ const providerTypes = [
   'messagebird',
 ] as const;
 
-const whatsappIdentitySchema = z.object({
+/** WhatsApp and SMS as one: a union keeps its first match, so with two schemas the fields of the second would be dropped. */
+const phoneIdentitySchema = z.object({
   phoneNumber: z.string(),
   wid: z.string().optional(),
+  senderId: z.string().optional(),
 });
 
 const telegramIdentitySchema = z.object({
@@ -29,10 +32,11 @@ const emailIdentitySchema = z.object({
   domain: z.string().optional(),
 });
 
-const smsIdentitySchema = z.object({
-  phoneNumber: z.string(),
-  senderId: z.string().optional(),
-});
+const identitySchema = z.union([phoneIdentitySchema, telegramIdentitySchema, emailIdentitySchema]);
+
+const statusSchema = z.enum(['active', 'suspended', 'auth_expired', 'error', 'unchecked']);
+
+const conversationsSchema = z.union([z.literal('*'), z.array(z.string())]);
 
 const rateLimitSchema = z.object({
   maxPerMinute: z.number().positive(),
@@ -44,17 +48,12 @@ const accountSchema = z.object({
   alias: z.string().min(1),
   channel: z.enum(channelTypes),
   provider: z.enum(providerTypes),
-  status: z.enum(['active', 'suspended', 'auth_expired', 'error', 'unchecked']).default('unchecked'),
-  identity: z.union([
-    whatsappIdentitySchema,
-    telegramIdentitySchema,
-    emailIdentitySchema,
-    smsIdentitySchema,
-  ]).optional(),
+  status: statusSchema.default('unchecked'),
+  identity: identitySchema.optional(),
   credentialsRef: z.string().min(1).optional(),
   credentials: z.string().min(1).optional(),
   providerConfig: z.record(z.string(), z.unknown()).default({}),
-  conversations: z.union([z.literal('*'), z.array(z.string())]).default('*'),
+  conversations: conversationsSchema.default('*'),
   metadata: z.object({
     owner: z.string().min(1),
     environment: z.enum(['production', 'staging']).default('production'),
@@ -62,21 +61,35 @@ const accountSchema = z.object({
     rateLimit: rateLimitSchema.optional(),
     tags: z.array(z.string()).default([]),
   }),
-}).refine(
-  (data) => {
-    // Providers that handle auth internally (e.g. QR/pairing code) don't need credentials
-    const selfAuthProviders = ['baileys'];
-    if (selfAuthProviders.includes(data.provider)) return true;
-    return data.credentialsRef || data.credentials;
-  },
-  { message: 'Either credentialsRef or credentials must be provided' },
-);
+}).refine(hasRequiredCredentials, { message: MISSING_CREDENTIALS_MESSAGE });
+
+/**
+ * A partial update of an account. Written out instead of `partial()`: in zod 4 a default also
+ * applies inside an optional field, so changing the alias alone would reset the status and the conversations.
+ */
+const accountUpdateSchema = z.strictObject({
+  alias: z.string().min(1).optional(),
+  provider: z.enum(providerTypes).optional(),
+  status: statusSchema.optional(),
+  identity: identitySchema.optional(),
+  credentialsRef: z.string().min(1).optional(),
+  credentials: z.string().min(1).optional(),
+  providerConfig: z.record(z.string(), z.unknown()).optional(),
+  conversations: conversationsSchema.optional(),
+  metadata: z.object({
+    owner: z.string().min(1).optional(),
+    environment: z.enum(['production', 'staging']).optional(),
+    webhookPath: z.string().optional(),
+    rateLimit: rateLimitSchema.optional(),
+    tags: z.array(z.string()).optional(),
+  }).optional(),
+});
 
 export const accountsConfigSchema = z.object({
   accounts: z.array(accountSchema).min(0),
 });
 
-export { accountSchema };
+export { accountSchema, accountUpdateSchema };
 
 export type AccountsConfigInput = z.input<typeof accountsConfigSchema>;
 export type AccountsConfigOutput = z.output<typeof accountsConfigSchema>;

@@ -214,6 +214,14 @@ export const errorResponseSchema = {
   required: ['error', 'message'] as const,
 };
 
+const conversationsSchema = {
+  description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
+  anyOf: [
+    { type: 'string' as const, enum: ['*'] },
+    { type: 'array' as const, items: { type: 'string' as const } },
+  ],
+};
+
 export const createAccountBodySchema = {
   type: 'object' as const,
   properties: {
@@ -228,13 +236,7 @@ export const createAccountBodySchema = {
     credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
     credentials: { type: 'string' as const, minLength: 1, description: 'Inline credential string (e.g. "user:apiKey@host:port"). Stored in YAML, used when env vars are not available.' },
     providerConfig: { type: 'object' as const, additionalProperties: true },
-    conversations: {
-      description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
-      anyOf: [
-        { type: 'string' as const, enum: ['*'] },
-        { type: 'array' as const, items: { type: 'string' as const } },
-      ],
-    },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {
@@ -258,6 +260,7 @@ export const createAccountBodySchema = {
 
 export const updateAccountBodySchema = {
   type: 'object' as const,
+  additionalProperties: false,
   properties: {
     alias: { type: 'string' as const, minLength: 1 },
     provider: {
@@ -269,6 +272,7 @@ export const updateAccountBodySchema = {
     credentials: { type: 'string' as const, minLength: 1 },
     providerConfig: { type: 'object' as const, additionalProperties: true },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {

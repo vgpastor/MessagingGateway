@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import Fastify from 'fastify';
+import type { z } from 'zod';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifySwagger from '@fastify/swagger';
@@ -20,7 +21,7 @@ import { redactUrl } from './logging/redact-url.js';
 import { requestSerializers } from './logging/request-serializers.js';
 import { QuietRequestLogController } from './logging/quiet-request-log-controller.js';
 import { healthController } from '../connections/api/health.controller.js';
-import { accountsController } from '../connections/api/accounts.controller.js';
+import { accountsController, type ValidatedAccountData, type ValidatedAccountUpdate, type ValidationResult } from '../connections/api/accounts.controller.js';
 import { sendController } from '../connections/api/send.controller.js';
 import { statusController } from '../connections/api/status.controller.js';
 import { whatsappWebhookController } from '../connections/api/inbound/whatsapp-webhook.controller.js';
@@ -31,7 +32,7 @@ import { webhookConfigController } from '../connections/api/webhook-config.contr
 import { groupsController } from '../connections/api/groups.controller.js';
 import { websocketController, selectKeyProtocol } from '../connections/ws/websocket.controller.js';
 import { metricsController } from '../connections/api/metrics.controller.js';
-import { accountSchema } from './config/accounts.schema.js';
+import { accountSchema, accountUpdateSchema } from './config/accounts.schema.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -62,6 +63,13 @@ export interface ServerDeps {
   /** Where the structured logs are written (defaults to stdout); mainly for tests. */
   logStream?: { write(msg: string): void };
   metricsEnabled?: boolean;
+}
+
+function toValidationResult<T>(parsed: z.ZodSafeParseResult<unknown>): ValidationResult<T> {
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
+  }
+  return { success: true, data: parsed.data as T };
 }
 
 export async function createServer(deps: ServerDeps) {
@@ -218,16 +226,8 @@ export async function createServer(deps: ServerDeps) {
         healthCheckScheduler: deps.healthCheckScheduler,
         providerRegistry: deps.providerRegistry,
         wireAccount: deps.wireAccount,
-        validateAccountBody: (body: unknown) => {
-          const parsed = accountSchema.safeParse(body);
-          if (!parsed.success) {
-            return {
-              success: false,
-              error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-            };
-          }
-          return { success: true, data: parsed.data as import('../connections/api/accounts.controller.js').ValidatedAccountData };
-        },
+        validateAccountBody: (body: unknown) => toValidationResult<ValidatedAccountData>(accountSchema.safeParse(body)),
+        validateAccountUpdate: (body: unknown) => toValidationResult<ValidatedAccountUpdate>(accountUpdateSchema.safeParse(body)),
       }),
     );
 
