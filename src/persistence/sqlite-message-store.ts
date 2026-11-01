@@ -18,11 +18,12 @@ import type {
 } from '../core/persistence/message-store.port.js';
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
-  toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender, waMessageIdOf,
+  toUTC, parseJsonColumnRequired, parseJsonColumn,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
+  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
 } from '../core/persistence/message-store.utils.js';
 
-const COLUMNS = envelopeColumns();
+const COLUMNS = envelopeColumns('sqlite');
 
 /**
  * SQLite-based message store using better-sqlite3.
@@ -73,41 +74,19 @@ export class SqliteMessageStore implements FullMessageStorePort {
     await runner.run();
   }
 
-  async save(envelope: UnifiedEnvelope): Promise<void> {
+  async save(envelope: UnifiedEnvelope, raw?: unknown): Promise<void> {
     const db = this.requireDb();
 
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO messages (
-        id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
-        content_type, content_preview, content_json,
-        context_json, channel_details_json, gateway_json,
-        timestamp, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const preview = extractPreview(envelope);
-
-    stmt.run(
-      envelope.id,
-      envelope.accountId,
-      envelope.channel,
-      envelope.direction,
-      envelope.conversationId,
-      envelope.sender.id,
-      envelope.sender.displayName ?? null,
-      envelope.sender.phone ?? null,
-      envelope.sender.lid ?? null,
-      envelope.recipient.id,
-      envelope.content.type,
-      preview,
-      JSON.stringify(envelope.content),
-      envelope.context ? JSON.stringify(envelope.context) : null,
-      envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
-      JSON.stringify(envelope.gateway),
-      toUTC(envelope.timestamp),
-      nowUTC(),
-    );
+    db.prepare(`
+      INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET
+        content_json = excluded.content_json,
+        content_preview = excluded.content_preview,
+        context_json = excluded.context_json,
+        channel_details_json = excluded.channel_details_json,
+        gateway_json = excluded.gateway_json
+    `).run(...messageRowValues(envelope, raw));
   }
 
   async query(filters: MessageQuery): Promise<MessageQueryResult> {
@@ -162,7 +141,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).get(...params) as { total: number };
 
     const rows = db.prepare(
-      `SELECT ${envelopeColumns('m')} FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where} ORDER BY rank LIMIT ? OFFSET ?`,
+      `SELECT ${envelopeColumns('sqlite', 'm')} FROM messages_fts f JOIN messages m ON f.id = m.id WHERE ${where} ORDER BY rank LIMIT ? OFFSET ?`,
     ).all(...params, limit, offset);
 
     return {
@@ -281,15 +260,11 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
     const db = this.requireDb();
 
+    // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
     const insert = db.prepare(`
-      INSERT INTO messages (
-        id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
-        content_type, content_preview, content_json,
-        context_json, channel_details_json, gateway_json,
-        timestamp, created_at, wa_message_id, sent_at, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
+      INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT DO NOTHING
     `);
     const bump = db.prepare(`
       INSERT INTO account_counters (account_id, n) VALUES (?, 1)
@@ -299,32 +274,8 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const assign = db.prepare('UPDATE messages SET account_seq = ? WHERE id = ?');
     const readSeq = db.prepare('SELECT seq FROM messages WHERE id = ?');
 
-    const preview = extractPreview(envelope);
-
     const run = db.transaction((): InsertResult => {
-      const info = insert.run(
-        envelope.id,
-        envelope.accountId,
-        envelope.channel,
-        envelope.direction,
-        envelope.conversationId,
-        envelope.sender.id,
-        envelope.sender.displayName ?? null,
-        envelope.sender.phone ?? null,
-        envelope.sender.lid ?? null,
-        envelope.recipient.id,
-        envelope.content.type,
-        preview,
-        JSON.stringify(envelope.content),
-        envelope.context ? JSON.stringify(envelope.context) : null,
-        envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
-        JSON.stringify(envelope.gateway),
-        toUTC(envelope.timestamp),
-        nowUTC(),
-        waMessageIdOf(envelope),
-        envelope.sentAt ? toUTC(envelope.sentAt) : null,
-        raw === undefined ? null : JSON.stringify(raw),
-      );
+      const info = insert.run(...messageRowValues(envelope, raw));
       // Duplicate: nothing was written and no accountSeq is consumed
       if (info.changes === 0) return { inserted: false };
 
@@ -373,7 +324,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
       `UPDATE messages
        SET content_json = json_set(content_json, '$.media', json(json_patch(COALESCE(json_extract(content_json, '$.media'), '{}'), ?)))
        WHERE id = ?`,
-    ).run(JSON.stringify(media), id);
+    ).run(toJsonColumn(media), id);
   }
 
   async findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>> {
@@ -395,6 +346,12 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const db = this.requireDb();
     const row = db.prepare('SELECT n FROM account_counters WHERE account_id = ?').get(accountId) as { n: number } | undefined;
     return row?.n ?? 0;
+  }
+
+  async minAccountSeq(accountId: string): Promise<number | null> {
+    const db = this.requireDb();
+    const row = db.prepare('SELECT MIN(account_seq) AS first FROM messages WHERE account_id = ?').get(accountId) as { first: number | null };
+    return row.first;
   }
 
   async close(): Promise<void> {

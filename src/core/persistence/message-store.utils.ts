@@ -75,6 +75,62 @@ export function waMessageIdOf(envelope: UnifiedEnvelope): string | null {
   return typeof id === 'string' && id !== '' ? id : null;
 }
 
+/**
+ * What a text column can hold: PostgreSQL refuses U+0000 in TEXT and JSONB, and a lone
+ * surrogate in JSONB. Provider data can carry both, and one bad character must not cost the message.
+ */
+export function cleanText(text: string): string {
+  return text.replaceAll('\u0000', '').toWellFormed();
+}
+
+/**
+ * Serialize a JSON column, cleaning every string and key on the way. Done on the values:
+ * in the serialized text a real NUL escape cannot be told from a literal backslash + `u0000`.
+ */
+export function toJsonColumn(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) => {
+    if (typeof inner === 'string') return cleanText(inner);
+    if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) return inner;
+    return Object.fromEntries(Object.entries(inner).map(([key, item]) => [cleanText(key), item]));
+  });
+}
+
+/** Columns written by an insert, in the order of {@link messageRowValues} */
+export const MESSAGE_INSERT_COLUMNS = `id, account_id, channel, direction, conversation_id,
+  sender_id, sender_name, sender_phone, sender_lid, recipient_id,
+  content_type, content_preview, content_json,
+  context_json, channel_details_json, gateway_json,
+  timestamp, created_at, wa_message_id, sent_at, raw_json`;
+
+/** Values of a message row, ready to store. `raw` is the provider payload, when there is one to keep. */
+export function messageRowValues(envelope: UnifiedEnvelope, raw?: unknown): Array<string | null> {
+  const text = (value: string | null | undefined) => (value == null ? null : cleanText(value));
+  const waMessageId = waMessageIdOf(envelope);
+  return [
+    text(envelope.id),
+    text(envelope.accountId),
+    text(envelope.channel),
+    text(envelope.direction),
+    text(envelope.conversationId),
+    text(envelope.sender.id),
+    text(envelope.sender.displayName),
+    text(envelope.sender.phone),
+    text(envelope.sender.lid),
+    text(envelope.recipient.id),
+    text(envelope.content.type),
+    text(extractPreview(envelope)),
+    toJsonColumn(envelope.content),
+    envelope.context ? toJsonColumn(envelope.context) : null,
+    envelope.channelDetails ? toJsonColumn(envelope.channelDetails) : null,
+    toJsonColumn(envelope.gateway),
+    toUTC(envelope.timestamp),
+    nowUTC(),
+    text(waMessageId),
+    envelope.sentAt ? toUTC(envelope.sentAt) : null,
+    raw === undefined ? null : toJsonColumn(raw),
+  ];
+}
+
 /** Cutoff instant (ISO UTC) for "older than N days" retention */
 export function cutoffUTC(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
@@ -93,10 +149,18 @@ const ENVELOPE_COLUMN_NAMES = [
   'seq', 'account_seq', 'wa_message_id', 'sent_at',
 ] as const;
 
+/** Reads `content_json` without the base64 historic rows carry inline: it stays in the row, never in an envelope. */
+const CONTENT_WITHOUT_BASE64 = {
+  postgres: (column: string) => `${column} #- '{media,base64}' AS content_json`,
+  sqlite: (column: string) => `json_remove(${column}, '$.media.base64') AS content_json`,
+} as const;
+
 /** SQL column list for envelope reads, optionally qualified with a table alias */
-export function envelopeColumns(alias?: string): string {
+export function envelopeColumns(dialect: keyof typeof CONTENT_WITHOUT_BASE64, alias?: string): string {
   const prefix = alias ? `${alias}.` : '';
-  return ENVELOPE_COLUMN_NAMES.map((c) => `${prefix}${c}`).join(', ');
+  return ENVELOPE_COLUMN_NAMES
+    .map((c) => (c === 'content_json' ? CONTENT_WITHOUT_BASE64[dialect](`${prefix}${c}`) : `${prefix}${c}`))
+    .join(', ');
 }
 
 /** Message-log fields of a row (BIGINT arrives as string from `pg`; absent for legacy rows) */

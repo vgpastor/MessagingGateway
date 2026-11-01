@@ -41,7 +41,7 @@ export async function mediaController(fastify: FastifyInstance, deps: MediaContr
       return reply.status(404).send({ error: 'Not Found', code: 'MEDIA_NOT_FOUND', message: `No media for message ${id}` });
     }
 
-    // Historic rows have a media without status (their content was purged): it existed and is gone.
+    // Historic rows have a media without status: its bytes were inlined as base64 and reads never return them.
     const status = media.status ?? 'expired';
     if (status === 'pending') return reply.status(202).send({ status: 'pending' });
     if (status !== 'ready') {

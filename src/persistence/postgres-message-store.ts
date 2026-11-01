@@ -14,13 +14,17 @@ import type {
 } from '../core/persistence/message-store.port.js';
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
-  toUTC, nowUTC, extractPreview, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender, waMessageIdOf,
+  toUTC, parseJsonColumnRequired, parseJsonColumn,
+  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
+  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
 } from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
 
-const COLUMNS = envelopeColumns();
+const COLUMNS = envelopeColumns('postgres');
+
+/** How long to wait for a connection before failing the write: its caller has a retry policy. */
+const CONNECTION_TIMEOUT_MS = 5_000;
 
 /**
  * PostgreSQL-based message store using the `pg` driver.
@@ -37,7 +41,12 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async init(): Promise<void> {
     try {
       const { Pool } = await import('pg');
-      this.pool = new Pool({ connectionString: this.connectionString });
+      this.pool = new Pool({ connectionString: this.connectionString, connectionTimeoutMillis: CONNECTION_TIMEOUT_MS });
+      // An idle connection dying (Postgres restart) is not fatal: the pool opens another one.
+      // Without a listener the 'error' event would take the whole process down.
+      this.pool.on('error', (err) => {
+        getLogger().warn('PostgreSQL idle connection lost', { error: err.message });
+      });
 
       // Verify connection
       const client = await this.pool.connect();
@@ -67,44 +76,19 @@ export class PostgresMessageStore implements FullMessageStorePort {
     await runner.run();
   }
 
-  async save(envelope: UnifiedEnvelope): Promise<void> {
+  async save(envelope: UnifiedEnvelope, raw?: unknown): Promise<void> {
     const pool = this.requirePool();
-    const preview = extractPreview(envelope);
 
     await pool.query(
-      `INSERT INTO messages (
-        id, account_id, channel, direction, conversation_id,
-        sender_id, sender_name, sender_phone, sender_lid, recipient_id,
-        content_type, content_preview, content_json,
-        context_json, channel_details_json, gateway_json,
-        timestamp, created_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      `INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       ON CONFLICT (id) DO UPDATE SET
         content_json = EXCLUDED.content_json,
         content_preview = EXCLUDED.content_preview,
         context_json = EXCLUDED.context_json,
         channel_details_json = EXCLUDED.channel_details_json,
         gateway_json = EXCLUDED.gateway_json`,
-      [
-        envelope.id,
-        envelope.accountId,
-        envelope.channel,
-        envelope.direction,
-        envelope.conversationId,
-        envelope.sender.id,
-        envelope.sender.displayName ?? null,
-        envelope.sender.phone ?? null,
-        envelope.sender.lid ?? null,
-        envelope.recipient.id,
-        envelope.content.type,
-        preview,
-        JSON.stringify(envelope.content),
-        envelope.context ? JSON.stringify(envelope.context) : null,
-        envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
-        JSON.stringify(envelope.gateway),
-        toUTC(envelope.timestamp),
-        nowUTC(),
-      ],
+      messageRowValues(envelope, raw),
     );
   }
 
@@ -298,42 +282,20 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
     const pool = this.requirePool();
     const client = await pool.connect();
+    // The pool only listens on idle clients: a checked-out one losing its connection would crash the process.
+    // The running query rejects anyway, so there is nothing else to do here.
+    const onConnectionError = () => {};
+    client.on('error', onConnectionError);
     try {
       await client.query('BEGIN');
 
+      // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
       const inserted = await client.query(
-        `INSERT INTO messages (
-          id, account_id, channel, direction, conversation_id,
-          sender_id, sender_name, sender_phone, sender_lid, recipient_id,
-          content_type, content_preview, content_json,
-          context_json, channel_details_json, gateway_json,
-          timestamp, created_at, wa_message_id, sent_at, raw_json
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-        ON CONFLICT (account_id, wa_message_id) WHERE wa_message_id IS NOT NULL DO NOTHING
+        `INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        ON CONFLICT DO NOTHING
         RETURNING seq`,
-        [
-          envelope.id,
-          envelope.accountId,
-          envelope.channel,
-          envelope.direction,
-          envelope.conversationId,
-          envelope.sender.id,
-          envelope.sender.displayName ?? null,
-          envelope.sender.phone ?? null,
-          envelope.sender.lid ?? null,
-          envelope.recipient.id,
-          envelope.content.type,
-          extractPreview(envelope),
-          JSON.stringify(envelope.content),
-          envelope.context ? JSON.stringify(envelope.context) : null,
-          envelope.channelDetails ? JSON.stringify(envelope.channelDetails) : null,
-          JSON.stringify(envelope.gateway),
-          toUTC(envelope.timestamp),
-          nowUTC(),
-          waMessageIdOf(envelope),
-          envelope.sentAt ? toUTC(envelope.sentAt) : null,
-          raw === undefined ? null : JSON.stringify(raw),
-        ],
+        messageRowValues(envelope, raw),
       );
 
       if (inserted.rowCount === 0) {
@@ -359,6 +321,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       await client.query('ROLLBACK').catch(() => { /* connection already unusable */ });
       throw err;
     } finally {
+      client.removeListener('error', onConnectionError);
       client.release();
     }
   }
@@ -402,7 +365,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       `UPDATE messages
        SET content_json = jsonb_set(content_json, '{media}', COALESCE(content_json->'media', '{}'::jsonb) || $2::jsonb)
        WHERE id = $1`,
-      [id, JSON.stringify(media)],
+      [id, toJsonColumn(media)],
     );
   }
 
@@ -427,6 +390,13 @@ export class PostgresMessageStore implements FullMessageStorePort {
     const pool = this.requirePool();
     const res = await pool.query('SELECT n FROM account_counters WHERE account_id = $1', [accountId]);
     return res.rows.length > 0 ? Number(res.rows[0].n) : 0;
+  }
+
+  async minAccountSeq(accountId: string): Promise<number | null> {
+    const pool = this.requirePool();
+    const res = await pool.query('SELECT MIN(account_seq) AS first FROM messages WHERE account_id = $1', [accountId]);
+    const first = res.rows[0].first as string | null;
+    return first === null ? null : Number(first);
   }
 
   async close(): Promise<void> {

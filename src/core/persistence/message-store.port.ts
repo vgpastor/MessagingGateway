@@ -11,8 +11,8 @@ import type { MediaInfo } from '../messaging/content.js';
  * that only need to persist messages don't depend on FTS or stats.
  */
 export interface MessageStorePort {
-  /** Store a message envelope */
-  save(envelope: UnifiedEnvelope): Promise<void>;
+  /** Store a message envelope. `raw` is the provider payload of a sent message, kept so it can be re-sent on request. */
+  save(envelope: UnifiedEnvelope, raw?: unknown): Promise<void>;
 
   /** Query messages with filters */
   query(filters: MessageQuery): Promise<MessageQueryResult>;
@@ -88,6 +88,8 @@ export interface MessageLogPort {
   /**
    * Atomically store an inbound message, dedupe it by (account, WhatsApp message id)
    * and assign the next `accountSeq`. A duplicate consumes no `accountSeq`.
+   * Idempotent: storing the same envelope again (same id) is a duplicate too, so a
+   * write whose outcome is unknown can always be retried.
    * `raw` is the provider payload (kept for media recovery and Baileys `getMessage`).
    */
   insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult>;
@@ -116,6 +118,9 @@ export interface MessageLogPort {
 
   /** Highest `accountSeq` handed out for the account (0 if none) */
   maxAccountSeq(accountId: string): Promise<number>;
+
+  /** Lowest `accountSeq` still stored for the account (null if none): retention removed anything below it */
+  minAccountSeq(accountId: string): Promise<number | null>;
 }
 
 // ── Query & result types ───────────────────────────────────────

@@ -281,6 +281,78 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect(next.accountSeq).toBe(3);
     });
 
+    it('stores NUL characters and lone surrogates by cleaning them, in text, JSON and raw', async () => {
+      const env = makeEnvelope('acc-a', 'NUL1', {
+        sender: { id: 'sender\u0000-1', displayName: 'Ana\u0000 \ud83d' },
+        content: { type: 'text', body: 'ho\u0000la \ud83d' },
+        context: { quotedMessageId: 'q\u0000' } as never,
+      });
+      const raw = { key: { id: 'NUL1' }, 'we\u0000ird': 'a\u0000b', nested: [{ text: 'c\u0000d \udc00' }], literal: 'back\\u0000slash' };
+
+      const res = await store.insertInbound(env, raw);
+
+      expect(res.inserted).toBe(true);
+      const found = await store.findByWaMessageId('acc-a', 'NUL1');
+      expect(found?.sender.displayName).toBe('Ana �');
+      expect(found?.sender.id).toBe('sender-1');
+      expect(found?.content).toEqual({ type: 'text', body: 'hola �' });
+      // A literal backslash + u0000 is not a NUL: it must survive untouched.
+      expect(found?.raw).toEqual({ key: { id: 'NUL1' }, weird: 'ab', nested: [{ text: 'cd �' }], literal: 'back\\u0000slash' });
+    });
+
+    it('save() and updateMedia() clean NUL characters too', async () => {
+      const env = makeEnvelope('acc-a', 'NUL2', {
+        direction: 'outbound',
+        content: { type: 'image', caption: 'fo\u0000to', media: { mimeType: 'image/jpeg', status: 'pending' } },
+      } as Partial<UnifiedEnvelope>);
+      await store.save(env);
+      await store.updateMedia(env.id, { filename: 'a\u0000.jpg' });
+
+      const media = ((await store.findById(env.id))?.content as unknown as { caption: string; media: Record<string, unknown> });
+      expect(media.caption).toBe('foto');
+      expect(media.media.filename).toBe('a.jpg');
+    });
+
+    it('insertInbound is idempotent: the same envelope again is a duplicate, with or without a WhatsApp id', async () => {
+      const withWa = makeEnvelope('acc-a', 'IDEM');
+      const withoutWa = makeEnvelope('acc-a');
+
+      expect((await store.insertInbound(withWa)).accountSeq).toBe(1);
+      expect((await store.insertInbound(withoutWa)).accountSeq).toBe(2);
+
+      expect(await store.insertInbound(withWa)).toEqual({ inserted: false });
+      expect(await store.insertInbound(withoutWa)).toEqual({ inserted: false });
+      expect(await store.maxAccountSeq('acc-a')).toBe(2);
+      expect((await store.insertInbound(makeEnvelope('acc-a', 'NEXT'))).accountSeq).toBe(3);
+    });
+
+    it('save() keeps the raw payload of a sent message and finds it by its WhatsApp id, without taking an accountSeq', async () => {
+      const raw = { key: { id: 'OUT1' }, message: { conversation: 'hola' } };
+      const env = makeEnvelope('acc-a', 'OUT1', { direction: 'outbound' });
+
+      await store.save(env, raw);
+
+      const found = await store.findByWaMessageId('acc-a', 'OUT1');
+      expect(found?.id).toBe(env.id);
+      expect(found?.raw).toEqual(raw);
+      expect(found?.accountSeq).toBeUndefined();
+      expect(await store.maxAccountSeq('acc-a')).toBe(0);
+    });
+
+    it('minAccountSeq is the lowest number still stored, so a consumer can tell retention from a lost message', async () => {
+      expect(await store.minAccountSeq('acc-a')).toBeNull();
+      const old = makeEnvelope('acc-a', 'FIRST-OLD');
+      await store.insertInbound(old);
+      await store.insertInbound(makeEnvelope('acc-a', 'FIRST-NEW'));
+      await store.save(makeEnvelope('acc-a', 'FIRST-OUT', { direction: 'outbound' }));
+      expect(await store.minAccountSeq('acc-a')).toBe(1);
+
+      await backend.backdate(old.id, 40);
+      await store.deleteOlderThan(30);
+
+      expect(await store.minAccountSeq('acc-a')).toBe(2);
+    });
+
     it('findPendingMedia returns raw for pending media and updateMedia merges the result', async () => {
       const pending = makeEnvelope('acc-a', 'IMG1', {
         content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'pending' } },
@@ -303,3 +375,79 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
 
 messageLogSuite('sqlite', createSqliteBackend);
 messageLogSuite('postgres', () => createPostgresBackend(), !PG_URL);
+
+// ── Postgres going away under the store ──────────────────────────
+
+describe.skipIf(!PG_URL)('PostgresMessageStore when connections die', () => {
+  let backend: Awaited<ReturnType<typeof createPostgresBackend>>;
+
+  beforeEach(async () => {
+    backend = await createPostgresBackend();
+  });
+
+  afterEach(async () => {
+    await backend.dispose();
+  });
+
+  const uncaught = () => {
+    const errors: unknown[] = [];
+    const onError = (err: unknown) => { errors.push(err); };
+    process.on('uncaughtException', onError);
+    return { errors, stop: () => process.off('uncaughtException', onError) };
+  };
+
+  it('bounds the wait for a connection', () => {
+    const pool = (backend.store as unknown as { pool: { options: { connectionTimeoutMillis?: number } } }).pool;
+    expect(pool.options.connectionTimeoutMillis).toBeGreaterThan(0);
+  });
+
+  it('survives an idle connection being terminated and keeps working on a new one', async () => {
+    const { errors, stop } = uncaught();
+    try {
+      const pool = (backend.store as unknown as { pool: import('pg').Pool }).pool;
+      const { rows: [{ pid }] } = await pool.query('SELECT pg_backend_pid() AS pid');
+      await backend.admin.query('SELECT pg_terminate_backend($1)', [pid]);
+      await new Promise((r) => setTimeout(r, 200));
+
+      const res = await backend.store.insertInbound(makeEnvelope('acc-a', 'AFTER-RESTART'));
+
+      expect(res.inserted).toBe(true);
+      expect(errors).toEqual([]);
+    } finally {
+      stop();
+    }
+  });
+
+  it('survives the connection of a running insert being terminated: the insert fails and the next one works', async () => {
+    const { errors, stop } = uncaught();
+    const locker = await backend.admin.connect();
+    try {
+      // Hold the account counter so the insert stays parked with its connection checked out.
+      await backend.store.insertInbound(makeEnvelope('acc-a', 'SEED'));
+      await locker.query('BEGIN');
+      await locker.query(`SELECT n FROM "${backend.schema}".account_counters WHERE account_id = 'acc-a' FOR UPDATE`);
+
+      const parked = backend.store.insertInbound(makeEnvelope('acc-a', 'PARKED'));
+      const parkedResult = parked.then(() => 'inserted', (err: Error) => err.message);
+      let pid: number | undefined;
+      for (let i = 0; i < 50 && pid === undefined; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        const { rows } = await backend.admin.query(
+          `SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%INTO account_counters%'`,
+        );
+        pid = rows[0]?.pid;
+      }
+      expect(pid).toBeDefined();
+      await backend.admin.query('SELECT pg_terminate_backend($1)', [pid]);
+
+      expect(await parkedResult).not.toBe('inserted');
+      await locker.query('ROLLBACK');
+      expect(errors).toEqual([]);
+      const next = await backend.store.insertInbound(makeEnvelope('acc-a', 'NEXT'));
+      expect(next.accountSeq).toBe(2);
+    } finally {
+      locker.release();
+      stop();
+    }
+  });
+});
