@@ -360,6 +360,75 @@ describe('GET /api/v1/messages/:id', () => {
   });
 });
 
+// ── Text that is data, not syntax ────────────────────────────
+
+describe('text from a message or a query is only text', () => {
+  let localStore: SqliteMessageStore;
+  let localApp: FastifyInstance;
+
+  function textMessage(id: string, displayName: string, body: string): UnifiedEnvelope {
+    return {
+      ...testEnvelopes[0]!,
+      id,
+      accountId: 'wa-text',
+      sender: { id: 'x@s.whatsapp.net', displayName },
+      content: { type: 'text', body },
+    };
+  }
+
+  beforeAll(async () => {
+    localStore = await createStore();
+    await localStore.save(textMessage('m-plain', 'Ana', 'the a-b plan'));
+    await localStore.save(textMessage('m-and', 'Luis', 'this AND that'));
+    await localStore.save(textMessage('m-eq', '=HYPERLINK("http://evil","x")', '=1+1'));
+    await localStore.save(textMessage('m-plus', '+34600000001', '+cmd|calc'));
+    await localStore.save(textMessage('m-minus', 'Eva', '-2+3'));
+    await localStore.save(textMessage('m-at', 'Eva', '@SUM(A1)'));
+    await localStore.save(textMessage('m-tab', 'Eva', '\t=1+1'));
+    await localStore.save(textMessage('m-cr', 'Eva', '\r=1+1'));
+    localApp = await buildApp(localStore);
+  });
+
+  afterAll(async () => {
+    await localApp.close();
+    await localStore.close();
+  });
+
+  async function search(q: string) {
+    return localApp.inject({ method: 'GET', url: `/api/v1/messages/search?accountId=wa-text&q=${encodeURIComponent(q)}`, headers: AUTH_HEADERS });
+  }
+
+  it.each(['a-b', '"x', 'AND', 'NEAR(', 'a*', 'body:x', '---', '"', 'a\0b'])('search takes %j as literal text, never answering 500', async (q) => {
+    expect((await search(q)).statusCode).toBe(200);
+  });
+
+  it('search looks for the words as they came', async () => {
+    expect((await search('a-b')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-plain']);
+    expect((await search('AND')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-and']);
+    expect((await search('this AND that')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-and']);
+  });
+
+  it('the description of search promises no query syntax', async () => {
+    const spec = (await localApp.inject({ method: 'GET', url: '/openapi.json' })).json();
+    const q = spec.paths['/api/v1/messages/search'].get.parameters.find((p: { name: string }) => p.name === 'q');
+
+    expect(q.description).not.toContain('FTS5');
+  });
+
+  it('the CSV export neutralizes the cells a spreadsheet would run as a formula', async () => {
+    const res = await localApp.inject({ method: 'GET', url: '/api/v1/messages/export?format=csv&accountId=wa-text', headers: AUTH_HEADERS });
+    const csv = res.body;
+
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
+    expect(csv).toContain(`"'+34600000001"`);
+    for (const preview of ['=1+1', '+cmd|calc', '-2+3', '@SUM(A1)', '\t=1+1', '\r=1+1']) {
+      expect(csv).toContain(`"'${preview}"`);
+    }
+    expect(csv).toContain('"the a-b plan"');
+    expect(csv).toContain('"Ana"');
+  });
+});
+
 // ── GET /api/v1/messages/search ──────────────────────────────
 
 describe('GET /api/v1/messages/search', () => {
@@ -577,6 +646,11 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     const res = await get('afterAccountSeq=0');
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('MISSING_ACCOUNT_ID');
+  });
+
+  it('takes the highest safe integer as a cursor, and nothing above it', async () => {
+    expect((await get(`accountId=wa-seq&afterAccountSeq=${Number.MAX_SAFE_INTEGER}`)).statusCode).toBe(200);
+    expect((await get('accountId=wa-seq&afterAccountSeq=9007199254740992')).statusCode).toBe(400);
   });
 
   it.each(['-1', 'abc', '1.5'])('rejects afterAccountSeq=%s with 400', async (value) => {
