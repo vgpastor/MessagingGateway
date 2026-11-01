@@ -579,17 +579,25 @@ describe('InboundPipeline', () => {
       expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'orphan' }));
     });
 
-    it('does not store a LID it cannot resolve for an account with a list', async () => {
-      const warn = capturingWarnings();
+    /** What the failed log does with the entry: `save` resolving takes it out, rejecting keeps it. */
+    async function replayKeeps(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<boolean> {
+      let kept = false;
+      vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
+        kept = await save({ envelope, raw: {} }).then(() => false, () => true);
+        return kept ? { saved: 0, kept: 1 } : { saved: 1, kept: 0 };
+      });
+      await context.pipeline.replayFailed();
+      return kept;
+    }
+
+    it('keeps a LID it cannot resolve for an account with a list: nobody has judged it yet', async () => {
       const context = setup({
         account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
         resolveLidToPhone: async () => undefined,
       });
 
-      await replayOne(context, makeEnvelope({ id: 'unresolved', conversationId: '100000000000001@lid' }));
-
+      expect(await replayKeeps(context, makeEnvelope({ conversationId: '100000000000001@lid' }))).toBe(true);
       expect(context.insertInbound).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'unresolved' }));
     });
 
     it('treats a resolver that fails as a LID it cannot resolve', async () => {
@@ -599,8 +607,7 @@ describe('InboundPipeline', () => {
         resolveLidToPhone: async () => { throw new Error('no socket'); },
       });
 
-      await replayOne(context, makeEnvelope({ conversationId: '100000000000001@lid' }));
-
+      expect(await replayKeeps(context, makeEnvelope({ conversationId: '100000000000001@lid' }))).toBe(true);
       expect(context.insertInbound).not.toHaveBeenCalled();
     });
 

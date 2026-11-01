@@ -246,7 +246,8 @@ async function main() {
   process.on('SIGINT', () => void shutdown.run('SIGINT'));
 
   try {
-    // What the previous run could not store takes its number ahead of anything new.
+    // What the previous run could not store takes its number ahead of anything new,
+    // except a LID of an account with a list: it needs a socket, so the second pass below looks at it.
     await inboundPipeline.replayFailed().catch((err) => {
       logger.error('Failed to replay the failed inbound log', { error: err instanceof Error ? err.message : String(err) });
     });
@@ -257,6 +258,7 @@ async function main() {
 
     await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
     if (shutdown.started) return;
+    inboundPipeline.replayAfterConnecting();
 
     // Media left pending by a previous run (crash between persisting the message and downloading it).
     mediaService.resumePendingMedia().catch((err) => {

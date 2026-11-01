@@ -35,6 +35,12 @@ export interface InboundPipelineDeps {
 /** What became of a message on its way to the log. Storage disabled counts as stored: there is nothing to wait for. */
 type PersistOutcome = 'stored' | 'duplicate' | 'written_off';
 
+/**
+ * How long after connecting the accounts to look at the failed log again. As long as a connection attempt may
+ * take: by then an account that could connect has a socket, which is what a LID needs to be resolved.
+ */
+export const REPLAY_AFTER_CONNECT_MS = 60_000;
+
 interface InboundMessage {
   account: ChannelAccount;
   envelope: UnifiedEnvelope;
@@ -78,6 +84,7 @@ export class InboundPipeline {
   /** Accepted by {@link handle} and neither stored nor written off yet: what a shutdown must not lose. */
   private readonly unsaved = new Set<InboundMessage>();
   private readonly guard: StoreGuard | undefined;
+  private replayTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly deps: InboundPipelineDeps) {
     this.guard = deps.store && new StoreGuard(deps.store, {
@@ -110,8 +117,10 @@ export class InboundPipeline {
    * (or a consumer gets them from the log through the gap), so nothing is emitted again; the
    * media they left `pending` is picked up by {@link MediaService.resumePendingMedia}.
    *
-   * The conversation filter applies again, failing closed like the live path: what it rejects,
-   * or cannot judge, is not stored and leaves the log. Resolves to how many entries reached the log.
+   * The conversation filter applies again. What it excludes, and what belongs to an account that no
+   * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays:
+   * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start.
+   * Resolves to how many entries reached the log.
    */
   async replayFailed(): Promise<number> {
     const { guard } = this;
@@ -133,7 +142,7 @@ export class InboundPipeline {
     return stored;
   }
 
-  /** {@link replayFailed} outside the start-up: nobody else will pick up the media of what it stores. */
+  /** {@link replayFailed} away from the first pass of a start: nobody else will pick up the media of what it stores. */
   private async recoverFailedLog(): Promise<void> {
     try {
       if ((await this.replayFailed()) > 0) await this.deps.media.resumePendingMedia();
@@ -142,13 +151,25 @@ export class InboundPipeline {
     }
   }
 
-  /** Why this entry must not be stored, if so. Resolving a LID on the way leaves the envelope as live enrichment would. */
+  /**
+   * The second pass of a start, once the accounts have had time to connect. It runs off the start-up path, so
+   * it also picks up the media of what it stores. Live messages are flowing by then: what it stores gets a later number.
+   */
+  replayAfterConnecting(delayMs: number = REPLAY_AFTER_CONNECT_MS): void {
+    this.replayTimer = setTimeout(() => void this.recoverFailedLog(), delayMs);
+    this.replayTimer.unref();
+  }
+
+  /**
+   * Why this entry must not be stored, if so; rejects when that cannot be told yet, so it stays in the log.
+   * Resolving a LID on the way leaves the envelope as live enrichment would.
+   */
   private async replayRejection(envelope: UnifiedEnvelope): Promise<string | undefined> {
     const account = await this.deps.accounts.findById(envelope.accountId);
     if (!account) return 'the account no longer exists';
     if (this.judgesConversations(account) && envelope.conversationId.endsWith('@lid')) {
       const phoneJid = await this.resolveLidToPhoneJid(envelope.accountId, envelope.conversationId);
-      if (!phoneJid) return 'its conversation could not be resolved to judge it';
+      if (!phoneJid) throw new Error('its conversation is a LID that cannot be resolved yet, so it cannot be judged');
       envelope.conversationId = phoneJid;
       envelope.sender.id = phoneJid;
     }
@@ -175,6 +196,7 @@ export class InboundPipeline {
    */
   async drain(timeoutMs: number): Promise<void> {
     this.guard?.stop();
+    clearTimeout(this.replayTimer);
 
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([
