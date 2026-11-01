@@ -239,6 +239,7 @@ describe('limit and offset of the read routes', () => {
   it.each([
     '/api/v1/messages?offset=abc',
     '/api/v1/messages?offset=-1',
+    '/api/v1/messages?offset=99999999999999999999999',
     '/api/v1/messages/search?q=order&offset=abc',
     '/api/v1/messages/export?offset=-1',
   ])('GET %s falls back to offset 0', async (url) => {

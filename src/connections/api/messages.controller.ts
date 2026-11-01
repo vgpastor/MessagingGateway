@@ -19,10 +19,10 @@ function parseLimit(raw: string | undefined, fallback: number, max: number = MAX
   return Number.isNaN(limit) ? fallback : clampPageLimit(limit, max);
 }
 
-/** Offset of a query string: undefined (the store's default) unless it is a non-negative number. */
+/** Offset of a query string: undefined (the store's default) unless it is a non-negative integer the database can take. */
 function parseOffset(raw: string | undefined): number | undefined {
   const offset = parseInt(raw ?? '', 10);
-  return offset >= 0 ? offset : undefined;
+  return Number.isSafeInteger(offset) && offset >= 0 ? offset : undefined;
 }
 
 /**
