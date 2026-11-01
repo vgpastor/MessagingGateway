@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-01
+
 ### Added
 
 - **Registro de mensajes con `accountSeq`**: cada mensaje entrante guardado lleva un número contiguo por cuenta, con deduplicación por id de WhatsApp. `GET /api/v1/messages?accountId=&afterAccountSeq=` lee lo que sigue a un cursor y devuelve `nextAfterAccountSeq`, `lastAccountSeq` y `firstAccountSeq`, para ponerse al día sin perder mensajes. Los sobres añaden `seq`, `accountSeq`, `sentAt` y, en el remitente, `phone` y `lid`.
