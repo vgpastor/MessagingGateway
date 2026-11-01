@@ -381,6 +381,62 @@ describe('accounts created at runtime', () => {
     expect((await repository.findById('hot-15'))?.status).toBe('suspended');
   });
 
+  describe('POST /accounts/:id/disconnect', () => {
+    it('logs out and deletes the session, and the next connect pairs from scratch', async () => {
+      await create('hot-22');
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/connect', headers: HEADERS });
+      const socket = sockets.at(-1)!;
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-22');
+      await mkdir(authDir, { recursive: true });
+      await writeFile(resolve(authDir, 'creds.json'), '{}');
+
+      const response = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/disconnect', headers: HEADERS });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().status).toBe('disconnected');
+      expect(socket.logout).toHaveBeenCalledTimes(1);
+      expect(existsSync(authDir)).toBe(false);
+      expect(registry.getConnectionManager('baileys')!.hasConnection('hot-22')).toBe(false);
+
+      const before = sockets.length;
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/connect', headers: HEADERS });
+      expect(sockets.length).toBe(before + 1);
+    });
+
+    it('does not wait for a logout that hangs for more than 5 s', async () => {
+      await create('hot-23');
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-23/connect', headers: HEADERS });
+      const socket = sockets.at(-1)!;
+      socket.logout.mockImplementation(() => new Promise(() => {}));
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-23');
+      await mkdir(authDir, { recursive: true });
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-23/disconnect', headers: HEADERS });
+        await vi.advanceTimersByTimeAsync(5_000);
+        vi.useRealTimers();
+        const response = await pending;
+
+        expect(response.statusCode).toBe(200);
+        expect(socket.end).toHaveBeenCalled();
+        expect(existsSync(authDir)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('says so when the session could not be deleted', async () => {
+      ids.push('hot-24');
+      await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-24'))), status: 'active', providerConfig: { authDir: '../outside' }, credentialsRef: '' });
+
+      const response = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-24/disconnect', headers: HEADERS });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json().code).toBe('DISCONNECT_FAILED');
+    });
+  });
+
   it('wires again when POST /accounts/:id/reset re-pairs after a disconnect', async () => {
     await create('hot-8');
     await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-8/connect', headers: HEADERS });

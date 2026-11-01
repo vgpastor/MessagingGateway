@@ -29,7 +29,7 @@ export interface ConnectionManagerPort {
   /** Whether a connection exists (connected or connecting) */
   hasConnection(accountId: string): boolean;
 
-  /** Disconnect and clear session */
+  /** Log out: the device is unlinked. What is left of the session on disk goes with {@link clearSession}. */
   disconnect(accountId: string): Promise<void>;
 
   /**

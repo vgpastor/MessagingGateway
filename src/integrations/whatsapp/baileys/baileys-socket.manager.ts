@@ -59,6 +59,9 @@ const STABLE_CONNECTION_MS = 60_000;
  */
 const CONNECTION_REPLACED_MIN_DELAY_MS = 5 * 60 * 1000;
 
+/** A logout is one frame to WhatsApp, and whoever asked for it is waiting: on a bad connection it is not worth more. */
+const LOGOUT_TIMEOUT_MS = 5_000;
+
 /** How long Baileys' retry counters and group metadata stay cached. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 5000;
@@ -341,8 +344,22 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     this.cancelReconnect(accountId);
     const entry = this.sockets.get(accountId);
     if (entry) {
-      await entry.socket.logout().catch(() => {});
+      await this.logoutWithinLimit(entry.socket);
+      // A logout that failed or hung left the socket open.
+      this.closeSocket(entry);
       this.sockets.delete(accountId);
+    }
+  }
+
+  private async logoutWithinLimit(socket: WASocket): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, LOGOUT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([socket.logout().catch(() => {}), limit]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

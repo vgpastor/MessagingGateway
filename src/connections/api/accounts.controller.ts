@@ -156,6 +156,12 @@ export async function accountsController(
     await manager.connect(account.id, account.providerConfig);
   }
 
+  /** Unlink the device and delete what is left of the session, so the next connect pairs from scratch. */
+  async function logOut(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await manager.disconnect(account.id);
+    await manager.clearSession?.(account.id, account.providerConfig);
+  }
+
   const idParamsSchema = {
     type: 'object' as const,
     properties: { id: { type: 'string' as const } },
@@ -442,8 +448,7 @@ export async function accountsController(
     // account created later with this id would inherit the session. Failing here must not stop the deletion.
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     try {
-      await manager?.disconnect(id);
-      await manager?.clearSession?.(id, account.providerConfig);
+      if (manager) await logOut(account, manager);
     } catch (err) {
       fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
     }
@@ -594,10 +599,12 @@ export async function accountsController(
     }
   });
 
-  // POST /api/v1/accounts/:id/disconnect — disconnect and clear session
+  // POST /api/v1/accounts/:id/disconnect — log out and delete the session
   fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/disconnect', {
     schema: {
-      description: 'Disconnect a self-auth provider account and clear its session',
+      description:
+        'Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next ' +
+        'connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.',
       tags: ['Accounts'],
       params: idParamsSchema,
       response: {
@@ -611,6 +618,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -632,7 +640,16 @@ export async function accountsController(
       });
     }
 
-    await manager.disconnect(account.id);
+    try {
+      await logOut(account, manager);
+    } catch (error) {
+      fastify.log.error({ accountId: account.id, err: error }, 'Account logout failed');
+      return reply.status(500).send({
+        error: 'Internal Server Error',
+        code: 'DISCONNECT_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to delete the session',
+      });
+    }
     fastify.log.info({ accountId: account.id }, 'Account disconnected');
 
     return { accountId: account.id, status: 'disconnected' };
