@@ -40,8 +40,13 @@ const flush = () => new Promise((r) => setImmediate(r));
 
 async function setup(accountId: string) {
   const eventBus = new EventBus();
-  const forwarder = { forwardRaw: vi.fn(async () => {}), send: vi.fn(async () => {}) };
-  subscribeConnectionAlerts(eventBus, forwarder as unknown as WebhookForwarder, ALERT_URL);
+  const forwarder = { forwardRaw: vi.fn(async () => {}), sendConfirmed: vi.fn(async () => true) };
+  subscribeConnectionAlerts({
+    eventBus,
+    webhookForwarder: forwarder as unknown as WebhookForwarder,
+    accounts: { findById: async (id) => ({ id, status: 'active' }) as ChannelAccount },
+    alertWebhookUrl: ALERT_URL,
+  });
 
   const account = { id: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {} } as unknown as ChannelAccount;
   await baileysProvider.connection!().connect(accountId, {});
@@ -119,8 +124,8 @@ describe('Baileys 401 loggedOut alert', () => {
       expect.objectContaining({ accountId: 'alert-401', status: 'auth_expired' }),
       'connection.update',
     );
-    expect(forwarder.send).toHaveBeenCalledTimes(1);
-    expect(forwarder.send).toHaveBeenCalledWith(
+    expect(forwarder.sendConfirmed).toHaveBeenCalledTimes(1);
+    expect(forwarder.sendConfirmed).toHaveBeenCalledWith(
       ALERT_URL, undefined, 'alert-401', expect.objectContaining({ status: 'auth_expired' }), 'connection.update',
     );
 
@@ -147,6 +152,6 @@ describe('Baileys 401 loggedOut alert', () => {
     await flush();
 
     expect(forwarder.forwardRaw).not.toHaveBeenCalled();
-    expect(forwarder.send).not.toHaveBeenCalled();
+    expect(forwarder.sendConfirmed).not.toHaveBeenCalled();
   });
 });

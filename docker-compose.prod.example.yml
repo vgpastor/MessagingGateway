@@ -5,6 +5,13 @@
 #   (docker compose --env-file prod.env -f docker-compose.prod.yml up -d).
 # Required: POSTGRES_PASSWORD, API_KEY. See .env.example for the full list.
 # Adjust the host paths (/opt/messaging-gateway/...) and the external network to your server.
+#
+# Before deploying, subscribe consumers such as n8n or a CRM to explicit events:
+#   POST /api/v1/accounts/:id/webhooks {"url": "...", "events": ["message.inbound"], "filters": {...}}
+# Do not use "*": `filters` only apply to message.inbound and message.sent, so such a hook also gets every
+# message.status and connection.update, filters or not. WEBHOOK_CALLBACK_URL gets every event that no hook of
+# the account matched, connection alerts and filtered-out messages included: a consumer there should look at
+# the X-UMG-Event header.
 
 services:
   postgres:
@@ -36,6 +43,8 @@ services:
       ACCOUNTS_CONFIG_PATH: /app/data/accounts.yaml
       WEBHOOK_CALLBACK_URL: ${WEBHOOK_CALLBACK_URL:-}
       WEBHOOK_CALLBACK_SECRET: ${WEBHOOK_CALLBACK_SECRET:-}
+      # Where to hear that an account went down. Without it nobody is guaranteed to find out.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       HEALTH_CHECK_INTERVAL_MS: ${HEALTH_CHECK_INTERVAL_MS:-300000}
       STORAGE_ENABLED: "true"
       STORAGE_DRIVER: postgres

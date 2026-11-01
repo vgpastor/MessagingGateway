@@ -190,7 +190,6 @@ async function main() {
 
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter, metrics);
-  subscribeConnectionAlerts(eventBus, webhookForwarder, envConfig.alertWebhookUrl);
 
   // Inbound media goes to disk (never to the database); without a message log there is nowhere to record it.
   const mediaStore = new DiskMediaStore(envConfig.mediaDir);
@@ -218,6 +217,10 @@ async function main() {
     toStorableRaw,
   });
 
+  const connectionAlerts = subscribeConnectionAlerts({
+    eventBus, webhookForwarder, accounts: accountRepository, alertWebhookUrl: envConfig.alertWebhookUrl,
+  });
+
   // Health check scheduler
   const healthCheckScheduler = new HealthCheckScheduler(
     accountRepository, credentialValidator, { intervalMs: envConfig.healthCheckIntervalMs },
@@ -242,6 +245,7 @@ async function main() {
     stopSchedules: () => {
       retention?.stop();
       healthCheckScheduler.stop();
+      connectionAlerts.stop();
     },
     closeProviders: async () => providerRegistry.shutdownAll(),
     inbound: inboundPipeline,
