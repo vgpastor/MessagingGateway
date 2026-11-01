@@ -306,8 +306,9 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   // ── Message log ────────────────────────────────────────────────
 
-  async ping(): Promise<void> {
-    await this.requirePool().query('SELECT 1');
+  async probeWrite(): Promise<void> {
+    const res = await this.requirePool().query('UPDATE store_health SET checked_at = NOW()');
+    if (res.rowCount !== 1) throw new Error('store_health has no row to write');
   }
 
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {

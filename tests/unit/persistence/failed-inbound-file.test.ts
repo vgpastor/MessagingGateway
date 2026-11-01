@@ -80,7 +80,7 @@ describe('FailedInboundFile', () => {
         if (down) throw new Error('db down');
         return store.insertInbound(e, r);
       },
-      ping: async () => {
+      probeWrite: async () => {
         if (down) throw new Error('db down');
       },
     };
@@ -126,7 +126,7 @@ describe('FailedInboundFile', () => {
           if (rig.down) throw new Error('db down');
           return store.insertInbound(e, r);
         },
-        ping: async () => {
+        probeWrite: async () => {
           if (rig.down) throw new Error('db down');
         },
       };
@@ -157,7 +157,7 @@ describe('FailedInboundFile', () => {
       rig.holds.set('m1', replaying.opened.then(reached));
       rig.down = false;
       await vi.waitFor(async () => expect(await readFile(path, 'utf8')).toContain('m1'));
-      await new Promise((resolve) => setTimeout(resolve, 30)); // the ping answered, and the pass is held at m1
+      await new Promise((resolve) => setTimeout(resolve, 30)); // the probe wrote, and the pass is held at m1
       await rig.pipeline.handle(account, envelope('during', 'W3'), {});
       expect(await rig.numbers()).toEqual([]);
 
@@ -211,7 +211,7 @@ describe('FailedInboundFile', () => {
       const replaying = gate();
       rig.holds.set('m1', replaying.opened);
       rig.down = false;
-      await new Promise((resolve) => setTimeout(resolve, 30)); // the ping answered, and the pass is held at m1
+      await new Promise((resolve) => setTimeout(resolve, 30)); // the probe wrote, and the pass is held at m1
       const late = rig.pipeline.handle(account, envelope('late', 'W2'), {});
       await new Promise((resolve) => setImmediate(resolve));
       replaying.open();
@@ -232,7 +232,7 @@ describe('FailedInboundFile', () => {
 
     it('a LID waiting does not hold the recovery: it stays, and messages are stored directly', async () => {
       const withList = { ...account, conversations: ['c@s.whatsapp.net'] } as ChannelAccount;
-      const log = { insertInbound: async (e: UnifiedEnvelope, r?: unknown) => store.insertInbound(e, r), ping: async () => {} };
+      const log = { insertInbound: async (e: UnifiedEnvelope, r?: unknown) => store.insertInbound(e, r), probeWrite: async () => {} };
       const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
       const pipeline = new InboundPipeline({
         store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics,
@@ -252,84 +252,142 @@ describe('FailedInboundFile', () => {
     });
   });
 
-  describe('a store that answers the ping and fails a message without saying it is the message', () => {
-    const rejectedIds = async () => (await readFile(join(dir, 'nested', 'failed-inbound.rejected.jsonl'), 'utf8'))
+  describe('a recovery that fails', () => {
+    const rejectedPath = () => join(dir, 'nested', 'failed-inbound.rejected.jsonl');
+    const rejectedIds = async () => (await readFile(rejectedPath(), 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(JSON.parse(line).line).envelope.id as string);
+    const fileIds = async () => (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id as string);
+    const storedIds = async () => (await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 20 })).messages.map((m) => [m.id, m.accountSeq]);
 
     const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
 
     beforeEach(() => media.resumePendingMedia.mockClear());
 
-    function pipelineWith(insertInbound: (e: UnifiedEnvelope, r?: unknown) => Promise<unknown>, ping = async () => {}) {
+    function pipelineOver(log: Pick<MessageLogPort, 'insertInbound' | 'probeWrite'>) {
       return new InboundPipeline({
-        store: { insertInbound, ping } as unknown as MessageLogPort,
-        failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics, accounts: knownAccount,
+        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics, accounts: knownAccount,
         persistRetryDelaysMs: [0], storeProbeIntervalMs: 1,
       });
     }
 
-    it('a deterministic TypeError opens the circuit, the ping closes it soon after, and nothing is lost', async () => {
-      const pipeline = pipelineWith(async (e, r) => {
-        if (e.id === 'typed') throw new TypeError('Cannot read properties of null');
-        return store.insertInbound(e, r);
-      });
+    /**
+     * A store whose inserts always fail. The probe that opens each cycle goes through, so every cycle tries
+     * the entry; the one right after the failed insert follows `afterFailure`, in turn.
+     */
+    function failingStore(afterFailure: boolean[]) {
+      const attempts: string[] = [];
+      let justFailed = false;
+      let turn = 0;
+      return {
+        attempts,
+        insertInbound: async (e: UnifiedEnvelope) => {
+          attempts.push(e.id);
+          justFailed = true;
+          throw new Error('could not write');
+        },
+        probeWrite: async () => {
+          if (!justFailed) return;
+          justFailed = false;
+          const writes = afterFailure[turn % afterFailure.length];
+          turn += 1;
+          if (!writes) throw new Error('could not write either');
+        },
+      };
+    }
+
+    it('a database that answers SELECT 1 and refuses writes, for many cycles: the circuit stays open, nothing is rejected, and it all gets in when it is back', async () => {
+      const db = (store as unknown as { db: import('better-sqlite3').Database }).db;
+      db.pragma('query_only = ON');
+      const probeWrite = vi.spyOn(store, 'probeWrite');
+      const insertInbound = vi.spyOn(store, 'insertInbound');
+      const pipeline = pipelineOver(store);
+
+      await pipeline.handle(account, envelope('m1', 'W1'), {});
+      await pipeline.handle(account, envelope('m2', 'W2'), {});
+      insertInbound.mockClear();
+      await vi.waitFor(() => expect(probeWrite.mock.calls.length).toBeGreaterThan(30));
+
+      expect(await store.count({ accountId: 'wa-1' })).toBe(0); // it does answer reads
+      expect(insertInbound).not.toHaveBeenCalled();
+      expect(existsSync(rejectedPath())).toBe(false);
+      expect(await fileIds()).toEqual(['m1', 'm2']);
+
+      db.pragma('query_only = OFF');
+      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
+      expect(await storedIds()).toEqual([['m1', 1], ['m2', 2]]);
+      await pipeline.drain(10);
+    });
+
+    it('a failure the probe right after confirms as the store\'s does not count: nothing is rejected, however many cycles', async () => {
+      await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
+      await file.append({ envelope: envelope('m2', 'W2'), raw: undefined });
+      const log = failingStore([false]);
+      const pipeline = pipelineOver(log);
+
+      await pipeline.handle(account, envelope('opener', 'W0'), {});
+      await vi.waitFor(() => expect(log.attempts.filter((id) => id === 'm1').length).toBeGreaterThan(MAX_RECOVERY_FAILURES * 4));
+
+      expect(existsSync(rejectedPath())).toBe(false);
+      await pipeline.drain(10);
+      expect(await fileIds()).toEqual(['m1', 'm2', 'opener']);
+    });
+
+    it('a store that comes and goes starts the count again: only failures in a row with a store that writes add up', async () => {
+      await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
+      const log = failingStore([...Array<boolean>(MAX_RECOVERY_FAILURES - 1).fill(true), false]);
+      const pipeline = pipelineOver(log);
+
+      await pipeline.handle(account, envelope('opener', 'W0'), {});
+      await vi.waitFor(() => expect(log.attempts.filter((id) => id === 'm1').length).toBeGreaterThan(MAX_RECOVERY_FAILURES * 4));
+
+      expect(existsSync(rejectedPath())).toBe(false);
+      await pipeline.drain(10);
+    });
+
+    it('an entry that really fails with a healthy store goes to the rejected log, only that one, and the circuit closes', async () => {
+      const typedFails = {
+        insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+          if (e.id === 'typed') throw new TypeError('Cannot read properties of null');
+          return store.insertInbound(e, r);
+        },
+        probeWrite: () => store.probeWrite(),
+      };
+      const pipeline = pipelineOver(typedFails);
 
       await pipeline.handle(account, envelope('typed', 'W1'), {});
       await pipeline.handle(account, envelope('during', 'W2'), {});
 
-      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(1));
       await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
       expect(existsSync(path)).toBe(false);
       await pipeline.handle(account, envelope('after', 'W3'), {});
 
-      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq]))
-        .toEqual([['during', 1], ['after', 2]]);
+      expect(await storedIds()).toEqual([['during', 1], ['after', 2]]);
       expect(await rejectedIds()).toEqual(['typed']);
       await pipeline.drain(10);
     });
 
-    it('a failure that passes costs nothing: the entry gets in, in its place', async () => {
-      let blips = 2;
-      let failures = 2;
+    it('the count starts again when the head changes: two entries with a couple of failures each are not one too many', async () => {
+      const failuresLeft = new Map([['m1', MAX_RECOVERY_FAILURES - 1], ['m2', MAX_RECOVERY_FAILURES - 1], ['opener', 2]]);
       await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
       await file.append({ envelope: envelope('m2', 'W2'), raw: undefined });
-      const pipeline = pipelineWith(async (e, r) => {
-        if (e.id === 'opener' && blips > 0) {
-          blips -= 1;
-          throw new Error('blip');
-        }
-        if (e.id === 'm1' && failures > 0) {
-          failures -= 1;
-          throw new Error('still settling');
-        }
-        return store.insertInbound(e, r);
+      const pipeline = pipelineOver({
+        insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+          const left = failuresLeft.get(e.id) ?? 0;
+          if (left > 0) {
+            failuresLeft.set(e.id, left - 1);
+            throw new Error('still settling');
+          }
+          return store.insertInbound(e, r);
+        },
+        probeWrite: () => store.probeWrite(),
       });
 
       await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(async () => expect(await store.count({ accountId: 'wa-1' })).toBe(3));
+      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
+      await vi.waitFor(async () => expect((await storedIds()).length).toBe(3));
 
-      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => m.id)).toEqual(['m1', 'm2', 'opener']);
-      expect(existsSync(join(dir, 'nested', 'failed-inbound.rejected.jsonl'))).toBe(false);
-      await pipeline.drain(10);
-    });
-
-    it('with a store that takes nothing it gives up one entry per few pings, never the whole log at once', async () => {
-      for (const id of ['m1', 'm2', 'm3', 'm4']) await file.append({ envelope: envelope(id, `W-${id}`), raw: undefined });
-      let answers = MAX_RECOVERY_FAILURES;
-      const pipeline = pipelineWith(
-        async () => { throw new Error('read-only transaction'); },
-        async () => {
-          answers -= 1;
-          if (answers < 0) throw new Error('the test is over');
-        },
-      );
-
-      await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(() => expect(existsSync(join(dir, 'nested', 'failed-inbound.rejected.jsonl'))).toBe(true));
-      await vi.waitFor(async () => expect(JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!).envelope.id).toBe('m2'));
-
-      expect(await rejectedIds()).toEqual(['m1']);
-      expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['m2', 'm3', 'm4', 'opener']);
+      expect((await storedIds()).map(([id]) => id)).toEqual(['m1', 'm2', 'opener']);
+      expect(existsSync(rejectedPath())).toBe(false);
       await pipeline.drain(10);
     });
   });
@@ -519,7 +577,7 @@ describe('FailedInboundFile', () => {
           if (e.id === 'poison') throw new PermanentStoreError('value too long');
           return store.insertInbound(e, r);
         },
-        ping: async () => {},
+        probeWrite: async () => {},
       };
       await file.append({ envelope: envelope('poison', 'W1'), raw: undefined });
       await file.append({ envelope: envelope('fine', 'W2'), raw: undefined });

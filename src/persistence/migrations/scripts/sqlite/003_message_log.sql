@@ -107,5 +107,12 @@ END;
 
 INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');
 
+-- One row for the write probe of the inbound path: a SELECT answers on a read-only database too.
+CREATE TABLE store_health (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  checked_at TEXT NOT NULL
+);
+INSERT INTO store_health (id, checked_at) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
 -- The rewrite left the planner statistics out of date.
 ANALYZE messages;

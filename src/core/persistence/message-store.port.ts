@@ -87,8 +87,11 @@ export type StoredEnvelope = UnifiedEnvelope & { raw?: unknown };
  * can resume from the last one they saw, and is deduplicated by WhatsApp message id.
  */
 export interface MessageLogPort {
-  /** Rejects when the store does not answer. It involves no message, so what a message holds cannot decide it. */
-  ping(): Promise<void>;
+  /**
+   * Makes a real write and has it committed, or rejects: answering is not enough, a read-only database does.
+   * It involves no message, so what a message holds cannot decide it.
+   */
+  probeWrite(): Promise<void>;
 
   /**
    * Atomically store an inbound message, dedupe it by (account, WhatsApp message id)

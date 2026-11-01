@@ -58,6 +58,11 @@ interface Backend {
   forbidAccountSeqUpdates(): Promise<void>;
   /** Sets the account's counter behind the numbers already handed out, which should never happen */
   rewindCounter(accountId: string, n: number): Promise<void>;
+  /** A handle on this same store that reads and cannot write, as a read-only database does */
+  readOnlyStore(): Promise<{ store: FullMessageStorePort; release(): Promise<void> }>;
+  healthRows(): Promise<number>;
+  addHealthRow(): Promise<void>;
+  emptyHealth(): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -78,6 +83,13 @@ async function createSqliteBackend(): Promise<Backend> {
     rewindCounter: async (accountId, n) => {
       db.prepare('UPDATE account_counters SET n = ? WHERE account_id = ?').run(n, accountId);
     },
+    readOnlyStore: async () => {
+      db.pragma('query_only = ON');
+      return { store, release: async () => { db.pragma('query_only = OFF'); } };
+    },
+    healthRows: async () => (db.prepare('SELECT COUNT(*) AS n FROM store_health').get() as { n: number }).n,
+    addHealthRow: async () => { db.prepare("INSERT INTO store_health (id, checked_at) VALUES (2, 'x')").run(); },
+    emptyHealth: async () => { db.prepare('DELETE FROM store_health').run(); },
     dispose: () => store.close(),
   };
 }
@@ -115,6 +127,16 @@ async function createPostgresBackend(schemaSuffix = randomUUID().replace(/-/g, '
     rewindCounter: async (accountId, n) => {
       await admin.query(`UPDATE "${schema}".account_counters SET n = $1 WHERE account_id = $2`, [n, accountId]);
     },
+    readOnlyStore: async () => {
+      const readOnlyUrl = new URL(PG_URL!);
+      readOnlyUrl.searchParams.set('options', `-c search_path=${schema} -c default_transaction_read_only=on`);
+      const readOnly = new PostgresMessageStore(readOnlyUrl.toString());
+      await readOnly.init();
+      return { store: readOnly, release: () => readOnly.close() };
+    },
+    healthRows: async () => (await admin.query(`SELECT COUNT(*)::int AS n FROM "${schema}".store_health`)).rows[0].n,
+    addHealthRow: async () => { await admin.query(`INSERT INTO "${schema}".store_health (id) VALUES (2)`); },
+    emptyHealth: async () => { await admin.query(`DELETE FROM "${schema}".store_health`); },
     dispose: async () => {
       await store.close();
       await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
@@ -171,12 +193,38 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect((await store.getStats()).totalMessages).toBe(4);
     });
 
-    it('ping answers while the store is open and rejects when it is not', async () => {
-      await expect(backend.store.ping()).resolves.toBeUndefined();
+    describe('the write probe', () => {
+      it('goes through on a store that writes, and not on a closed one', async () => {
+        await expect(store.probeWrite()).resolves.toBeUndefined();
 
-      await backend.store.close();
+        await store.close();
 
-      await expect(backend.store.ping()).rejects.toThrow();
+        await expect(store.probeWrite()).rejects.toThrow();
+      });
+
+      it('fails on a store that answers reads and refuses writes, which is what a SELECT 1 could not tell', async () => {
+        const readOnly = await backend.readOnlyStore();
+        try {
+          await expect(readOnly.store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 1 })).resolves.toBeDefined();
+
+          await expect(readOnly.store.probeWrite()).rejects.toThrow();
+          await expect(readOnly.store.insertInbound(makeEnvelope('acc-a', 'RO'))).rejects.not.toBeInstanceOf(PermanentStoreError);
+        } finally {
+          await readOnly.release();
+        }
+      });
+
+      it('has its one row from the migration, and there cannot be a second', async () => {
+        expect(await backend.healthRows()).toBe(1);
+
+        await expect(backend.addHealthRow()).rejects.toThrow();
+      });
+
+      it('a store with no row to write proves nothing, so it fails', async () => {
+        await backend.emptyHealth();
+
+        await expect(store.probeWrite()).rejects.toThrow();
+      });
     });
 
     it('insertInbound assigns contiguous accountSeq per account', async () => {

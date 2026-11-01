@@ -98,5 +98,12 @@ CREATE INDEX idx_messages_type ON messages(content_type);
 CREATE INDEX idx_messages_direction ON messages(direction);
 CREATE INDEX idx_messages_search ON messages USING GIN(search_vector);
 
+-- One row for the write probe of the inbound path: a SELECT answers on a read-only database too.
+CREATE TABLE store_health (
+  id SMALLINT PRIMARY KEY CHECK (id = 1),
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO store_health (id) VALUES (1);
+
 -- The rewrite left the planner statistics out of date.
 ANALYZE messages;

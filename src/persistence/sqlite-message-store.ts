@@ -247,8 +247,9 @@ export class SqliteMessageStore implements FullMessageStorePort {
 
   // ── Message log ────────────────────────────────────────────────
 
-  async ping(): Promise<void> {
-    this.requireDb().prepare('SELECT 1').get();
+  async probeWrite(): Promise<void> {
+    const { changes } = this.requireDb().prepare('UPDATE store_health SET checked_at = ?').run(new Date().toISOString());
+    if (changes !== 1) throw new Error('store_health has no row to write');
   }
 
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {

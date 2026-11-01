@@ -6,13 +6,13 @@ import type { InsertResult, MessageLogPort } from '../persistence/message-store.
 /** Waits between attempts to store a message: 5 retries over about 30 s, inside the account's queue. */
 export const PERSIST_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
 
-/** How often a ping checks whether the message log is back, while the circuit is open. */
+/** How often a write of its own checks whether the message log is back, while the circuit is open. */
 export const STORE_PROBE_INTERVAL_MS = 30_000;
 
 /**
- * How many recoveries in a row the same entry of the failed log may fail right after a ping answered, before it
- * is taken for the message's fault. Each one waits for the next ping, so giving up on a whole log takes a while
- * if it is the store that answers and does not write (read-only, disk full), and only the entry at the head pays.
+ * How many recoveries in a row the same entry of the failed log may fail with a store that writes, as the probe right
+ * after the failure shows, before the failure is taken for the entry's. A failure the probe confirms as the store's
+ * does not count, and it starts the count again: what stands against an entry must be failures in a row of it alone.
  */
 export const MAX_RECOVERY_FAILURES = 3;
 
@@ -49,11 +49,11 @@ interface Diversion {
  * How the inbound path talks to the message log when it fails. A failure may pass, so a message
  * is retried inside its account's queue. A message that runs out of retries means the store is
  * down: the circuit opens, and from then on {@link insert} rejects at once instead of holding
- * every queue for half a minute per message. A ping every {@link STORE_PROBE_INTERVAL_MS} tells when
- * it is back: it depends on no message, so none can keep the circuit open. The message that opened it
- * goes to the failed log like the rest.
+ * every queue for half a minute per message. A write of its own every {@link STORE_PROBE_INTERVAL_MS}
+ * tells when it is back: it depends on no message, so none can keep the circuit open, and an answer
+ * alone is not enough. The message that opened it goes to the failed log like the rest.
  *
- * What is in the failed log arrived first. So when the ping answers the circuit does not close yet: it is
+ * What is in the failed log arrived first. So when the probe writes the circuit does not close yet: it is
  * recovering, the failed log goes in through {@link insertOnce}, and live messages keep rejecting, to
  * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again, unless the
  * same entry has been the one to fail too many times: then it is refused, so one message cannot keep every account out.
@@ -62,7 +62,7 @@ interface Diversion {
  */
 export class StoreGuard {
   private diversion: Diversion | undefined;
-  /** The entry that last failed during a recovery, and how many in a row. */
+  /** The entry that last failed during a recovery with a store that writes, and how many in a row. */
   private suspect: { id: string; failures: number } | undefined;
   private probeTimer: NodeJS.Timeout | undefined;
   private stopped = false;
@@ -74,7 +74,7 @@ export class StoreGuard {
   }
 
   constructor(
-    private readonly store: Pick<MessageLogPort, 'insertInbound' | 'ping'>,
+    private readonly store: Pick<MessageLogPort, 'insertInbound' | 'probeWrite'>,
     private readonly options: StoreGuardOptions,
   ) {}
 
@@ -113,7 +113,7 @@ export class StoreGuard {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
       if (isPermanentFailure(err)) throw asRefusal(err);
-      if (this.recovering && this.failedTooOften(envelope)) throw asRefusal(err);
+      if (this.recovering && await this.failedTooOften(envelope)) throw asRefusal(err);
       this.open(err);
       throw err;
     }
@@ -152,7 +152,15 @@ export class StoreGuard {
     return { inserted: true, seq: result.seq, accountSeq: result.accountSeq };
   }
 
-  private failedTooOften(envelope: UnifiedEnvelope): boolean {
+  /** Whether this failure of an entry is one too many. Only the probe, right after it, can tell it from the store's. */
+  private async failedTooOften(envelope: UnifiedEnvelope): Promise<boolean> {
+    try {
+      await this.store.probeWrite();
+    } catch {
+      this.suspect = undefined;
+      return false;
+    }
+    // Another entry at the head starts from one.
     const failures = this.suspect?.id === envelope.id ? this.suspect.failures + 1 : 1;
     this.suspect = { id: envelope.id, failures };
     return failures >= MAX_RECOVERY_FAILURES;
@@ -174,7 +182,7 @@ export class StoreGuard {
   private async probe(): Promise<void> {
     if (this.diversion?.phase !== 'down') return;
     try {
-      await this.store.ping();
+      await this.store.probeWrite();
     } catch (err) {
       this.logger.warn('Message log still down', { error: errorMessage(err) });
       if (!this.stopped) this.scheduleProbe();
