@@ -161,6 +161,7 @@ export class InboundPipeline {
       this.retryHeldLater();
       throw err;
     });
+    this.deps.metrics.failedLogHeld(kept);
     if (kept > 0) this.retryHeldLater();
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });

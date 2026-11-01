@@ -58,6 +58,12 @@ export const persistFailuresTotal = new Counter({
   registers: [registry],
 });
 
+export const failedLogHeld = new Gauge({
+  name: 'umg_failed_log_held',
+  help: 'Entries still waiting in the failed log after the last pass: alert if it stays above 0',
+  registers: [registry],
+});
+
 export const inboundRejectedTotal = new Counter({
   name: 'umg_inbound_rejected_total',
   help: 'Entries of the failed log that will never be stored (explicitly refused by the store, unreadable, or a LID unresolved after 7 days on a connected account): they went to data/failed-inbound.rejected.jsonl and need a person',

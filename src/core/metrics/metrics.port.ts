@@ -21,6 +21,7 @@ export interface MetricsPort {
   persistFailures(): void;
   /** Entries of the failed log that will never be stored went to the log of rejects */
   inboundRejected(count: number): void;
+  failedLogHeld(count: number): void;
   /** An inbound media was not stored (over the size cap, or the download/write failed) */
   mediaSkipped(reason: MediaSkipReason): void;
   /** An inbound provider message was dropped before the pipeline (never logged nor emitted) */
@@ -39,6 +40,7 @@ export const noopMetrics: MetricsPort = {
   observeHistogram: () => {},
   persistFailures: () => {},
   inboundRejected: () => {},
+  failedLogHeld: () => {},
   mediaSkipped: () => {},
   inboundSkipped: () => {},
   inboundFiltered: () => {},

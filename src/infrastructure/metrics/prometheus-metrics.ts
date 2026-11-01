@@ -4,6 +4,7 @@ import {
   registry,
   persistFailuresTotal,
   inboundRejectedTotal,
+  failedLogHeld,
   mediaSkippedTotal,
   inboundSkippedTotal,
   inboundFilteredTotal,
@@ -41,6 +42,10 @@ export class PrometheusMetrics implements MetricsPort {
 
   inboundRejected(count: number): void {
     inboundRejectedTotal.inc(count);
+  }
+
+  failedLogHeld(count: number): void {
+    failedLogHeld.set(count);
   }
 
   mediaSkipped(reason: MediaSkipReason): void {

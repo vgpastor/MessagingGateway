@@ -77,7 +77,7 @@ function setup(opts: {
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
-    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), inboundRejected: vi.fn(), lastInbound: vi.fn(),
+    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), inboundRejected: vi.fn(), failedLogHeld: vi.fn(), lastInbound: vi.fn(),
   };
   const failedLog: FailedInboundLog = { append: vi.fn(async () => {}), replay: vi.fn(async () => ({ saved: 0, kept: 0, rejected: 0 })) };
   const pipeline = new InboundPipeline({
@@ -756,6 +756,18 @@ describe('InboundPipeline', () => {
 
       expect(context.metrics.inboundRejected).toHaveBeenCalledWith(2);
       expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ rejected: 2 }));
+    });
+
+    it('reports what stays waiting in the failed log after each pass, also when it empties', async () => {
+      const context = setup();
+      vi.mocked(context.failedLog.replay).mockResolvedValueOnce({ saved: 0, kept: 4, rejected: 0 });
+      vi.mocked(context.failedLog.replay).mockResolvedValueOnce({ saved: 4, kept: 0, rejected: 0 });
+
+      await context.pipeline.replayFailed();
+      expect(context.metrics.failedLogHeld).toHaveBeenLastCalledWith(4);
+
+      await context.pipeline.replayFailed();
+      expect(context.metrics.failedLogHeld).toHaveBeenLastCalledWith(0);
     });
 
     it('counts nothing when nothing was rejected', async () => {
