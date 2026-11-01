@@ -112,16 +112,10 @@ describe('validateWebhookSignature', () => {
   });
 });
 
-function scopedRequest(
-  headers: Record<string, string>,
-  method: string,
-  url: string,
-  routePattern?: string,
-) {
+function scopedRequest(headers: Record<string, string>, method: string, routePattern?: string) {
   return {
     headers,
     method,
-    url,
     ...(routePattern ? { routeOptions: { url: routePattern } } : {}),
   } as any;
 }
@@ -132,7 +126,7 @@ describe('createApiKeyGuard with a read-only key', () => {
   const ADMIN = { 'x-api-key': 'admin-key' };
 
   it('marks the admin key as scope admin and lets it through everywhere', async () => {
-    const req = scopedRequest(ADMIN, 'POST', '/api/v1/accounts/wa/reset');
+    const req = scopedRequest(ADMIN, 'POST', '/api/v1/accounts/:id/reset');
     const reply = mockReply();
 
     await guard(req, reply);
@@ -142,15 +136,15 @@ describe('createApiKeyGuard with a read-only key', () => {
   });
 
   it.each([
-    ['GET', '/api/v1/messages'],
-    ['GET', '/api/v1/messages?limit=5&token=x'],
-    ['GET', '/api/v1/messages/stats'],
-    ['GET', '/api/v1/messages/ABC123'],
-    ['GET', '/api/v1/media/ABC123'],
-    ['GET', '/ws/events'],
-    ['GET', '/ws/events?accounts=wa'],
-  ])('read key may %s %s', async (method, url) => {
-    const req = scopedRequest(READ, method, url);
+    '/api/v1/messages',
+    '/api/v1/messages/:id',
+    '/api/v1/messages/stats',
+    '/api/v1/messages/search',
+    '/api/v1/messages/analytics',
+    '/api/v1/messages/export',
+    '/api/v1/media/:id',
+  ])('read key may GET %s', async (route) => {
+    const req = scopedRequest(READ, 'GET', route);
     const reply = mockReply();
 
     await guard(req, reply);
@@ -161,34 +155,26 @@ describe('createApiKeyGuard with a read-only key', () => {
   });
 
   it.each([
-    ['POST', '/api/v1/accounts/wa/reset'],
+    ['POST', '/api/v1/accounts/:id/reset'],
     ['GET', '/api/v1/accounts'],
-    ['GET', '/api/v1/accounts/wa/qr'],
+    ['GET', '/api/v1/accounts/:id/qr'],
     ['GET', '/metrics'],
     ['POST', '/api/v1/messages'],
-    ['DELETE', '/api/v1/messages/ABC123'],
+    ['DELETE', '/api/v1/messages/:id'],
     ['POST', '/api/v1/messages/send'],
+    ['GET', '/api/v1/messages/:id/status'],
     ['GET', '/api/v1/messagesfoo'],
     ['GET', '/api/v1/media'],
-    ['GET', '/api/v1/accounts?next=/api/v1/messages'],
-    ['GET', '/ws/events/other'],
-  ])('read key gets 403 on %s %s', async (method, url) => {
-    const req = scopedRequest(READ, method, url);
+    ['GET', '/ws/events'],
+    ['GET', undefined],
+  ])('read key gets 403 on %s %s', async (method, route) => {
+    const req = scopedRequest(READ, method, route);
     const reply = mockReply();
 
     await guard(req, reply);
 
     expect(reply.statusCode).toBe(403);
     expect((reply.body as Record<string, string>).error).toBe('Forbidden');
-  });
-
-  it('judges the matched route pattern when the router provides it', async () => {
-    const req = scopedRequest(READ, 'GET', '/api/v1/messages/../accounts', '/api/v1/accounts');
-    const reply = mockReply();
-
-    await guard(req, reply);
-
-    expect(reply.statusCode).toBe(403);
   });
 
   it('rejects an unknown key with 401, not 403', async () => {
@@ -210,7 +196,7 @@ describe('createApiKeyGuard with a read-only key', () => {
 
   it('a read key equal to the admin key is treated as admin', async () => {
     const same = createApiKeyGuard({ adminKey: 'same-key', readKey: 'same-key' });
-    const req = scopedRequest({ 'x-api-key': 'same-key' }, 'POST', '/api/v1/accounts/wa/reset');
+    const req = scopedRequest({ 'x-api-key': 'same-key' }, 'POST', '/api/v1/accounts/:id/reset');
     const reply = mockReply();
 
     await same(req, reply);

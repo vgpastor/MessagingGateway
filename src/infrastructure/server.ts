@@ -55,7 +55,7 @@ export interface ServerDeps {
   /** Where inbound media is read from; enables GET /api/v1/media/:id together with `messageStore`. */
   mediaStore?: import('../core/inbound/media-service.js').MediaFileReader;
   apiKey: string;
-  /** Optional read-only key: GET messages/media and the WS event stream, nothing else. */
+  /** Optional read-only key: GET messages/media and listening to the WS event stream, nothing else. */
   readApiKey?: string;
   port: number;
   logLevel: string;
@@ -197,7 +197,8 @@ export async function createServer(deps: ServerDeps) {
   const apiKeyGuard = createApiKeyGuard({ adminKey: deps.apiKey, readKey: deps.readApiKey });
 
   await fastify.register(async (authenticated) => {
-    authenticated.addHook('preHandler', apiKeyGuard);
+    // onRequest: nothing of an unauthenticated request is read, not even its body.
+    authenticated.addHook('onRequest', apiKeyGuard);
 
     // Prometheus metrics: admin key only (the read-only key gets 403).
     if (deps.metricsEnabled !== false) {
