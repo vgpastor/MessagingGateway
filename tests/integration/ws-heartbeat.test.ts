@@ -138,6 +138,28 @@ describe('ws read-only client', () => {
     expect(forAdmin['data'].qr).toBe('QR-PAYLOAD-123');
   });
 
+  it('an event with no account reaches only the admin clients that listen to everything', async () => {
+    const reader = connect(baseUrl, [`umg.${READ_KEY}`]);
+    const filtered = connect(`${baseUrl}?accounts=wa-1`, [`umg.${ADMIN_KEY}`]);
+    const admin = connect(baseUrl, [`umg.${ADMIN_KEY}`]);
+    await Promise.all([reader.ready, filtered.ready, admin.ready]);
+    for (const client of [reader, filtered, admin]) {
+      await waitFor(() => client.messages.find((m) => m['event'] === 'connected'));
+    }
+
+    await bus.emit(createEvent(Events.MESSAGE_SEND_FAILURE, 'router', { error: 'No account for +34600111222', code: 'UNKNOWN' }));
+    await waitFor(() => admin.messages.find((m) => m['event'] === 'message.send.failed'));
+
+    // Sent after it and over the same path: once this arrives, the one above would have arrived too.
+    await bus.emit(createEvent(Events.MESSAGE_SEND_FAILURE, 'router', { error: 'with account', code: 'UNKNOWN', accountId: 'wa-1' }, 'wa-1'));
+    await waitFor(() => reader.messages.find((m) => m['event'] === 'message.send.failed'));
+    await waitFor(() => filtered.messages.find((m) => m['event'] === 'message.send.failed'));
+
+    expect(reader.messages.filter((m) => m['event'] === 'message.send.failed').map((m) => m['data'].error)).toEqual(['with account']);
+    expect(filtered.messages.filter((m) => m['event'] === 'message.send.failed').map((m) => m['data'].error)).toEqual(['with account']);
+    expect(admin.messages.filter((m) => m['event'] === 'message.send.failed')).toHaveLength(2);
+  });
+
   it('refuses the send action for a read client', async () => {
     const sendRequests: unknown[] = [];
     bus.on(Events.MESSAGE_SEND_REQUEST, (e) => {
