@@ -16,7 +16,7 @@ import { createBaileysMessageLookup } from './baileys-message-lookup.js';
 import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
 import { noopMetrics, type MetricsPort } from '../../../core/metrics/metrics.port.js';
 import { baileysInboundSkipReason, isInboundUpsert, isStatusBroadcast } from './baileys-inbound-skip.js';
-import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
+import { jidNormalizedUser } from '@whiskeysockets/baileys';
 
 const GROUP_CACHE_TTL = 5 * 60 * 1000;
 /** How long a group that could not be resolved is left alone: a burst from it must not wait once per message. */
@@ -146,19 +146,18 @@ export function createBaileysProvider({ metrics = noopMetrics, messageStore }: B
       });
 
       socketManager.onConnectionUpdate(account.id, (update) => {
-        // 401 loggedOut: WhatsApp unlinked the device and the socket manager will
-        // not reconnect. Report it as auth_expired so it gets alerted, not just logged.
-        const statusCode = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-        const loggedOut = update.connection === 'close' && statusCode === DisconnectReason.loggedOut;
-        const status = loggedOut ? 'auth_expired' : socketManager.getConnectionStatus(account.id);
-        const qr = update.qr ?? socketManager.getLastQr(account.id);
+        const closeCode = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
+        const end = socketManager.getConnectionEnd(account.id);
+        const payload: ConnectionUpdatePayload = {
+          accountId: account.id,
+          // A lost session gets its own status: unlike a dropped connection, no reconnect follows.
+          status: end === 'session_lost' ? 'auth_expired' : end === 'closed' ? 'disconnected' : socketManager.getConnectionStatus(account.id),
+          qr: update.qr ?? socketManager.getLastQr(account.id),
+          ...(closeCode === undefined ? {} : { closeCode }),
+          ...(end === 'closed' ? { deliberate: true } : {}),
+        };
         eventBus.emit(
-          createEvent<ConnectionUpdatePayload>(
-            Events.CONNECTION_UPDATE,
-            'baileys',
-            { accountId: account.id, status, qr },
-            account.id,
-          ),
+          createEvent<ConnectionUpdatePayload>(Events.CONNECTION_UPDATE, 'baileys', payload, account.id),
         ).catch((err) => {
           getLogger().error('Failed to emit connection update', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
         });

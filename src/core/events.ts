@@ -36,9 +36,16 @@ export interface MessageOutboundPayload {
 
 export interface ConnectionUpdatePayload {
   accountId: string;
-  /** `auth_expired`: the session was revoked (e.g. WhatsApp 401 loggedOut); no reconnect follows. */
+  /**
+   * `auth_expired`: the session was revoked (e.g. WhatsApp 401 loggedOut); no reconnect follows.
+   * `disconnected`: the connection dropped; the provider is trying again, unless `deliberate`.
+   */
   status: 'disconnected' | 'connecting' | 'connected' | 'auth_expired';
   qr?: string;
+  /** The provider's reason for a close, when it gave one. */
+  closeCode?: number;
+  /** Someone closed the connection on purpose (a disconnect, a deletion): nothing is wrong and none will follow. */
+  deliberate?: boolean;
 }
 
 export interface MessageSendRequestPayload {

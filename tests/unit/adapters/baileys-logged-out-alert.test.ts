@@ -49,6 +49,54 @@ async function setup(accountId: string) {
   return { forwarder, socket: sockets.at(-1)! };
 }
 
+describe('Baileys connection events', () => {
+  const accounts: string[] = [];
+  afterEach(async () => {
+    for (const id of accounts.splice(0)) {
+      await rm(resolve(process.cwd(), 'data', 'baileys-auth', id), { recursive: true, force: true });
+    }
+  });
+
+  async function wired(accountId: string) {
+    accounts.push(accountId);
+    const eventBus = new EventBus();
+    const events: Array<Record<string, unknown>> = [];
+    eventBus.on<Record<string, unknown>>('connection.update', (event) => { events.push(event.data); });
+    const account = { id: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {} } as unknown as ChannelAccount;
+    await baileysProvider.connection!().connect(accountId, {});
+    await baileysProvider.wireEvents!(account, eventBus, { handle: vi.fn(async () => {}) } as unknown as InboundPipeline);
+    return { events, socket: sockets.at(-1)! };
+  }
+
+  it.each([401, 403])('reports a %i close as auth_expired with its code', async (code) => {
+    const { events, socket } = await wired(`event-${code}`);
+
+    socket.ev.emit('connection.update', close(code));
+    await flush();
+
+    expect(events).toEqual([expect.objectContaining({ status: 'auth_expired', closeCode: code })]);
+  });
+
+  it('reports a transient close as disconnected, not as a lost session', async () => {
+    const { events, socket } = await wired('event-428');
+
+    socket.ev.emit('connection.update', close(428));
+    await flush();
+
+    expect(events).toEqual([expect.objectContaining({ status: 'disconnected', closeCode: 428 })]);
+    await baileysProvider.connection!().disconnect('event-428');
+  });
+
+  it('reports an intentional disconnect as deliberate, once', async () => {
+    const { events } = await wired('event-deliberate');
+
+    await baileysProvider.connection!().disconnect('event-deliberate'); // logout() emits a 401 close
+    await flush();
+
+    expect(events).toEqual([expect.objectContaining({ status: 'disconnected', deliberate: true })]);
+  });
+});
+
 describe('Baileys 401 loggedOut alert', () => {
   const accounts: string[] = [];
   afterEach(async () => {

@@ -9,7 +9,8 @@ import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logge
 // A fake WhatsApp socket per makeWASocket() call; tests drive its 'connection.update'.
 interface FakeSocket { ev: EventEmitter; end: () => void; logout: () => Promise<void> }
 const fakeSockets: FakeSocket[] = [];
-const auth = { saveCreds: (): unknown => undefined };
+const auth = { saveCreds: (): unknown => undefined, failLoad: false };
+let versionFetches = 0;
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
@@ -18,8 +19,14 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
     fakeSockets.push(socket);
     return socket;
   },
-  useMultiFileAuthState: async () => ({ state: {}, saveCreds: () => auth.saveCreds() }),
-  fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
+  useMultiFileAuthState: async () => {
+    if (auth.failLoad) throw new Error('cannot read the auth state');
+    return { state: {}, saveCreds: () => auth.saveCreds() };
+  },
+  fetchLatestBaileysVersion: async () => {
+    versionFetches += 1;
+    return { version: [2, 3000, 1] };
+  },
 }));
 
 const ACCOUNT_ID = 'test-clear-session';
@@ -85,6 +92,7 @@ describe('BaileysSocketManager.closeAll', () => {
   it('closes the socket without logging out and keeps the auth state, so the next start resumes the session', async () => {
     const manager = new BaileysSocketManager();
     const { end, logout } = await connected(manager);
+    await mkdir(closeAuthDir, { recursive: true });
     await writeFile(resolve(closeAuthDir, 'creds.json'), '{}');
 
     manager.closeAll();
@@ -195,6 +203,16 @@ describe('BaileysSocketManager subscriptions', () => {
 
     expect(handlersFor(manager, 'gone')).toHaveLength(0);
   });
+
+  it('tells the subscribers that a disconnect was on purpose, before forgetting them', async () => {
+    const manager = new BaileysSocketManager();
+    const seen: unknown[] = [];
+    manager.onConnectionUpdate('gone-2', () => seen.push(manager.getConnectionEnd('gone-2')));
+
+    await manager.disconnect('gone-2');
+
+    expect(seen).toEqual(['closed']);
+  });
 });
 
 /** The registries are private state; reach in rather than exposing them just for tests. */
@@ -220,11 +238,12 @@ describe('BaileysSocketManager reconnection', () => {
   afterEach(async () => {
     vi.useRealTimers();
     fakeSockets.length = 0;
+    auth.failLoad = false;
     await rm(reconnectAuthDir, { recursive: true, force: true });
   });
 
   function useFakeTimeouts(): void {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   }
 
   /** Let the real fs/promise work behind connect() settle until `count` sockets exist. */
@@ -296,22 +315,110 @@ describe('BaileysSocketManager reconnection', () => {
     await waitForSockets(3);
   });
 
-  it('resets the attempt counter once the connection opens', async () => {
-    useFakeTimeouts();
-    const manager = new BaileysSocketManager({ random: maxJitter });
+  /** Three failures in a row, leaving the fourth socket open. The next close waits 8 s unless the streak was forgotten. */
+  async function openAfterThreeFailures(manager: BaileysSocketManager): Promise<void> {
     await connected(manager);
-
     for (let i = 0; i < 3; i++) {
       fakeSockets[i]!.ev.emit('connection.update', close(428));
       await vi.advanceTimersByTimeAsync(300_000);
       await waitForSockets(i + 2);
     }
     fakeSockets[3]!.ev.emit('connection.update', { connection: 'open' });
+  }
 
-    // Without the reset this would wait for attempt 3 (8000ms).
+  it('forgets the failure streak once the connection has been stable for 60 s', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: maxJitter });
+    await openAfterThreeFailures(manager);
+    await vi.advanceTimersByTimeAsync(60_000);
+
     fakeSockets[3]!.ev.emit('connection.update', close(428));
     await vi.advanceTimersByTimeAsync(1000);
     await waitForSockets(5);
+  });
+
+  it('keeps backing off when the connection opens and drops right away (no reconnection storm)', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: maxJitter });
+    await openAfterThreeFailures(manager);
+    await vi.advanceTimersByTimeAsync(59_999);
+
+    fakeSockets[3]!.ev.emit('connection.update', close(428));
+    await vi.advanceTimersByTimeAsync(7_999);
+    await settle();
+    expect(fakeSockets).toHaveLength(4);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSockets(5);
+  });
+
+  it('waits at least 5 minutes after a 440: another session took over and insisting only kicks it out', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: () => 0 });
+    await connected(manager);
+
+    fakeSockets[0]!.ev.emit('connection.update', close(440));
+    await vi.advanceTimersByTimeAsync(299_999);
+    await settle();
+    expect(fakeSockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSockets(2);
+  });
+
+  it('a 403 is terminal, like a 401: the session is lost and only an explicit connect revives it', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: maxJitter });
+    manager.onConnectionUpdate(RECONNECT_ID, () => {});
+    await connected(manager);
+
+    fakeSockets[0]!.ev.emit('connection.update', close(403));
+    await vi.advanceTimersByTimeAsync(600_000);
+    await settle();
+
+    expect(fakeSockets).toHaveLength(1);
+    expect(manager.hasSocket(RECONNECT_ID)).toBe(false);
+    expect(manager.getConnectionEnd(RECONNECT_ID)).toBe('session_lost');
+    expect(manager.ensureConnected(RECONNECT_ID, {})).toBe(false);
+  });
+
+  it('asks for the WhatsApp version again after a 405, and only then', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: maxJitter });
+    await connected(manager);
+    const fetches = versionFetches;
+
+    fakeSockets[0]!.ev.emit('connection.update', close(428));
+    await vi.advanceTimersByTimeAsync(300_000);
+    await waitForSockets(2);
+    expect(versionFetches).toBe(fetches);
+
+    fakeSockets[1]!.ev.emit('connection.update', close(405));
+    await vi.advanceTimersByTimeAsync(300_000);
+    await waitForSockets(3);
+    expect(versionFetches).toBe(fetches + 1);
+  });
+
+  it('reports a connect that could not even open, which no socket event would ever tell', async () => {
+    const manager = new BaileysSocketManager();
+    const handler = vi.fn();
+    manager.onConnectionUpdate(RECONNECT_ID, handler);
+    auth.failLoad = true;
+
+    await expect(manager.connect(RECONNECT_ID, {})).rejects.toThrow('cannot read the auth state');
+
+    expect(handler).toHaveBeenCalledWith({ connection: 'close' });
+  });
+
+  it('does not open the socket of a connect in flight when the account is disconnected meanwhile', async () => {
+    const manager = new BaileysSocketManager();
+
+    const connecting = manager.connect(RECONNECT_ID, {});
+    await manager.disconnect(RECONNECT_ID);
+    await connecting;
+
+    expect(fakeSockets).toHaveLength(0);
+    expect(manager.hasSocket(RECONNECT_ID)).toBe(false);
   });
 
   it('does not reconnect on loggedOut 401', async () => {

@@ -10,7 +10,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import type { Boom } from '@hapi/boom';
 import { resolve, sep } from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import type { BaileysProviderConfig } from './baileys.types.js';
 import { getLogger } from '../../../core/logger/logger.port.js';
 import { computeBackoffMs } from '../../../core/util/backoff.js';
@@ -34,7 +34,30 @@ interface SocketEntry {
   config: BaileysProviderConfig;
   connectionStatus: ConnectionStatus;
   lastQr: string | undefined;
+  /** When this socket reached 'open'. */
+  openedAt?: number;
 }
+
+/**
+ * Why an account has no connection and none is coming until an explicit connect:
+ * WhatsApp ended the session (`session_lost`) or someone disconnected it (`closed`).
+ */
+export type ConnectionEnd = 'session_lost' | 'closed';
+
+/** WhatsApp unlinked the device (401) or refuses the account (403): retrying cannot help. */
+const SESSION_LOST_CODES: ReadonlySet<number> = new Set([DisconnectReason.loggedOut, DisconnectReason.forbidden]);
+
+/** WhatsApp rejects the version we advertise. Baileys has no name for this code. */
+const VERSION_REJECTED_CODE = 405;
+
+/** An open socket this young says nothing about the connection being good: the failure streak stays. */
+const STABLE_CONNECTION_MS = 60_000;
+
+/**
+ * After a 440 another session holds the account. Coming back soon just kicks that one out, which then
+ * does the same to us. Waiting this long keeps the fight harmless, while a passing conflict still heals by itself.
+ */
+const CONNECTION_REPLACED_MIN_DELAY_MS = 5 * 60 * 1000;
 
 /** How long Baileys' retry counters and group metadata stay cached. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -70,16 +93,14 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   private clearing = new Set<string>();
   /** Accounts with a connect() in flight; stops two callers from opening two sockets. */
   private connecting = new Set<string>();
-  /**
-   * Accounts WhatsApp unlinked (401 loggedOut) or that were disconnected on
-   * purpose: a retry cannot help, only an explicit connect (re-pairing) revives them.
-   */
-  private loggedOut = new Set<string>();
+  /** Accounts a retry cannot help: only an explicit connect (re-pairing) revives them. */
+  private ended = new Map<string, ConnectionEnd>();
   /** Pending backoff timer per account; at most one, so a reconnect is never stacked. */
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Consecutive failed attempts per account, kept OUTSIDE {@link SocketEntry}
-   * because the entry is replaced on every reconnect. Reset when the socket opens.
+   * because the entry is replaced on every reconnect. Forgotten only when a socket
+   * closes after {@link STABLE_CONNECTION_MS} open: one that opens and drops keeps backing off.
    */
   private reconnectAttempts = new Map<string, number>();
   /** The process is exiting ({@link closeAll}): no socket opens from here on. */
@@ -104,13 +125,17 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     }
 
     // An explicit connect (e.g. re-pairing after a logout) takes over from any
-    // scheduled reconnect and clears the logged-out flag.
+    // scheduled reconnect and clears the flag that kept the account down.
     this.clearReconnectTimer(accountId);
-    this.loggedOut.delete(accountId);
+    this.ended.delete(accountId);
 
     this.connecting.add(accountId);
     try {
       await this.openSocket(accountId, config);
+    } catch (err) {
+      // No socket means no event: without this nobody would learn the account is down.
+      this.notify(this.connectionHandlers, accountId, { connection: 'close' });
+      throw err;
     } finally {
       this.connecting.delete(accountId);
     }
@@ -118,14 +143,12 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
   /** Open the socket for an account that has none; {@link connect} owns the guards. */
   private async openSocket(accountId: string, config: BaileysProviderConfig): Promise<void> {
-    const authDir = this.resolveAuthDir(accountId, config);
-    await mkdir(authDir, { recursive: true });
-
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useMultiFileAuthState(this.resolveAuthDir(accountId, config));
 
     const version = await this.resolveWaVersion(config);
 
-    if (this.closed) {
+    // Either can happen while the awaits above were pending.
+    if (this.closed || this.ended.get(accountId) === 'closed') {
       return;
     }
 
@@ -176,11 +199,14 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         // Keep lastQr across reconnections so the API can still serve it
         const error = lastDisconnect?.error as Boom | undefined;
         const statusCode = error?.output?.statusCode;
-        const loggedOut = statusCode === DisconnectReason.loggedOut;
+        const sessionLost = statusCode !== undefined && SESSION_LOST_CODES.has(statusCode);
         const shouldReconnect =
-          !loggedOut &&
+          !sessionLost &&
           (config.retryOnDisconnect ?? true) &&
           !this.clearing.has(accountId);
+        if (statusCode === VERSION_REJECTED_CODE) {
+          this.cachedWaVersion = undefined;
+        }
         // A close from a socket that was already replaced or dropped is stale
         // news: it must neither schedule a second reconnect nor evict its successor.
         const isCurrent = this.sockets.get(accountId) === entry;
@@ -189,20 +215,23 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
           // Keep the dead entry (status 'disconnected', QR intact) until the
           // timer replaces it, so the account stays registered while it backs off.
           if (isCurrent) {
+            if (entry.openedAt !== undefined && Date.now() - entry.openedAt >= STABLE_CONNECTION_MS) {
+              this.reconnectAttempts.delete(accountId);
+            }
+            entry.openedAt = undefined;
             this.scheduleReconnect(accountId, config, statusCode);
           }
-        } else {
-          getLogger().info('Connection closed permanently', { provider: 'baileys', accountId, statusCode, loggedOut });
-          if (loggedOut) {
-            this.loggedOut.add(accountId);
+        } else if (isCurrent) {
+          getLogger().info('Connection closed permanently', { provider: 'baileys', accountId, statusCode, sessionLost });
+          // disconnect() got here first when the close comes from its own logout().
+          if (sessionLost && !this.ended.has(accountId)) {
+            this.ended.set(accountId, 'session_lost');
           }
           this.cancelReconnect(accountId);
-          if (isCurrent) {
-            this.sockets.delete(accountId);
-          }
+          this.sockets.delete(accountId);
         }
       } else if (connection === 'open') {
-        this.reconnectAttempts.delete(accountId);
+        entry.openedAt = Date.now();
         entry.connectionStatus = 'connected';
         entry.lastQr = undefined;
         getLogger().info('Connection established', { provider: 'baileys', accountId });
@@ -297,12 +326,13 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   async disconnect(accountId: string): Promise<void> {
-    // logout() unlinks the device: the account is done, not just closed. Forget
-    // the handlers first so the 401 close that logout() emits is not reported
-    // as an unexpected session loss (and alerted).
+    // logout() unlinks the device: the account is done, not just closed. Tell the
+    // subscribers it was on purpose and then forget them, so the 401 close that
+    // logout() emits is not reported as an unexpected session loss (and alerted).
+    this.ended.set(accountId, 'closed');
+    this.notify(this.connectionHandlers, accountId, { connection: 'close' });
     this.forgetHandlers(accountId);
     this.cancelReconnect(accountId);
-    this.loggedOut.add(accountId);
     const entry = this.sockets.get(accountId);
     if (entry) {
       await entry.socket.logout().catch(() => {});
@@ -389,7 +419,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
    *
    * No-ops, returning false, when a reconnect is already covered: the account
    * has a socket (even a dead one waiting out its backoff), a timer is pending,
-   * a connect is in flight, its session is being cleared, it is logged out
+   * a connect is in flight, its session is being cleared, its connection ended
    * (needs a QR, not a retry), it opted out with `retryOnDisconnect: false`, or
    * its event subscriptions are not registered yet. That last guard stops the
    * startup credential validation from opening sockets before the inbound wiring
@@ -404,7 +434,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       this.connecting.has(accountId) ||
       this.reconnectTimers.has(accountId) ||
       this.clearing.has(accountId) ||
-      this.loggedOut.has(accountId) ||
+      this.ended.has(accountId) ||
       !this.isWired(accountId) ||
       config.retryOnDisconnect === false
     ) {
@@ -422,6 +452,11 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
   hasSocket(accountId: string): boolean {
     return this.sockets.has(accountId);
+  }
+
+  /** Undefined while the account has a connection or is still trying to get one. */
+  getConnectionEnd(accountId: string): ConnectionEnd | undefined {
+    return this.ended.get(accountId);
   }
 
   getConnectionStatus(accountId: string): ConnectionStatus {
@@ -513,7 +548,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   /**
    * Schedule the next attempt with exponential backoff + full jitter. There is
    * no attempt ceiling: a short network blip must never kill an account. Only a
-   * 401 (needs a QR), an explicit disconnect or a session reset stop the loop.
+   * lost session (needs a QR), an explicit disconnect or a session reset stop the loop.
    */
   private scheduleReconnect(accountId: string, config: BaileysProviderConfig, statusCode: number | undefined): void {
     if (this.reconnectTimers.has(accountId)) {
@@ -521,7 +556,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     }
     const attempt = this.reconnectAttempts.get(accountId) ?? 0;
     this.reconnectAttempts.set(accountId, attempt + 1);
-    const delayMs = Math.round(computeBackoffMs(attempt, { random: this.options.random }));
+    const backoffMs = computeBackoffMs(attempt, { random: this.options.random });
+    const delayMs = Math.round(statusCode === DisconnectReason.connectionReplaced
+      ? Math.max(backoffMs, CONNECTION_REPLACED_MIN_DELAY_MS)
+      : backoffMs);
 
     getLogger().info('Connection closed, reconnecting', { provider: 'baileys', accountId, statusCode, attempt: attempt + 1, delayMs });
 
@@ -549,7 +587,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
   /** Replace the dead socket (if any) with a new one; on failure, back off and try again. */
   private async reconnect(accountId: string, config: BaileysProviderConfig): Promise<void> {
-    if (this.clearing.has(accountId) || this.loggedOut.has(accountId)) {
+    if (this.clearing.has(accountId) || this.ended.has(accountId)) {
       return;
     }
     // Carry the last QR over so the API can keep serving it until a new one arrives.
