@@ -3,11 +3,11 @@
 --
 -- The migration runner wraps this script and its `_migrations` record in ONE transaction:
 -- either the whole upgrade of existing rows applies (and is recorded) or nothing does.
--- Existing rows get `seq` from the table rewrite of ADD COLUMN (heap order) and `account_seq`
--- is numbered per account by `created_at`, then `seq`.
+-- Existing rows get `seq` from the table rewrite of ADD COLUMN (heap order) and inbound rows get
+-- `account_seq` per account by `created_at`, then `seq`. Outbound rows have no `account_seq`.
 
 -- Unused GIN index over every message body: expensive to maintain, and dropping it first
--- spares the full-table UPDATEs below from rewriting it for every row.
+-- spares the full-table UPDATE below from rewriting it for every row.
 DROP INDEX IF EXISTS idx_messages_content_json;
 
 ALTER TABLE messages
@@ -20,27 +20,45 @@ ALTER TABLE messages
   ADD COLUMN sender_lid TEXT,
   ADD COLUMN raw_json JSONB;
 
--- WhatsApp message id lives in the channel details; empty means "unknown" (NULL never conflicts)
-UPDATE messages SET wa_message_id = NULLIF(channel_details_json->>'messageId', '');
+-- Every row the dedupe removes is kept here, with the id of the row that won.
+CREATE TABLE messages_dedupe_archive (
+  LIKE messages,
+  kept_id TEXT NOT NULL,
+  archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
--- Drop duplicates (same account + WhatsApp id), keeping the BEST row of each group:
--- a row with content beats an empty text stub (Baileys upserts `{type:'text', body:''}` for a
--- message it could not decrypt and the real one arrives later with the same id), then the
--- oldest by created_at, then the lowest seq.
-DELETE FROM messages m USING (
-    SELECT id, row_number() OVER (
-      PARTITION BY account_id, wa_message_id
-      ORDER BY CASE WHEN content_json->>'type' = 'text' AND COALESCE(content_json->>'body', '') = '' THEN 1 ELSE 0 END,
-               created_at, seq
-    ) AS rn
+-- Drop duplicates (same account + WhatsApp id; an empty id means "unknown" and never conflicts),
+-- keeping the BEST row of each group: a row with content beats a placeholder (an empty text stub
+-- from a message Baileys could not decrypt, whose real copy arrives later with the same id, or the
+-- text the Baileys mapper writes for a type it cannot map), then the oldest by created_at, then the lowest seq.
+WITH ranked AS (
+    SELECT id, row_number() OVER w AS rn, first_value(id) OVER w AS kept_id
     FROM messages
-    WHERE wa_message_id IS NOT NULL
-  ) d
-  WHERE m.id = d.id AND d.rn > 1;
+    WHERE NULLIF(channel_details_json->>'messageId', '') IS NOT NULL
+    WINDOW w AS (
+      PARTITION BY account_id, channel_details_json->>'messageId'
+      ORDER BY CASE WHEN content_json->>'type' = 'text'
+                     AND (COALESCE(content_json->>'body', '') IN ('', '[Edited message]')
+                          OR content_json->>'body' LIKE '[Unsupported message type:%') THEN 1 ELSE 0 END,
+               created_at, seq
+    )
+  ), removed AS (
+    DELETE FROM messages m USING ranked r
+    WHERE m.id = r.id AND r.rn > 1
+    RETURNING m.*, r.kept_id
+  )
+INSERT INTO messages_dedupe_archive SELECT * FROM removed;
 
--- Contiguous 1..n per account, in arrival order (created_at, then seq)
-UPDATE messages m SET account_seq = s.rn
-  FROM (SELECT id, row_number() OVER (PARTITION BY account_id ORDER BY created_at, seq) AS rn FROM messages) s
+-- One single pass over the table: each UPDATE of every row writes a full new copy of it.
+-- `account_seq` is contiguous 1..n per account over inbound rows only, in arrival order.
+UPDATE messages m
+  SET wa_message_id = NULLIF(m.channel_details_json->>'messageId', ''),
+      account_seq = s.account_seq
+  FROM (
+    SELECT id, CASE direction WHEN 'inbound'
+             THEN row_number() OVER (PARTITION BY account_id, direction ORDER BY created_at, seq) END AS account_seq
+    FROM messages
+  ) s
   WHERE m.id = s.id;
 
 -- Per-account counters: the row lock on the counter serializes concurrent inserts of an account,
@@ -52,7 +70,7 @@ CREATE TABLE account_counters (
 );
 
 INSERT INTO account_counters (account_id, n)
-  SELECT account_id, max(account_seq) FROM messages GROUP BY account_id;
+  SELECT account_id, max(account_seq) FROM messages WHERE account_seq IS NOT NULL GROUP BY account_id;
 
 CREATE UNIQUE INDEX uq_messages_account_wa ON messages(account_id, wa_message_id) WHERE wa_message_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_messages_account_seq ON messages(account_id, account_seq);
@@ -61,3 +79,6 @@ CREATE UNIQUE INDEX uq_messages_seq ON messages(seq);
 -- Retention (DELETE ... WHERE created_at < ...) and pending-media recovery at boot
 CREATE INDEX idx_messages_created_at ON messages(created_at);
 CREATE INDEX idx_messages_media_pending ON messages(seq) WHERE (content_json->'media'->>'status') = 'pending';
+
+-- The rewrite left the planner statistics out of date.
+ANALYZE messages;

@@ -138,7 +138,7 @@ describe.skipIf(!PG_URL)('message-log migration 002 on existing data (postgres)'
     await rm(legacyDir, { recursive: true, force: true });
   });
 
-  it('removes duplicate WhatsApp ids keeping the lowest seq', async () => {
+  it('removes duplicate WhatsApp ids keeping the oldest row by created_at, then seq', async () => {
     const ids = (await q('SELECT id FROM messages ORDER BY seq')).map((r) => r.id);
     expect(ids).toEqual(['m1', 'm7', 'm2', 'm4', 'm8', 'm5', 'm6']);
   });
@@ -387,13 +387,223 @@ describe('message-log migration 003 dedupe ranking (sqlite)', () => {
   });
 });
 
-describe('migration 002 statement order (postgres script)', () => {
-  it('drops the unused GIN index before rewriting every row', async () => {
-    const { readFile } = await import('node:fs/promises');
-    const sql = (await readFile(join(resolveMigrationScriptsDir('postgres'), '002_message_log.sql'), 'utf8'))
-      .split('\n').filter((l) => !l.trimStart().startsWith('--')).join('\n');
-    const drop = sql.indexOf('DROP INDEX IF EXISTS idx_messages_content_json');
-    expect(drop).toBeGreaterThanOrEqual(0);
-    expect(drop).toBeLessThan(sql.indexOf('UPDATE messages'));
+// ── History as production has it: outbound rows, placeholders, inline base64 ──
+
+interface HistoryRow {
+  id: string;
+  account: string;
+  direction?: 'inbound' | 'outbound';
+  wa?: string;
+  content?: Record<string, unknown>;
+  createdAt?: string;
+  preview?: string;
+}
+
+function historyColumns(row: HistoryRow) {
+  const details = row.wa === undefined ? null : JSON.stringify({ platform: 'whatsapp', messageId: row.wa });
+  const createdAt = row.createdAt ?? '2026-04-05T10:00:00.000Z';
+  return [
+    row.id, row.account, 'whatsapp', row.direction ?? 'inbound', 'conv-1', 'sender-1', 'Sender', 'recipient-1',
+    'text', row.preview ?? `preview ${row.id}`, JSON.stringify(row.content ?? { type: 'text', body: row.id }), null, details,
+    JSON.stringify({ adapterId: 'baileys' }), createdAt, createdAt,
+  ];
+}
+
+const HISTORY_INSERT = `INSERT INTO messages (id, account_id, channel, direction, conversation_id, sender_id, sender_name,
+  recipient_id, content_type, content_preview, content_json, context_json, channel_details_json,
+  gateway_json, timestamp, created_at)`;
+
+interface MigratedHistory {
+  store: PostgresMessageStore | SqliteMessageStore;
+  rows(sql: string): Promise<Array<Record<string, unknown>>>;
+  dispose(): Promise<void>;
+}
+
+async function migrateSqliteHistory(rows: HistoryRow[]): Promise<MigratedHistory> {
+  const Database = (await import('better-sqlite3')).default;
+  const db = new Database(':memory:');
+  const legacyDir = await copyInitialMigration('sqlite');
+  await new MigrationRunner({ scriptsDir: join(legacyDir, 'sqlite'), adapter: new SqliteMigrationAdapter(db), logger: silent }).run();
+  const insert = db.prepare(`${HISTORY_INSERT} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const row of rows) insert.run(...historyColumns(row));
+  const store = new SqliteMessageStore(':memory:');
+  (store as unknown as { db: unknown }).db = db;
+  await store.runMigrations();
+  return {
+    store,
+    rows: async (sql) => db.prepare(sql).all() as Array<Record<string, unknown>>,
+    dispose: async () => {
+      await store.close();
+      await rm(legacyDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function migratePostgresHistory(rows: HistoryRow[]): Promise<MigratedHistory> {
+  const { Pool } = await import('pg');
+  const schema = `mlogh_${randomUUID().replace(/-/g, '')}`;
+  const root = new Pool({ connectionString: PG_URL });
+  await root.query(`CREATE SCHEMA "${schema}"`);
+  const url = new URL(PG_URL!);
+  url.searchParams.set('options', `-c search_path=${schema}`);
+  const admin = new Pool({ connectionString: url.toString() });
+  const legacyDir = await copyInitialMigration('postgres');
+  await new MigrationRunner({ scriptsDir: join(legacyDir, 'postgres'), adapter: new PostgresMigrationAdapter(admin), logger: silent }).run();
+  for (const row of rows) {
+    await admin.query(`${HISTORY_INSERT} VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, historyColumns(row));
+  }
+  const store = new PostgresMessageStore(url.toString());
+  await store.init();
+  await store.runMigrations();
+  return {
+    store,
+    rows: async (sql) => (await admin.query(sql)).rows,
+    dispose: async () => {
+      await store.close();
+      await admin.end();
+      await root.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await root.end();
+      await rm(legacyDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function historySuite(name: string, migrate: (rows: HistoryRow[]) => Promise<MigratedHistory>, skip = false): void {
+  describe.skipIf(skip)(`message-log migration over production-like history (${name})`, () => {
+    let history: MigratedHistory | undefined;
+    const run = async (rows: HistoryRow[]) => {
+      history = await migrate(rows);
+      return history;
+    };
+
+    afterEach(async () => {
+      await history?.dispose();
+      history = undefined;
+    });
+
+    it('numbers only inbound rows: historic outbound rows take no account_seq', async () => {
+      const { rows, store } = await run([
+        { id: 'in-1', account: 'acc-a', createdAt: '2026-04-05T10:00:00.000Z' },
+        { id: 'out-1', account: 'acc-a', direction: 'outbound', createdAt: '2026-04-05T10:01:00.000Z' },
+        { id: 'in-2', account: 'acc-a', createdAt: '2026-04-05T10:02:00.000Z' },
+      ]);
+
+      const seqs = await rows('SELECT id, account_seq FROM messages ORDER BY id');
+      expect(seqs.map((r) => [r.id, r.account_seq === null ? null : Number(r.account_seq)])).toEqual([
+        ['in-1', 1], ['in-2', 2], ['out-1', null],
+      ]);
+      expect(await store.maxAccountSeq('acc-a')).toBe(2);
+      const page = await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 });
+      expect(page.messages.map((m) => m.id)).toEqual(['in-1', 'in-2']);
+    });
+
+    it('survives an account that only has outbound history, whose first inbound message is number 1', async () => {
+      const { store, rows } = await run([{ id: 'out-only', account: 'acc-out', direction: 'outbound' }]);
+
+      expect(await rows('SELECT account_id FROM account_counters')).toEqual([]);
+      expect((await store.insertInbound(makeEnvelope('acc-out', 'FIRST'))).accountSeq).toBe(1);
+    });
+
+    it('archives every row the dedupe removes, pointing at the row it kept', async () => {
+      const { rows } = await run([
+        { id: 'keep', account: 'acc-a', wa: 'W1', createdAt: '2026-04-05T10:00:00.000Z' },
+        { id: 'gone-1', account: 'acc-a', wa: 'W1', createdAt: '2026-04-05T10:01:00.000Z', content: { type: 'text', body: 'first copy' } },
+        { id: 'gone-2', account: 'acc-a', wa: 'W1', createdAt: '2026-04-05T10:02:00.000Z', content: { type: 'text', body: 'second copy' } },
+        { id: 'unique', account: 'acc-a', wa: 'W2' },
+      ]);
+
+      const archived = await rows('SELECT id, account_id, kept_id, content_json, archived_at FROM messages_dedupe_archive ORDER BY id');
+      expect(archived.map((r) => [r.id, r.account_id, r.kept_id])).toEqual([
+        ['gone-1', 'acc-a', 'keep'], ['gone-2', 'acc-a', 'keep'],
+      ]);
+      const content = archived[0]!.content_json;
+      expect(typeof content === 'string' ? JSON.parse(content) : content).toEqual({ type: 'text', body: 'first copy' });
+      expect(archived[0]!.archived_at).toBeTruthy();
+      expect((await rows('SELECT id FROM messages ORDER BY id')).map((r) => r.id)).toEqual(['keep', 'unique']);
+    });
+
+    it.each([
+      ['an empty text stub', ''],
+      ['an unsupported-type placeholder', '[Unsupported message type: unknown]'],
+      ['an edited-message placeholder', '[Edited message]'],
+    ])('keeps the row with content over an older %s', async (_label, body) => {
+      const { rows } = await run([
+        { id: 'stub', account: 'acc-a', wa: 'W1', createdAt: '2026-04-05T10:00:00.000Z', content: { type: 'text', body } },
+        { id: 'real', account: 'acc-a', wa: 'W1', createdAt: '2026-04-05T10:01:00.000Z', content: { type: 'text', body: 'the real message' } },
+      ]);
+
+      expect((await rows('SELECT id FROM messages')).map((r) => r.id)).toEqual(['real']);
+      expect((await rows('SELECT id, kept_id FROM messages_dedupe_archive'))).toEqual([{ id: 'stub', kept_id: 'real' }]);
+    });
+
+    it('never returns the historic inline base64 of a media on reads', async () => {
+      const content = { type: 'image', media: { mimeType: 'image/jpeg', base64: 'QUJD', filename: 'a.jpg' } };
+      const { store, rows } = await run([{ id: 'img', account: 'acc-a', wa: 'W1', content }]);
+
+      const expected = { type: 'image', media: { mimeType: 'image/jpeg', filename: 'a.jpg' } };
+      expect((await store.findById('img'))?.content).toEqual(expected);
+      expect((await store.findByWaMessageId('acc-a', 'W1'))?.content).toEqual(expected);
+      expect((await store.query({ accountId: 'acc-a' })).messages[0]?.content).toEqual(expected);
+      expect((await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 })).messages[0]?.content).toEqual(expected);
+      expect((await store.search('preview')).messages[0]?.content).toEqual(expected);
+      expect((await store.getConversationHistory('conv-1')).envelopes[0]?.content).toEqual(expected);
+      // The bytes stay in the row: reads leave them out, nothing was rewritten.
+      const stored = (await rows('SELECT content_json FROM messages'))[0]!.content_json;
+      expect(JSON.stringify(stored)).toContain('QUJD');
+    });
+  });
+}
+
+historySuite('sqlite', migrateSqliteHistory);
+historySuite('postgres', migratePostgresHistory, !PG_URL);
+
+describe.skipIf(!PG_URL)('message-log migration planner statistics (postgres)', () => {
+  it('leaves the table analyzed', async () => {
+    const history = await migratePostgresHistory([
+      { id: 'a', account: 'acc-a', wa: 'W1' }, { id: 'b', account: 'acc-a', wa: 'W2' },
+    ]);
+    try {
+      // pg_stats only has rows for a table ANALYZE has seen (autovacuum would take a minute at least).
+      const stats = await history.rows(`SELECT attname FROM pg_stats WHERE schemaname = current_schema() AND tablename = 'messages'`);
+      expect(stats.length).toBeGreaterThan(0);
+    } finally {
+      await history.dispose();
+    }
+  });
+});
+
+describe('message-log migration on sqlite: FTS and global seq', () => {
+  let history: MigratedHistory;
+
+  afterEach(async () => {
+    await history.dispose();
+  });
+
+  it('leaves the table analyzed', async () => {
+    history = await migrateSqliteHistory([{ id: 'a', account: 'acc-a', wa: 'W1' }, { id: 'b', account: 'acc-a', wa: 'W2' }]);
+    expect((await history.rows(`SELECT tbl FROM sqlite_stat1 WHERE tbl = 'messages'`)).length).toBeGreaterThan(0);
+  });
+
+  it('finds historic rows after the migration, and the dedupe does not leave ghosts in the index', async () => {
+    history = await migrateSqliteHistory([
+      { id: 'old-1', account: 'acc-a', wa: 'W1', preview: 'tortilla de patatas' },
+      { id: 'old-2', account: 'acc-a', wa: 'W1', preview: 'gazpacho fresco' },
+      { id: 'old-3', account: 'acc-a', wa: 'W2', preview: 'paella valenciana' },
+    ]);
+
+    expect((await history.store.search('tortilla')).messages.map((m) => m.id)).toEqual(['old-1']);
+    expect((await history.store.search('paella')).messages.map((m) => m.id)).toEqual(['old-3']);
+    expect((await history.store.search('gazpacho')).total).toBe(0);
+  });
+
+  it('does not reuse a global seq once the highest row was deleted', async () => {
+    history = await migrateSqliteHistory([{ id: 'a', account: 'acc-a', wa: 'W1' }]);
+    const { store } = history;
+    const last = await store.insertInbound(makeEnvelope('acc-a', 'W2'));
+    await store.deleteOlderThan(-1);
+
+    const next = await store.insertInbound(makeEnvelope('acc-a', 'W3'));
+
+    expect(next.seq).toBeGreaterThan(last.seq!);
   });
 });

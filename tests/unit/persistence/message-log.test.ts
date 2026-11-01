@@ -353,6 +353,35 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect(await store.minAccountSeq('acc-a')).toBe(2);
     });
 
+    it('search finds what is left after deleting, and no longer finds what was deleted', async () => {
+      const gone = makeEnvelope('acc-a', 'S-GONE', { content: { type: 'text', body: 'tortilla de patatas' } });
+      const kept = makeEnvelope('acc-a', 'S-KEPT', { content: { type: 'text', body: 'paella valenciana' } });
+      const later = makeEnvelope('acc-a', 'S-LATER', { content: { type: 'text', body: 'gazpacho fresco' } });
+      await store.insertInbound(gone);
+      await store.insertInbound(kept);
+      await backend.backdate(gone.id, 40);
+      await store.deleteOlderThan(30);
+      await store.insertInbound(later);
+
+      expect((await store.search('tortilla')).total).toBe(0);
+      expect((await store.search('paella')).messages.map((m) => m.id)).toEqual([kept.id]);
+      expect((await store.search('gazpacho')).messages.map((m) => m.id)).toEqual([later.id]);
+    });
+
+    it('save() twice with the same id updates the row: it keeps its seq and stays searchable by the new text', async () => {
+      const env = makeEnvelope('acc-a', 'U1', { direction: 'outbound', content: { type: 'text', body: 'primera version' } });
+      await store.save(env);
+      const before = await store.findById(env.id);
+
+      await store.save({ ...env, content: { type: 'text', body: 'segunda version' } });
+
+      const after = await store.findById(env.id);
+      expect(after?.seq).toBe(before?.seq);
+      expect(after?.content).toEqual({ type: 'text', body: 'segunda version' });
+      expect((await store.search('segunda')).messages.map((m) => m.id)).toEqual([env.id]);
+      expect((await store.search('primera')).total).toBe(0);
+    });
+
     it('findPendingMedia returns raw for pending media and updateMedia merges the result', async () => {
       const pending = makeEnvelope('acc-a', 'IMG1', {
         content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'pending' } },
