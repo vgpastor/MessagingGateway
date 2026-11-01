@@ -1446,6 +1446,8 @@ export type GetApiV1Messages200 = {
   nextAfterAccountSeq?: number | null;
   /** afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start "from now" */
   lastAccountSeq?: number;
+  /** afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report */
+  firstAccountSeq?: number | null;
 };
 
 export type GetApiV1Messages400 = {
@@ -2975,7 +2977,7 @@ export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
 }
 
 /**
- * Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq }` and ignoring the other filters.
+ * Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.
  */
 export const getApiV1Messages = async (params?: GetApiV1MessagesParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesResponse> => {
 

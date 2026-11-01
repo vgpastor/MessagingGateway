@@ -85,6 +85,21 @@ describe('runRetention', () => {
       expect(fresh?.content).toMatchObject({ media: { status: 'ready' } });
       expect(await files.open('msg_new_media', 'wa-ret')).toBeDefined();
     });
+
+    it('with no media retention of its own, the file goes together with its message: none is left orphaned', async () => {
+      await store.insertInbound(envelope('msg_old', 'W1', { type: 'image', media: { mimeType: 'image/jpeg', status: 'pending' } }));
+      await files.write('wa-ret', 'msg_old', 'jpg', Buffer.from('bytes'));
+      const file = join(dir, 'wa-ret', new Date().toISOString().slice(0, 7), 'msg_old.jpg');
+      const longAgo = new Date(Date.now() - 40 * DAY_MS);
+      await utimes(file, longAgo, longAgo);
+      backdateRow('msg_old', 40);
+
+      const result = await runRetention({ messages: store, media: files, messageRetentionDays: 30, mediaRetentionDays: 0 });
+
+      expect(result).toEqual({ messages: 1, media: 1 });
+      expect(await store.findById('msg_old')).toBeUndefined();
+      expect(await files.open('msg_old', 'wa-ret')).toBeUndefined();
+    });
   });
 
   describe('with fakes', () => {
@@ -117,14 +132,30 @@ describe('runRetention', () => {
       expect(result).toEqual({ messages: 0, media: 2 });
     });
 
-    it.each([0, -1])('mediaRetentionDays=%i disables media retention: purgeOlderThan is never called', async (days) => {
-      const deps = makeDeps({ mediaRetentionDays: days });
+    it.each([0, -1])('mediaRetentionDays=%i with messages kept forever: purgeOlderThan is never called', async (days) => {
+      const deps = makeDeps({ mediaRetentionDays: days, messageRetentionDays: 0 });
 
       const result = await runRetention(deps);
 
       expect(deps.media.purgeOlderThan).not.toHaveBeenCalled();
       expect(deps.messages.updateMedia).not.toHaveBeenCalled();
-      expect(result).toEqual({ messages: 3, media: 0 });
+      expect(result).toEqual({ messages: 0, media: 0 });
+    });
+
+    it.each([0, -1])('mediaRetentionDays=%i: media goes with its message, no file is left orphaned', async (days) => {
+      const deps = makeDeps({ mediaRetentionDays: days, messageRetentionDays: 180 });
+
+      await runRetention(deps);
+
+      expect(deps.media.purgeOlderThan).toHaveBeenCalledWith(180);
+    });
+
+    it('a media retention longer than the message retention does not leave files orphaned either', async () => {
+      const deps = makeDeps({ mediaRetentionDays: 400, messageRetentionDays: 180 });
+
+      await runRetention(deps);
+
+      expect(deps.media.purgeOlderThan).toHaveBeenCalledWith(180);
     });
 
     it('with MESSAGE_RETENTION_DAYS unset, a pass never deletes messages (text retention is opt-in)', async () => {

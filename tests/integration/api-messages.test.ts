@@ -551,10 +551,10 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     expect(body.lastAccountSeq).toBe(3);
   });
 
-  it('answers exactly { messages, nextAfterAccountSeq, lastAccountSeq } without total', async () => {
+  it('answers exactly { messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq } without total', async () => {
     const res = await get('accountId=wa-seq&afterAccountSeq=0&limit=10');
 
-    expect(Object.keys(res.json()).sort()).toEqual(['lastAccountSeq', 'messages', 'nextAfterAccountSeq']);
+    expect(Object.keys(res.json()).sort()).toEqual(['firstAccountSeq', 'lastAccountSeq', 'messages', 'nextAfterAccountSeq']);
   });
 
   it('pages through everything in ascending order and ends with a null cursor', async () => {
@@ -587,13 +587,13 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
   it('past the end returns an empty page that still reports lastAccountSeq', async () => {
     const body = (await get('accountId=wa-seq&afterAccountSeq=3')).json();
 
-    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 3 });
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 3, firstAccountSeq: 1 });
   });
 
-  it('an account with no messages reports lastAccountSeq 0', async () => {
+  it('an account with no messages reports lastAccountSeq 0 and no firstAccountSeq', async () => {
     const body = (await get('accountId=nobody&afterAccountSeq=0')).json();
 
-    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0 });
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0, firstAccountSeq: null });
   });
 
   it('legacy query without afterAccountSeq unchanged', async () => {
@@ -607,5 +607,6 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     expect(body.offset).toBeDefined();
     expect(body).not.toHaveProperty('nextAfterAccountSeq');
     expect(body).not.toHaveProperty('lastAccountSeq');
+    expect(body).not.toHaveProperty('firstAccountSeq');
   });
 });

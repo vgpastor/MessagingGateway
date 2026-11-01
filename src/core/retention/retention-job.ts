@@ -14,7 +14,10 @@ export interface RetentionDeps {
   media: MediaPurger;
   /** Days a message row is kept. 0 (or negative) disables text retention: nothing is deleted. */
   messageRetentionDays: number;
-  /** Days a media file is kept. 0 (or negative) disables media retention: no file is removed. */
+  /**
+   * Days a media file is kept at most. 0 (or negative) sets no limit of its own: it then lives
+   * as long as its message. A file never outlives `messageRetentionDays`: nothing could serve it.
+   */
   mediaRetentionDays: number;
 }
 
@@ -27,6 +30,12 @@ export interface RetentionResult {
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** Age at which media files go: the shorter of the two retentions in force, or 0 when neither is. */
+function mediaDaysToKeep({ mediaRetentionDays, messageRetentionDays }: RetentionDeps): number {
+  const limits = [mediaRetentionDays, messageRetentionDays].filter((days) => days > 0);
+  return limits.length > 0 ? Math.min(...limits) : 0;
+}
+
 /**
  * One retention pass: media files past `mediaRetentionDays` are removed and their
  * messages' media marked `expired`; messages past `messageRetentionDays` are deleted.
@@ -36,9 +45,10 @@ export async function runRetention(deps: RetentionDeps): Promise<RetentionResult
   const logger = getLogger().child({ module: 'retention' });
   const result: RetentionResult = { messages: 0, media: 0 };
 
-  if (deps.mediaRetentionDays > 0) {
+  const mediaDays = mediaDaysToKeep(deps);
+  if (mediaDays > 0) {
     try {
-      const purged = await deps.media.purgeOlderThan(deps.mediaRetentionDays);
+      const purged = await deps.media.purgeOlderThan(mediaDays);
       result.media = purged.length;
       for (const mediaId of purged) {
         try {

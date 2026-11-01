@@ -3863,7 +3863,7 @@
         "tags": [
           "Messages"
         ],
-        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq }` and ignoring the other filters.",
+        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.",
         "parameters": [
           {
             "schema": {
@@ -4199,6 +4199,11 @@
                     "lastAccountSeq": {
                       "type": "integer",
                       "description": "afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start \"from now\""
+                    },
+                    "firstAccountSeq": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report"
                     }
                   },
                   "required": [

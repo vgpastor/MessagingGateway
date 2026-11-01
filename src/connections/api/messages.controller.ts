@@ -12,7 +12,7 @@ const DEFAULT_EXPORT_LIMIT = 1000;
 /**
  * Response of `GET /api/v1/messages`. Two shapes share one schema:
  * - legacy filtering (no `afterAccountSeq`): `messages`, `total`, `limit`, `offset`
- * - keyset paging (`afterAccountSeq`): `messages`, `nextAfterAccountSeq`, `lastAccountSeq`
+ * - keyset paging (`afterAccountSeq`): `messages`, `nextAfterAccountSeq`, `lastAccountSeq`, `firstAccountSeq`
  */
 const messagesResponseSchema = {
   type: 'object' as const,
@@ -29,6 +29,11 @@ const messagesResponseSchema = {
     lastAccountSeq: {
       type: 'integer' as const,
       description: 'afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start "from now"',
+    },
+    firstAccountSeq: {
+      type: 'integer' as const,
+      nullable: true,
+      description: 'afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report',
     },
   },
   required: ['messages'] as const,
@@ -65,7 +70,7 @@ export async function messagesController(
         'Query stored messages with filters. Requires STORAGE_ENABLED=true. ' +
         'With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: ' +
         'messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering ' +
-        '`{ messages, nextAfterAccountSeq, lastAccountSeq }` and ignoring the other filters.',
+        '`{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.',
       tags: ['Messages'],
       querystring: {
         type: 'object' as const,
@@ -106,7 +111,8 @@ export async function messagesController(
       });
       // Read after the page so lastAccountSeq is never behind a message in it.
       const lastAccountSeq = await deps.messageStore.maxAccountSeq(q.accountId);
-      return { messages: page.messages, nextAfterAccountSeq: page.nextAfterAccountSeq, lastAccountSeq };
+      const firstAccountSeq = await deps.messageStore.minAccountSeq(q.accountId);
+      return { messages: page.messages, nextAfterAccountSeq: page.nextAfterAccountSeq, lastAccountSeq, firstAccountSeq };
     }
 
     return deps.messageStore.query({
