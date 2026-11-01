@@ -85,6 +85,11 @@ const { data, status, headers } = await getApiV1Messages({ accountId: 'my-whatsa
 throws (with `statusCode`, `code` and the body in `response`) instead of being returned, even when the
 generated type lists it: those types only know the errors a route documents.
 
+`configure()` holds one configuration for the whole process, and the last call wins. For several gateways or
+keys, use one `MessagingGatewayClient` each, or pass the key for a single call:
+`getApiV1Messages(params, { headers: { 'X-API-Key': 'other-key' } })`. Requests time out after 30 s, reading
+the body included, with a `TimeoutError`: set `timeoutMs` in `configure()` if you need longer.
+
 ## WebSocket Events
 
 ```typescript
