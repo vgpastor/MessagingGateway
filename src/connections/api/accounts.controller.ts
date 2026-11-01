@@ -458,19 +458,28 @@ export async function accountsController(
     }
 
     // First: an account that stays must keep its socket and its session.
+    let removed: boolean;
     try {
-      await deps.accountRepository.remove(id);
+      removed = await deps.accountRepository.remove(id);
     } catch (err) {
       return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
     }
+    if (!removed) {
+      return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: `Account '${id}' not found` });
+    }
 
-    // Otherwise its socket would keep receiving and reconnecting with no account behind it, and an
-    // account created later with this id would inherit the session. Failing here does not undo the deletion.
+    // Otherwise its socket would keep receiving and reconnecting with no account behind it, and an account created
+    // later with this id would inherit the session, so the one goes even if the other fails. Neither undoes the deletion.
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     try {
-      if (manager) await logOut(account, manager);
+      await manager?.disconnect(id);
     } catch (err) {
-      fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
+      fastify.log.error(`Closing deleted account ${id} failed: ${(err as Error).message}`);
+    }
+    try {
+      await manager?.clearSession?.(id, account.providerConfig);
+    } catch (err) {
+      fastify.log.error(`Deleting the session of deleted account ${id} failed: ${(err as Error).message}`);
     }
     manager?.forgetAccount?.(id);
     fastify.log.info(`Account deleted: ${id}`);

@@ -313,18 +313,62 @@ describe('accounts created at runtime', () => {
     expect(socketManager.socketManager.getConnectionEnd('hot-12c')).toBe('closed');
   });
 
-  it('DELETE /accounts/:id still deletes the account when closing it fails', async () => {
-    await create('hot-13');
-    const manager = baileysProvider.connection!();
-    const failing = vi.spyOn(registry, 'getConnectionManager').mockReturnValue({
-      ...manager, disconnect: async () => { throw new Error('socket exploded'); },
-    } as never);
+  describe('DELETE /accounts/:id when closing the account fails', () => {
+    function managerWith(overrides: { disconnect?: () => Promise<void>; clearSession?: () => Promise<void> }) {
+      const manager = {
+        disconnect: vi.fn(overrides.disconnect ?? (async () => {})),
+        clearSession: vi.fn(overrides.clearSession ?? (async () => {})),
+        forgetAccount: vi.fn(),
+        getConnectionInfo: () => ({ status: 'disconnected' }),
+      };
+      return { manager, restore: vi.spyOn(registry, 'getConnectionManager').mockReturnValue(manager as never) };
+    }
 
-    const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13', headers: HEADERS });
-    failing.mockRestore();
+    it('still deletes the session and the account when the disconnect fails, with an error in the log', async () => {
+      await create('hot-13');
+      const { manager, restore } = managerWith({ disconnect: async () => { throw new Error('socket exploded'); } });
+      const logged = vi.spyOn(app.log, 'error');
 
-    expect(response.statusCode).toBe(200);
-    expect(await repository.findById('hot-13')).toBeUndefined();
+      const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13', headers: HEADERS });
+      restore.mockRestore();
+
+      expect(response.statusCode).toBe(200);
+      expect(await repository.findById('hot-13')).toBeUndefined();
+      expect(manager.clearSession).toHaveBeenCalledTimes(1);
+      expect(manager.forgetAccount).toHaveBeenCalledWith('hot-13');
+      expect(logged.mock.calls.flat().join(' ')).toContain('socket exploded');
+      logged.mockRestore();
+    });
+
+    it('still answers 200 when deleting the session fails, with an error in the log', async () => {
+      await create('hot-13a');
+      const { manager, restore } = managerWith({ clearSession: async () => { throw new Error('disk exploded'); } });
+      const logged = vi.spyOn(app.log, 'error');
+
+      const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13a', headers: HEADERS });
+      restore.mockRestore();
+
+      expect(response.statusCode).toBe(200);
+      expect(manager.forgetAccount).toHaveBeenCalledWith('hot-13a');
+      expect(logged.mock.calls.flat().join(' ')).toContain('disk exploded');
+      logged.mockRestore();
+    });
+  });
+
+  it('DELETE /accounts/:id answers 404 when someone else removed the account meanwhile, and closes nothing', async () => {
+    await create('hot-13c');
+    const manager = { disconnect: vi.fn(async () => {}), clearSession: vi.fn(async () => {}), forgetAccount: vi.fn(), getConnectionInfo: () => ({ status: 'disconnected' }) };
+    const managed = vi.spyOn(registry, 'getConnectionManager').mockReturnValue(manager as never);
+    const removed = vi.spyOn(repository, 'remove').mockResolvedValueOnce(false);
+
+    const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-13c', headers: HEADERS });
+    managed.mockRestore();
+    removed.mockRestore();
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('ACCOUNT_NOT_FOUND');
+    expect(manager.disconnect).not.toHaveBeenCalled();
+    expect(manager.clearSession).not.toHaveBeenCalled();
   });
 
   it('DELETE /accounts/:id removes the account first, and closes it after', async () => {
