@@ -157,7 +157,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
     this.sockets.set(accountId, entry);
 
-    socket.ev.on('creds.update', saveCreds);
+    // Baileys does not look at the result: a rejection here would end the process, and every account with it.
+    socket.ev.on('creds.update', () => {
+      void this.saveCredentials(accountId, saveCreds);
+    });
 
     socket.ev.on('connection.update', (update) => {
       if (update.qr) {
@@ -207,9 +210,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
       // Notify after the state above is updated, so handlers that read
       // getConnectionStatus() see 'connected' on open, not the previous status.
-      for (const handler of this.handlersFor(this.connectionHandlers, accountId)) {
-        handler(update);
-      }
+      this.notify(this.connectionHandlers, accountId, update);
     });
 
     // A changed group must not be served stale to Baileys when it addresses the group.
@@ -222,11 +223,28 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     socket.ev.on('messages.upsert', (event) => {
       const handlers = this.handlersFor(this.messageHandlers, accountId);
       getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
-      for (const handler of handlers) {
-        handler(event);
-      }
+      this.notify(this.messageHandlers, accountId, event);
     });
 
+  }
+
+  private async saveCredentials(accountId: string, saveCreds: () => Promise<void>): Promise<void> {
+    try {
+      await saveCreds();
+    } catch (err) {
+      getLogger().error('Failed to save credentials', { provider: 'baileys', accountId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** A handler that throws must affect neither the next one nor Baileys, which emits these events. */
+  private notify<E>(registry: Map<string, Array<(event: E) => void>>, accountId: string, event: E): void {
+    for (const handler of this.handlersFor(registry, accountId)) {
+      try {
+        handler(event);
+      } catch (err) {
+        getLogger().error('Account event handler failed', { provider: 'baileys', accountId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
   }
 
   private cacheFor<V>(registry: Map<string, TtlCache<V>>, accountId: string): TtlCache<V> {

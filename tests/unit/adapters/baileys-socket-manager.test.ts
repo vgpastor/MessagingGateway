@@ -4,10 +4,12 @@ import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { BaileysSocketManager } from '../../../src/integrations/whatsapp/baileys/baileys-socket.manager.js';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 
 // A fake WhatsApp socket per makeWASocket() call; tests drive its 'connection.update'.
 interface FakeSocket { ev: EventEmitter; end: () => void; logout: () => Promise<void> }
 const fakeSockets: FakeSocket[] = [];
+const auth = { saveCreds: (): unknown => undefined };
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
@@ -16,7 +18,7 @@ vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
     fakeSockets.push(socket);
     return socket;
   },
-  useMultiFileAuthState: async () => ({ state: {}, saveCreds: () => {} }),
+  useMultiFileAuthState: async () => ({ state: {}, saveCreds: () => auth.saveCreds() }),
   fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
 }));
 
@@ -127,6 +129,50 @@ describe('BaileysSocketManager.closeAll', () => {
     await connecting;
 
     expect(fakeSockets.length).toBe(before);
+  });
+});
+
+describe('BaileysSocketManager containment', () => {
+  const ID = 'test-containment';
+  const original = getLogger();
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  afterEach(async () => {
+    setGlobalLogger(original);
+    auth.saveCreds = () => undefined;
+    fakeSockets.length = 0;
+    await rm(resolve(process.cwd(), 'data', 'baileys-auth', ID), { recursive: true, force: true });
+  });
+
+  it('logs a failed credentials write instead of leaving a rejection that would end the process', async () => {
+    const error = vi.fn();
+    setGlobalLogger({ ...original, error } as unknown as Logger);
+    auth.saveCreds = () => Promise.reject(new Error('ENOSPC'));
+    const manager = new BaileysSocketManager();
+    await manager.connect(ID, {});
+
+    fakeSockets.at(-1)!.ev.emit('creds.update', {});
+    await flush();
+
+    expect(error).toHaveBeenCalledWith('Failed to save credentials', expect.objectContaining({ accountId: ID, error: 'ENOSPC' }));
+  });
+
+  it('one handler throwing does not stop the others nor reach Baileys', async () => {
+    const manager = new BaileysSocketManager();
+    const next = vi.fn();
+    const nextMessage = vi.fn();
+    manager.onConnectionUpdate(ID, () => { throw new Error('bad handler'); });
+    manager.onConnectionUpdate(ID, next);
+    manager.onMessage(ID, () => { throw new Error('bad handler'); });
+    manager.onMessage(ID, nextMessage);
+    await manager.connect(ID, {});
+    const { ev } = fakeSockets.at(-1)!;
+
+    expect(() => ev.emit('connection.update', { connection: 'open' })).not.toThrow();
+    expect(() => ev.emit('messages.upsert', { messages: [], type: 'notify' })).not.toThrow();
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(nextMessage).toHaveBeenCalledTimes(1);
   });
 });
 
