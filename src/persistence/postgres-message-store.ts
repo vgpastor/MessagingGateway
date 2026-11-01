@@ -1,3 +1,4 @@
+import { PermanentStoreError } from '../core/errors.js';
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 import type {
@@ -16,7 +17,7 @@ import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, parseJsonColumnRequired, parseJsonColumn,
   MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
-  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
+  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn, waMessageIdOf,
 } from '../core/persistence/message-store.utils.js';
 
 type PgPool = import('pg').Pool;
@@ -42,6 +43,12 @@ const IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000;
 
 /** A retention delete can be large, and it holds back no queue. `0` would not disable the limit: pg falls back to the pool's. */
 const RETENTION_QUERY_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** SQLSTATE classes of what the data itself caused (22 data exception, 23 integrity violation): the same row fails again. */
+const REFUSED_DATA_SQLSTATE = /^2[23]/;
+
+const isRefusedData = (err: unknown): boolean =>
+  typeof (err as { code?: unknown }).code === 'string' && REFUSED_DATA_SQLSTATE.test((err as { code: string }).code);
 
 export interface PostgresMessageStoreOptions {
   /** {@link QUERY_TIMEOUT_MS} by default. */
@@ -334,23 +341,8 @@ export class PostgresMessageStore implements FullMessageStorePort {
     try {
       await client.query('BEGIN');
 
-      // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
-      const inserted = await client.query(
-        `INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-        ON CONFLICT DO NOTHING
-        RETURNING seq`,
-        messageRowValues(envelope, raw),
-      );
-
-      if (inserted.rowCount === 0) {
-        // Duplicate: nothing was written and no accountSeq is consumed
-        await client.query('ROLLBACK');
-        return { inserted: false };
-      }
-
-      // The counter row lock serializes concurrent inserts of the same account until COMMIT,
-      // so account_seq is handed out contiguously and becomes visible in order.
+      // The counter comes first: its row lock serializes concurrent inserts of the same account until COMMIT,
+      // so account_seq is handed out contiguously and becomes visible in order. A duplicate rolls it back.
       const counter = await client.query(
         `INSERT INTO account_counters (account_id, n) VALUES ($1, 1)
          ON CONFLICT (account_id) DO UPDATE SET n = account_counters.n + 1
@@ -358,13 +350,35 @@ export class PostgresMessageStore implements FullMessageStorePort {
         [envelope.accountId],
       );
       const accountSeq = Number(counter.rows[0].n);
-      await client.query('UPDATE messages SET account_seq = $1 WHERE id = $2', [accountSeq, envelope.id]);
+
+      // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
+      const inserted = await client.query(
+        `INSERT INTO messages (${MESSAGE_INSERT_COLUMNS}, account_seq)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        ON CONFLICT DO NOTHING
+        RETURNING seq`,
+        [...messageRowValues(envelope, raw), accountSeq],
+      );
+
+      if (inserted.rowCount === 0) {
+        const stored = await client.query(
+          `SELECT id, seq, account_seq FROM messages
+           WHERE id = $1 OR (account_id = $2 AND wa_message_id = $3)
+           ORDER BY id = $1 DESC LIMIT 1`,
+          [envelope.id, envelope.accountId, waMessageIdOf(envelope)],
+        );
+        await client.query('ROLLBACK');
+        const row = stored.rows[0];
+        // With no conflict target this also swallows a number already taken, which is no duplicate: the message would be lost.
+        if (!row) throw new PermanentStoreError(`account_seq ${accountSeq} of account ${envelope.accountId} is already taken`);
+        return { inserted: false, storedId: row.id, seq: Number(row.seq), accountSeq: Number(row.account_seq) };
+      }
 
       await client.query('COMMIT');
       return { inserted: true, seq: Number(inserted.rows[0].seq), accountSeq };
     } catch (err) {
       failure = err instanceof Error ? err : new Error(String(err));
-      throw err;
+      throw isRefusedData(err) ? new PermanentStoreError(failure.message, { cause: err }) : err;
     } finally {
       client.removeListener('error', onConnectionError);
       // A failure discards the connection, and Postgres rolls back when it closes. A ROLLBACK would queue behind

@@ -67,11 +67,13 @@ export interface FullMessageStorePort
 
 /** Outcome of {@link MessageLogPort.insertInbound} */
 export interface InsertResult {
-  /** false when the message was already stored (same account + WhatsApp message id) */
+  /** false when the message was already stored (same id, or same account + WhatsApp message id) */
   inserted: boolean;
-  /** Global, monotonically increasing sequence (only when inserted) */
+  /** Only when not inserted: the row that already holds the message, which may be another envelope's */
+  storedId?: string;
+  /** Global, monotonically increasing sequence of the row */
   seq?: number;
-  /** Per-account, contiguous and gap-free sequence, starting at 1 (only when inserted) */
+  /** Per-account, contiguous and gap-free sequence of the row, starting at 1 */
   accountSeq?: number;
 }
 
@@ -89,7 +91,8 @@ export interface MessageLogPort {
    * Atomically store an inbound message, dedupe it by (account, WhatsApp message id)
    * and assign the next `accountSeq`. A duplicate consumes no `accountSeq`.
    * Idempotent: storing the same envelope again (same id) is a duplicate too, so a
-   * write whose outcome is unknown can always be retried.
+   * write whose outcome is unknown can always be retried. Rejects with a
+   * `PermanentStoreError` when retrying this message cannot help.
    * `raw` is the provider payload (kept for media recovery and Baileys `getMessage`).
    */
   insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult>;

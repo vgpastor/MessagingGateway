@@ -182,7 +182,7 @@ describe.skipIf(!PG_URL)('message-log migration 002 on existing data (postgres)'
     expect(legacy?.sentAt).toBeUndefined();
 
     const dup = await store.insertInbound(makeEnvelope('acc-a', 'W2'));
-    expect(dup).toEqual({ inserted: false });
+    expect(dup).toMatchObject({ inserted: false });
 
     const fresh = await store.insertInbound(makeEnvelope('acc-a', 'W3'));
     expect(fresh.accountSeq).toBe(6);
@@ -252,7 +252,7 @@ describe('message-log migration 003 on existing data (sqlite)', () => {
   });
 
   it('continues the sequence and dedupes for new inbound messages', async () => {
-    expect(await store.insertInbound(makeEnvelope('acc-a', 'W2'))).toEqual({ inserted: false });
+    expect(await store.insertInbound(makeEnvelope('acc-a', 'W2'))).toMatchObject({ inserted: false });
     const fresh = await store.insertInbound(makeEnvelope('acc-a', 'W3'));
     expect(fresh.accountSeq).toBe(6);
     expect(await store.maxAccountSeq('acc-b')).toBe(2);

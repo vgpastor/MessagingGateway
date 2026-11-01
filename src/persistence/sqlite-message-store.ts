@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type Database from 'better-sqlite3';
+import { PermanentStoreError } from '../core/errors.js';
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 import type {
@@ -20,10 +21,23 @@ import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, parseJsonColumnRequired, parseJsonColumn,
   MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
-  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
+  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn, waMessageIdOf,
 } from '../core/persistence/message-store.utils.js';
 
 const COLUMNS = envelopeColumns('sqlite');
+
+/** What the data itself caused: the same row fails again. A busy or full database is not here, it may pass. */
+const REFUSED_DATA_CODE = /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG)/;
+
+const isRefusedData = (err: unknown): boolean =>
+  typeof (err as { code?: unknown }).code === 'string' && REFUSED_DATA_CODE.test((err as { code: string }).code);
+
+/** Thrown inside the transaction, so it rolls back the number taken for a message already stored. */
+class DuplicateMessage extends Error {
+  constructor(readonly result: InsertResult) {
+    super('duplicate message');
+  }
+}
 
 /**
  * SQLite-based message store using better-sqlite3.
@@ -260,32 +274,47 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async insertInbound(envelope: UnifiedEnvelope, raw?: unknown): Promise<InsertResult> {
     const db = this.requireDb();
 
-    // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
-    const insert = db.prepare(`
-      INSERT INTO messages (${MESSAGE_INSERT_COLUMNS})
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT DO NOTHING
-    `);
+    // The counter comes first, as in the Postgres store. A duplicate rolls it back.
     const bump = db.prepare(`
       INSERT INTO account_counters (account_id, n) VALUES (?, 1)
       ON CONFLICT (account_id) DO UPDATE SET n = n + 1
       RETURNING n
     `);
-    const assign = db.prepare('UPDATE messages SET account_seq = ? WHERE id = ?');
+    // No conflict target: a retry of the same envelope must be a duplicate even without a WhatsApp id.
+    const insert = db.prepare(`
+      INSERT INTO messages (${MESSAGE_INSERT_COLUMNS}, account_seq)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT DO NOTHING
+    `);
     const readSeq = db.prepare('SELECT seq FROM messages WHERE id = ?');
+    const readStored = db.prepare(`
+      SELECT id, seq, account_seq FROM messages
+      WHERE id = @id OR (account_id = @accountId AND wa_message_id = @waMessageId)
+      ORDER BY id = @id DESC LIMIT 1
+    `);
 
     const run = db.transaction((): InsertResult => {
-      const info = insert.run(...messageRowValues(envelope, raw));
-      // Duplicate: nothing was written and no accountSeq is consumed
-      if (info.changes === 0) return { inserted: false };
-
       const { n } = bump.get(envelope.accountId) as { n: number };
-      assign.run(n, envelope.id);
+      const info = insert.run(...messageRowValues(envelope, raw), n);
+      if (info.changes === 0) {
+        const stored = readStored.get({ id: envelope.id, accountId: envelope.accountId, waMessageId: waMessageIdOf(envelope) }) as
+          { id: string; seq: number; account_seq: number } | undefined;
+        // With no conflict target this also swallows a number already taken, which is no duplicate: the message would be lost.
+        if (!stored) throw new PermanentStoreError(`account_seq ${n} of account ${envelope.accountId} is already taken`);
+        throw new DuplicateMessage({ inserted: false, storedId: stored.id, seq: stored.seq, accountSeq: stored.account_seq });
+      }
+
       const { seq } = readSeq.get(envelope.id) as { seq: number };
       return { inserted: true, seq, accountSeq: n };
     });
 
-    return run();
+    try {
+      return run();
+    } catch (err) {
+      if (err instanceof DuplicateMessage) return err.result;
+      if (isRefusedData(err)) throw new PermanentStoreError((err as Error).message, { cause: err });
+      throw err;
+    }
   }
 
   async queryAfter(q: { accountId: string; afterAccountSeq: number; limit: number }): Promise<{

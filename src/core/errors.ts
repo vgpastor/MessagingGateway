@@ -50,3 +50,14 @@ export class SignatureValidationError extends DomainError {
     super('Webhook signature validation failed', 'SIGNATURE_INVALID');
   }
 }
+
+/**
+ * The store answered and refused this message for what it holds: trying it again cannot help.
+ * Anything else a store throws (a lost connection, a timeout) may pass, and is worth a retry.
+ */
+export class PermanentStoreError extends DomainError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, 'STORE_REFUSED');
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}

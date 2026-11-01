@@ -13,6 +13,7 @@ import type { FullMessageStorePort } from '../../../src/core/persistence/message
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
 import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT } from '../../../src/core/persistence/message-store.utils.js';
+import { PermanentStoreError } from '../../../src/core/errors.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -49,6 +50,10 @@ interface Backend {
   store: FullMessageStorePort;
   /** Rewrite `created_at` of a message so retention can be tested deterministically */
   backdate(id: string, days: number): Promise<void>;
+  /** Makes any UPDATE of `account_seq` fail: a message must be written once, with its number */
+  forbidAccountSeqUpdates(): Promise<void>;
+  /** Sets the account's counter behind the numbers already handed out, which should never happen */
+  rewindCounter(accountId: string, n: number): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -62,6 +67,12 @@ async function createSqliteBackend(): Promise<Backend> {
     backdate: async (id, days) => {
       const when = new Date(Date.now() - days * 86_400_000).toISOString();
       db.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(when, id);
+    },
+    forbidAccountSeqUpdates: async () => {
+      db.exec(`CREATE TRIGGER no_seq_update BEFORE UPDATE OF account_seq ON messages BEGIN SELECT RAISE(ABORT, 'second write'); END`);
+    },
+    rewindCounter: async (accountId, n) => {
+      db.prepare('UPDATE account_counters SET n = ? WHERE account_id = ?').run(n, accountId);
     },
     dispose: () => store.close(),
   };
@@ -89,6 +100,16 @@ async function createPostgresBackend(schemaSuffix = randomUUID().replace(/-/g, '
         `UPDATE "${schema}".messages SET created_at = NOW() - ($2 || ' days')::interval WHERE id = $1`,
         [id, String(days)],
       );
+    },
+    forbidAccountSeqUpdates: async () => {
+      await admin.query(`
+        CREATE FUNCTION "${schema}".no_seq_update() RETURNS trigger AS $fn$ BEGIN RAISE EXCEPTION 'second write'; END $fn$ LANGUAGE plpgsql;
+        CREATE TRIGGER no_seq_update BEFORE UPDATE OF account_seq ON "${schema}".messages
+          FOR EACH ROW EXECUTE FUNCTION "${schema}".no_seq_update();
+      `);
+    },
+    rewindCounter: async (accountId, n) => {
+      await admin.query(`UPDATE "${schema}".account_counters SET n = $1 WHERE account_id = $2`, [n, accountId]);
     },
     dispose: async () => {
       await store.close();
@@ -135,10 +156,61 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       const next = await store.insertInbound(makeEnvelope('acc-a', 'M2'));
 
       expect(first).toMatchObject({ inserted: true, accountSeq: 1 });
-      expect(dup).toEqual({ inserted: false });
+      expect(dup).toMatchObject({ inserted: false });
       expect(next.accountSeq).toBe(2);
       expect(await store.maxAccountSeq('acc-a')).toBe(2);
       expect(await store.count({ accountId: 'acc-a' })).toBe(2);
+    });
+
+    it('insertInbound writes a message once, with its number already on it', async () => {
+      await backend.forbidAccountSeqUpdates();
+
+      expect(await store.insertInbound(makeEnvelope('acc-a', 'ONE'))).toMatchObject({ inserted: true, accountSeq: 1 });
+      expect(await store.insertInbound(makeEnvelope('acc-a', 'TWO'))).toMatchObject({ inserted: true, accountSeq: 2 });
+      expect((await store.queryAfter({ accountId: 'acc-a', afterAccountSeq: 0, limit: 10 })).messages.map((m) => m.accountSeq)).toEqual([1, 2]);
+    });
+
+    it('a duplicate of an account with no messages leaves no counter behind', async () => {
+      const stored = makeEnvelope('acc-a', 'SAME-ID');
+      await store.insertInbound(stored);
+
+      const sameIdOtherAccount = await store.insertInbound({ ...stored, accountId: 'acc-new', channelDetails: { platform: 'whatsapp', messageId: 'OTHER' } });
+
+      expect(sameIdOtherAccount).toMatchObject({ inserted: false });
+      expect(await store.maxAccountSeq('acc-new')).toBe(0);
+    });
+
+    it('a duplicate says which row already holds the message, and its numbers', async () => {
+      const stored = makeEnvelope('acc-a', 'HELD');
+      const first = await store.insertInbound(stored);
+
+      expect(await store.insertInbound(stored)).toEqual({
+        inserted: false, storedId: stored.id, seq: first.seq, accountSeq: first.accountSeq,
+      });
+      expect(await store.insertInbound(makeEnvelope('acc-a', 'HELD'))).toEqual({
+        inserted: false, storedId: stored.id, seq: first.seq, accountSeq: first.accountSeq,
+      });
+    });
+
+    it('a number already taken is a failure, never a duplicate that would drop the message', async () => {
+      await store.insertInbound(makeEnvelope('acc-a', 'S1'));
+      await store.insertInbound(makeEnvelope('acc-a', 'S2'));
+      await backend.rewindCounter('acc-a', 1);
+
+      const message = makeEnvelope('acc-a', 'S3');
+      await expect(store.insertInbound(message)).rejects.toBeInstanceOf(PermanentStoreError);
+
+      expect(await store.findById(message.id)).toBeUndefined();
+      expect(await store.maxAccountSeq('acc-a')).toBe(1);
+    });
+
+    it('a message the database refuses is a permanent failure, and consumes no number', async () => {
+      await store.insertInbound(makeEnvelope('acc-a', 'OK'));
+      const refused = makeEnvelope('acc-a', 'BAD', { recipient: { id: null as unknown as string } });
+
+      await expect(store.insertInbound(refused)).rejects.toBeInstanceOf(PermanentStoreError);
+
+      expect(await store.maxAccountSeq('acc-a')).toBe(1);
     });
 
     it('insertInbound treats the same waMessageId in another account as a different message', async () => {
@@ -334,8 +406,8 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect((await store.insertInbound(withWa)).accountSeq).toBe(1);
       expect((await store.insertInbound(withoutWa)).accountSeq).toBe(2);
 
-      expect(await store.insertInbound(withWa)).toEqual({ inserted: false });
-      expect(await store.insertInbound(withoutWa)).toEqual({ inserted: false });
+      expect(await store.insertInbound(withWa)).toMatchObject({ inserted: false });
+      expect(await store.insertInbound(withoutWa)).toMatchObject({ inserted: false });
       expect(await store.maxAccountSeq('acc-a')).toBe(2);
       expect((await store.insertInbound(makeEnvelope('acc-a', 'NEXT'))).accountSeq).toBe(3);
     });
