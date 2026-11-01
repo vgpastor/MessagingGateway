@@ -477,7 +477,7 @@ describe('InboundPipeline', () => {
       insertInbound.mockResolvedValue({ inserted: false });
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
-      expect(insertInbound.mock.calls[0]?.[0 as never]).toMatchObject({ id: 'second' });
+      expect((insertInbound.mock.calls[0] as unknown as [UnifiedEnvelope])[0].id).toBe('second');
       expect(failedLog.replay).toHaveBeenCalledTimes(1);
     });
 
