@@ -16,15 +16,21 @@ const KNOWN_LID = '100000000000001@lid';
 const UNKNOWN_LID = '100000000000002@lid';
 const PHONE_JID = '34600111222@s.whatsapp.net';
 
+const sockets = vi.hoisted(() => [] as Array<{ ev: import('node:events').EventEmitter }>);
+
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
-  default: () => ({
-    ev: new EventEmitter(),
-    logout: async () => {},
-    signalRepository: {
-      lidMapping: { getPNForLID: async (lid: string) => (lid === KNOWN_LID ? `34600111222:5@s.whatsapp.net` : null) },
-    },
-  }),
+  default: () => {
+    const socket = {
+      ev: new EventEmitter(),
+      logout: async () => {},
+      signalRepository: {
+        lidMapping: { getPNForLID: async (lid: string) => (lid === KNOWN_LID ? `34600111222:5@s.whatsapp.net` : null) },
+      },
+    };
+    sockets.push(socket);
+    return socket;
+  },
   useMultiFileAuthState: async () => ({ state: {}, saveCreds: () => {} }),
   fetchLatestBaileysVersion: async () => ({ version: [2, 3000, 1] }),
 }));
@@ -99,6 +105,7 @@ describe('the failed log through a real start', () => {
       metrics: noopMetrics,
       accounts: { findById: async (id: string) => (id === ACCOUNT_ID ? account : undefined) },
       resolveLidToPhone: provider.resolveLidToPhone,
+      isConnected: (a: ChannelAccount) => registry.getConnectionManager(a.provider)?.getConnectionInfo(a.id).status === 'connected',
       persistRetryDelaysMs: [],
     });
     return { pipeline, media, connect: () => connectManagedProviders([account], registry, eventBus, pipeline) };
@@ -147,7 +154,7 @@ describe('the failed log through a real start', () => {
     await pipeline.drain(10);
   });
 
-  it('a LID unresolved for more than 7 days leaves the file after connecting, not before', async () => {
+  it('a LID unresolved for more than 7 days leaves the file only once its account has really connected', async () => {
     const old = envelope('old', UNKNOWN_LID);
     old.gateway.receivedAt = new Date(Date.now() - 8 * 86_400_000);
     await file.append({ envelope: old, raw: undefined });
@@ -156,10 +163,14 @@ describe('the failed log through a real start', () => {
     await pipeline.replayFailed();
     expect(await fileIds()).toEqual(['old']);
 
-    await connect();
-    pipeline.replayAfterConnecting(1);
-    await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+    await connect(); // a socket, still connecting: the pass that follows must not take that for a chance it had
+    await pipeline.replayFailed();
+    expect(await fileIds()).toEqual(['old']);
 
+    sockets.at(-1)!.ev.emit('connection.update', { connection: 'open' });
+    await pipeline.replayFailed();
+
+    expect(existsSync(path)).toBe(false);
     const [rejected] = (await readFile(join(dir, 'failed-inbound.rejected.jsonl'), 'utf8')).trim().split('\n');
     expect(JSON.parse(JSON.parse(rejected!).line).envelope.id).toBe('old');
     await pipeline.drain(10);

@@ -61,6 +61,7 @@ function setup(opts: {
   toStorableRaw?: (raw: unknown) => unknown;
   persistRetryDelaysMs?: readonly number[];
   account?: ChannelAccount | undefined;
+  isConnected?: (account: ChannelAccount) => boolean;
 } = {}) {
   const eventBus = new EventBus();
   const emitted: UnifiedEnvelope[] = [];
@@ -83,6 +84,7 @@ function setup(opts: {
     store, failedLog, eventBus, media, metrics,
     accounts: { findById: async () => ('account' in opts ? opts.account : makeAccount()) },
     resolveLidToPhone: opts.resolveLidToPhone,
+    isConnected: opts.isConnected,
     toStorableRaw: opts.toStorableRaw,
     persistRetryDelaysMs: opts.persistRetryDelaysMs ?? [],
   });
@@ -764,45 +766,62 @@ describe('InboundPipeline', () => {
     });
 
     describe('a LID that nobody can resolve', () => {
-      const withList = () => setup({
-        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
+      const setupWith = (account: Partial<ChannelAccount>, isConnected?: (account: ChannelAccount) => boolean) => setup({
+        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'], ...account }),
         resolveLidToPhone: async () => undefined,
+        isConnected,
       });
       const lidReceivedAgo = (ms: number) => makeEnvelope({
         conversationId: '100000000000001@lid',
         gateway: { receivedAt: new Date(Date.now() - ms), adapterId: 'baileys', account: { id: 'wa-1', alias: 'WA 1', owner: 'org', tags: [] } },
       });
+      const OLD = LID_MAX_WAIT_MS + 60_000;
+      const waits = (verdict: unknown) => {
+        expect(verdict).toBeInstanceOf(Error);
+        expect(verdict).not.toBeInstanceOf(PermanentStoreError);
+      };
 
-      async function replayAfterConnectingVerdict(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<unknown> {
-        let verdict: unknown;
-        vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
-          verdict = await save({ envelope, raw: {} }).catch((err: unknown) => err);
-          return { saved: 0, kept: 1, rejected: 0 };
-        });
-        context.pipeline.replayAfterConnecting(0);
-        await vi.waitFor(() => expect(context.failedLog.replay).toHaveBeenCalled());
-        await vi.waitFor(() => expect(verdict).toBeDefined());
-        return verdict;
-      }
-
-      it('is refused for good past 7 days, once the accounts have had the time to connect', async () => {
-        const verdict = await replayAfterConnectingVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS + 60_000));
-
-        expect(verdict).toBeInstanceOf(PermanentStoreError);
+      it('is refused for good past 7 days if its account is active and connected, since it could have been resolved', async () => {
+        expect(await replayVerdict(setupWith({ status: 'active' }, () => true), lidReceivedAgo(OLD))).toBeInstanceOf(PermanentStoreError);
       });
 
       it('keeps waiting before 7 days', async () => {
-        const verdict = await replayAfterConnectingVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS - 60_000));
-
-        expect(verdict).toBeInstanceOf(Error);
-        expect(verdict).not.toBeInstanceOf(PermanentStoreError);
+        waits(await replayVerdict(setupWith({ status: 'active' }, () => true), lidReceivedAgo(LID_MAX_WAIT_MS - 60_000)));
       });
 
-      it('is not judged by its age before connecting: without a socket no LID can be resolved, however old', async () => {
-        const verdict = await replayVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS * 2));
+      it('keeps waiting, however old, if its account is not connected: without a socket no LID can be resolved', async () => {
+        waits(await replayVerdict(setupWith({ status: 'active' }, () => false), lidReceivedAgo(OLD)));
+      });
 
-        expect(verdict).toBeInstanceOf(Error);
-        expect(verdict).not.toBeInstanceOf(PermanentStoreError);
+      it.each(['suspended', 'auth_expired', 'error', 'unchecked'] as const)('keeps waiting, however old, if its account is %s', async (status) => {
+        waits(await replayVerdict(setupWith({ status }, () => true), lidReceivedAgo(OLD)));
+      });
+
+      it('keeps waiting if nothing can tell whether its account is connected', async () => {
+        waits(await replayVerdict(setupWith({ status: 'active' }), lidReceivedAgo(OLD)));
+      });
+
+      it('looks at the account of each entry, not at the gateway as a whole', async () => {
+        const onlyTheFirst = (account: ChannelAccount) => account.id === 'wa-1';
+
+        expect(await replayVerdict(setupWith({ id: 'wa-1' }, onlyTheFirst), lidReceivedAgo(OLD))).toBeInstanceOf(PermanentStoreError);
+        waits(await replayVerdict(setupWith({ id: 'wa-2' }, onlyTheFirst), lidReceivedAgo(OLD)));
+      });
+
+      it('one refused for good does not hold back what its account has behind it', async () => {
+        const context = setupWith({ status: 'active' }, () => true);
+        const seen: unknown[] = [];
+        vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
+          seen.push(await save({ envelope: lidReceivedAgo(OLD), raw: {} }).catch((err: unknown) => err));
+          seen.push(await save({ envelope: makeEnvelope({ id: 'behind' }), raw: {} }).catch((err: unknown) => err));
+          return { saved: 1, kept: 0, rejected: 1 };
+        });
+
+        await context.pipeline.replayFailed();
+
+        expect(seen[0]).toBeInstanceOf(PermanentStoreError);
+        expect(seen[1]).toBeUndefined();
+        expect(context.insertInbound).toHaveBeenCalledTimes(1);
       });
     });
 

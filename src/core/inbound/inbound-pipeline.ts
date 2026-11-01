@@ -25,6 +25,8 @@ export interface InboundPipelineDeps {
   accounts: Pick<ChannelAccountRepository, 'findById'>;
   /** Resolves a WhatsApp LID to its phone JID (`digits[:device]@s.whatsapp.net`) or bare number. */
   resolveLidToPhone?: (accountId: string, lid: string) => Promise<string | undefined>;
+  /** Whether the account has a live connection right now. Without it, a LID is never given up on. */
+  isConnected?: (account: ChannelAccount) => boolean;
   /** Turns the provider's raw message into something storable as JSON (strip binaries...). Identity by default. */
   toStorableRaw?: (raw: unknown) => unknown;
   /** {@link PERSIST_RETRY_DELAYS_MS} by default. */
@@ -92,8 +94,6 @@ export class InboundPipeline {
   /** Write-offs started so far: how {@link recover} tells that a pass may have missed something. */
   private writeOffs = 0;
   private replayTimer: NodeJS.Timeout | undefined;
-  /** Until then no LID can be resolved, however long it has waited, and that says nothing about the LID. */
-  private accountsHadTimeToConnect = false;
 
   constructor(private readonly deps: InboundPipelineDeps) {
     this.guard = deps.store && new StoreGuard(deps.store, {
@@ -200,10 +200,7 @@ export class InboundPipeline {
    * it also picks up the media of what it stores. Live messages are flowing by then: what it stores gets a later number.
    */
   replayAfterConnecting(delayMs: number = REPLAY_AFTER_CONNECT_MS): void {
-    this.replayTimer = setTimeout(() => {
-      this.accountsHadTimeToConnect = true;
-      void this.recoverFailedLog();
-    }, delayMs);
+    this.replayTimer = setTimeout(() => void this.recoverFailedLog(), delayMs);
     this.replayTimer.unref();
   }
 
@@ -218,13 +215,18 @@ export class InboundPipeline {
       const phoneJid = await this.resolveLidToPhoneJid(envelope.accountId, envelope.conversationId);
       if (!phoneJid) {
         const waited = Date.now() - envelope.gateway.receivedAt.getTime();
-        if (this.accountsHadTimeToConnect && waited > LID_MAX_WAIT_MS) throw new PermanentStoreError('its conversation is a LID still unresolved after 7 days');
+        if (waited > LID_MAX_WAIT_MS && this.canResolveLids(account)) throw new PermanentStoreError('its conversation is a LID still unresolved after 7 days');
         throw new Error('its conversation is a LID that cannot be resolved yet, so it cannot be judged');
       }
       envelope.conversationId = phoneJid;
       envelope.sender.id = phoneJid;
     }
     return this.accepts(account, envelope) ? undefined : 'the account excludes its conversation';
+  }
+
+  /** Without a live socket no LID can be resolved, however long it has waited, and that says nothing about the LID. */
+  private canResolveLids(account: ChannelAccount): boolean {
+    return account.status === 'active' && this.deps.isConnected?.(account) === true;
   }
 
   private judgesConversations(account: ChannelAccount): boolean {

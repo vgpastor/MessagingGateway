@@ -204,6 +204,7 @@ async function main() {
     metrics,
     accounts: accountRepository,
     resolveLidToPhone: baileysProvider.resolveLidToPhone,
+    isConnected: (account) => providerRegistry.getConnectionManager(account.provider)?.getConnectionInfo(account.id).status === 'connected',
     toStorableRaw,
   });
 
