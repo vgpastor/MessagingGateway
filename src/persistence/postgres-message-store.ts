@@ -14,16 +14,23 @@ import type {
   RawConversationHistory,
 } from '../core/persistence/message-store.port.js';
 import type { MediaInfo } from '../core/messaging/content.js';
+import { toUTC, MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, waMessageIdOf } from '../core/persistence/message-store.utils.js';
 import {
-  toUTC, parseJsonColumnRequired, parseJsonColumn,
-  MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
-  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn, waMessageIdOf,
-} from '../core/persistence/message-store.utils.js';
+  buildMessageWhere, envelopeColumns, MESSAGE_INSERT_COLUMNS, messageRowValues, parseJsonColumn, rowToEnvelope,
+  statsFromRows, statsQueries, toJsonColumn, type StatsDialect,
+} from './message-row.js';
 
 type PgPool = import('pg').Pool;
 type PoolConfig = import('pg').PoolConfig;
 
 const COLUMNS = envelopeColumns('postgres');
+
+const placeholder = (position: number) => `$${position}`;
+
+const STATS_DIALECT: StatsDialect = {
+  count: 'COUNT(*)::int',
+  hour: "EXTRACT(HOUR FROM timestamp::timestamptz AT TIME ZONE 'UTC')::int",
+};
 
 /** How long to wait for a connection before failing the write: its caller has a retry policy. */
 const CONNECTION_TIMEOUT_MS = 5_000;
@@ -146,7 +153,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async query(filters: MessageQuery): Promise<MessageQueryResult> {
     const pool = this.requirePool();
 
-    const { where, params } = this.buildWhere(filters);
+    const { where, params } = buildMessageWhere(filters, placeholder);
     const limit = clampPageLimit(filters.limit ?? 50, MAX_EXPORT_LIMIT);
     const offset = filters.offset ?? 0;
 
@@ -160,7 +167,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     );
 
     return {
-      messages: rows.rows.map((r) => this.rowToEnvelope(r)),
+      messages: rows.rows.map((r) => rowToEnvelope(r)),
       total,
       limit,
       offset,
@@ -170,7 +177,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
     const pool = this.requirePool();
     const res = await pool.query(`SELECT ${COLUMNS} FROM messages WHERE id = $1`, [messageId]);
-    return res.rows.length > 0 ? this.rowToEnvelope(res.rows[0]) : undefined;
+    return res.rows.length > 0 ? rowToEnvelope(res.rows[0]) : undefined;
   }
 
   async count(filters?: Partial<MessageQuery>): Promise<number> {
@@ -179,7 +186,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       const res = await pool.query('SELECT COUNT(*)::int as total FROM messages');
       return res.rows[0].total;
     }
-    const { where, params } = this.buildWhere(filters as MessageQuery);
+    const { where, params } = buildMessageWhere(filters, placeholder);
     const res = await pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params);
     return res.rows[0].total;
   }
@@ -209,7 +216,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     );
 
     return {
-      messages: rows.rows.map((r) => this.rowToEnvelope(r)),
+      messages: rows.rows.map((r) => rowToEnvelope(r)),
       total,
       limit,
       offset,
@@ -219,57 +226,26 @@ export class PostgresMessageStore implements FullMessageStorePort {
   async getStats(options?: StatsOptions): Promise<MessageStats> {
     const pool = this.requirePool();
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let idx = 0;
+    const { where, params } = buildMessageWhere(options ?? {}, placeholder);
+    const sql = statsQueries(where, STATS_DIALECT);
 
-    if (options?.accountId) { conditions.push(`account_id = $${++idx}`); params.push(options.accountId); }
-    if (options?.since) { conditions.push(`timestamp >= $${++idx}`); params.push(toUTC(options.since)); }
-    if (options?.until) { conditions.push(`timestamp <= $${++idx}`); params.push(toUTC(options.until)); }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const [totalRes, channelRes, typeRes, dirRes, convRes, hourRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int as total FROM messages ${where}`, params),
-      pool.query(`SELECT channel, COUNT(*)::int as cnt FROM messages ${where} GROUP BY channel`, params),
-      pool.query(`SELECT content_type, COUNT(*)::int as cnt FROM messages ${where} GROUP BY content_type`, params),
-      pool.query(`SELECT direction, COUNT(*)::int as cnt FROM messages ${where} GROUP BY direction`, params),
-      pool.query(
-        `SELECT conversation_id, COUNT(*)::int as cnt, MAX(content_preview) as last_preview FROM messages ${where} GROUP BY conversation_id ORDER BY cnt DESC LIMIT 10`,
-        params,
-      ),
-      pool.query(
-        `SELECT EXTRACT(HOUR FROM timestamp::timestamptz AT TIME ZONE 'UTC')::int as hour, COUNT(*)::int as cnt FROM messages ${where} GROUP BY hour`,
-        params,
-      ),
+    const [total, channels, types, directions, conversations, hours] = await Promise.all([
+      pool.query(sql.total, params),
+      pool.query(sql.channels, params),
+      pool.query(sql.types, params),
+      pool.query(sql.directions, params),
+      pool.query(sql.conversations, params),
+      pool.query(sql.hours, params),
     ]);
 
-    const byChannel: Record<string, number> = {};
-    for (const r of channelRes.rows) byChannel[r.channel] = r.cnt;
-
-    const byContentType: Record<string, number> = {};
-    for (const r of typeRes.rows) byContentType[r.content_type] = r.cnt;
-
-    const byDirection: Record<string, number> = {};
-    for (const r of dirRes.rows) byDirection[r.direction] = r.cnt;
-
-    const topConversations = convRes.rows.map((r) => ({
-      conversationId: r.conversation_id,
-      count: r.cnt,
-      lastMessage: r.last_preview ?? undefined,
-    }));
-
-    const byHour: number[] = new Array<number>(24).fill(0);
-    for (const r of hourRes.rows) byHour[r.hour] = r.cnt;
-
-    return {
-      totalMessages: totalRes.rows[0].total,
-      byChannel,
-      byContentType,
-      byDirection,
-      topConversations,
-      byHour,
-    };
+    return statsFromRows({
+      total: total.rows[0].total,
+      channels: channels.rows,
+      types: types.rows,
+      directions: directions.rows,
+      conversations: conversations.rows,
+      hours: hours.rows,
+    });
   }
 
   async getConversationHistory(
@@ -307,7 +283,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
       messageCount: p.cnt,
     }));
 
-    const envelopes = rowsRes.rows.map((r) => this.rowToEnvelope(r));
+    const envelopes = rowsRes.rows.map((r) => rowToEnvelope(r));
 
     // Extract group name from last message's channel details
     const lastRow = rowsRes.rows[rowsRes.rows.length - 1];
@@ -403,7 +379,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     );
 
     const hasMore = res.rows.length > limit;
-    const messages = res.rows.slice(0, limit).map((r) => this.rowToEnvelope(r));
+    const messages = res.rows.slice(0, limit).map((r) => rowToEnvelope(r));
     const last = messages[messages.length - 1];
     return { messages, nextAfterAccountSeq: hasMore && last?.accountSeq != null ? last.accountSeq : null };
   }
@@ -417,7 +393,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     const row = res.rows[0];
     if (!row) return undefined;
     const raw = parseJsonColumn(row.raw_json as string | null);
-    return raw === undefined ? this.rowToEnvelope(row) : { ...this.rowToEnvelope(row), raw };
+    return raw === undefined ? rowToEnvelope(row) : { ...rowToEnvelope(row), raw };
   }
 
   async updateMedia(id: string, media: Partial<MediaInfo>): Promise<void> {
@@ -479,42 +455,5 @@ export class PostgresMessageStore implements FullMessageStorePort {
       throw new Error('PostgresMessageStore not initialized — call init() first');
     }
     return this.pool;
-  }
-
-  private buildWhere(filters: MessageQuery): { where: string; params: unknown[] } {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let idx = 0;
-
-    if (filters.accountId) { conditions.push(`account_id = $${++idx}`); params.push(filters.accountId); }
-    if (filters.channel) { conditions.push(`channel = $${++idx}`); params.push(filters.channel); }
-    if (filters.conversationId) { conditions.push(`conversation_id = $${++idx}`); params.push(filters.conversationId); }
-    if (filters.senderId) { conditions.push(`sender_id = $${++idx}`); params.push(filters.senderId); }
-    if (filters.contentType) { conditions.push(`content_type = $${++idx}`); params.push(filters.contentType); }
-    if (filters.direction) { conditions.push(`direction = $${++idx}`); params.push(filters.direction); }
-    if (filters.since) { conditions.push(`timestamp >= $${++idx}`); params.push(toUTC(filters.since)); }
-    if (filters.until) { conditions.push(`timestamp <= $${++idx}`); params.push(toUTC(filters.until)); }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    return { where, params };
-  }
-
-  private rowToEnvelope(row: Record<string, unknown>): UnifiedEnvelope {
-    const ts = row.timestamp;
-    return {
-      id: row.id as string,
-      accountId: row.account_id as string,
-      channel: row.channel,
-      direction: row.direction,
-      timestamp: ts instanceof Date ? ts : new Date(ts as string),
-      conversationId: row.conversation_id as string,
-      sender: readSender(row),
-      recipient: { id: row.recipient_id as string },
-      content: parseJsonColumnRequired(row.content_json as string),
-      context: parseJsonColumn(row.context_json as string | null) ?? undefined,
-      channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
-      gateway: parseJsonColumnRequired(row.gateway_json as string),
-      ...readLogFields(row),
-    } as UnifiedEnvelope;
   }
 }

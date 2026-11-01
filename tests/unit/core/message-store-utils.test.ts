@@ -2,11 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   formatContentForAI,
   extractPreview,
-  parseJsonColumn,
-  parseJsonColumnRequired,
   toUTC,
   nowUTC,
 } from '../../../src/core/persistence/message-store.utils.js';
+import { parseJsonColumn, parseJsonColumnRequired } from '../../../src/persistence/message-row.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 import type { MessageContent } from '../../../src/core/messaging/content.js';
 

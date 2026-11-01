@@ -136,6 +136,38 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       await backend.dispose();
     });
 
+    it('filters, counts and adds up the same in every dialect', async () => {
+      const at = new Date('2026-04-05T10:30:00Z');
+      await store.insertInbound(makeEnvelope('acc-a', 'F1', { timestamp: at, conversationId: 'c1', content: { type: 'text', body: 'uno' } }));
+      await store.insertInbound(makeEnvelope('acc-a', 'F2', { timestamp: at, conversationId: 'c1', content: { type: 'text', body: 'dos' } }));
+      await store.insertInbound(makeEnvelope('acc-a', 'F3', {
+        timestamp: new Date('2026-04-06T22:00:00Z'), conversationId: 'c2', content: { type: 'location', latitude: 1, longitude: 2 },
+      }));
+      await store.insertInbound(makeEnvelope('acc-b', 'F4', { timestamp: at, conversationId: 'c3' }));
+
+      const filtered = await store.query({ accountId: 'acc-a', contentType: 'text', since: new Date('2026-04-05T00:00:00Z'), until: new Date('2026-04-05T23:00:00Z') });
+      expect(filtered.total).toBe(2);
+      expect(filtered.messages.map((m) => m.conversationId)).toEqual(['c1', 'c1']);
+      expect(filtered.messages[0]?.timestamp.toISOString()).toBe('2026-04-05T10:30:00.000Z');
+      expect(await store.count({ accountId: 'acc-a', conversationId: 'c2' })).toBe(1);
+      expect(await store.count({})).toBe(4);
+
+      const stats = await store.getStats({ accountId: 'acc-a' });
+      expect(stats.totalMessages).toBe(3);
+      expect(stats.byChannel).toEqual({ whatsapp: 3 });
+      expect(stats.byContentType).toEqual({ text: 2, location: 1 });
+      expect(stats.byDirection).toEqual({ inbound: 3 });
+      expect(stats.topConversations.map((c) => [c.conversationId, c.count])).toEqual([['c1', 2], ['c2', 1]]);
+      expect(stats.topConversations[0]?.lastMessage).toBe('uno');
+      expect(stats.byHour[10]).toBe(2);
+      expect(stats.byHour[22]).toBe(1);
+      expect(stats.byHour).toHaveLength(24);
+
+      const windowed = await store.getStats({ since: new Date('2026-04-06T00:00:00Z'), until: new Date('2026-04-07T00:00:00Z') });
+      expect(windowed.totalMessages).toBe(1);
+      expect((await store.getStats()).totalMessages).toBe(4);
+    });
+
     it('insertInbound assigns contiguous accountSeq per account', async () => {
       const a = [];
       for (const id of ['A1', 'A2', 'A3']) a.push(await store.insertInbound(makeEnvelope('acc-a', id)));

@@ -18,13 +18,20 @@ import type {
   RawConversationHistory,
 } from '../core/persistence/message-store.port.js';
 import type { MediaInfo } from '../core/messaging/content.js';
+import { toUTC, MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, waMessageIdOf } from '../core/persistence/message-store.utils.js';
 import {
-  toUTC, parseJsonColumnRequired, parseJsonColumn,
-  MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
-  MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn, waMessageIdOf,
-} from '../core/persistence/message-store.utils.js';
+  buildMessageWhere, envelopeColumns, MESSAGE_INSERT_COLUMNS, messageRowValues, parseJsonColumn, rowToEnvelope,
+  statsFromRows, statsQueries, toJsonColumn, type StatsDialect, type StatsRows,
+} from './message-row.js';
 
 const COLUMNS = envelopeColumns('sqlite');
+
+const placeholder = () => '?';
+
+const STATS_DIALECT: StatsDialect = {
+  count: 'COUNT(*)',
+  hour: "CAST(strftime('%H', timestamp, 'utc') AS INTEGER)",
+};
 
 /** What the data itself caused: the same row fails again. A busy or full database is not here, it may pass. */
 const REFUSED_DATA_CODE = /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG)/;
@@ -109,7 +116,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async query(filters: MessageQuery): Promise<MessageQueryResult> {
     const db = this.requireDb();
 
-    const { where, params } = this.buildWhere(filters);
+    const { where, params } = buildMessageWhere(filters, placeholder);
     const limit = clampPageLimit(filters.limit ?? 50, MAX_EXPORT_LIMIT);
     const offset = filters.offset ?? 0;
 
@@ -117,7 +124,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const rows = db.prepare(`SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
     return {
-      messages: rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>)),
+      messages: rows.map((r) => rowToEnvelope(r as Record<string, unknown>)),
       total: countRow.total,
       limit,
       offset,
@@ -127,7 +134,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async findById(messageId: string): Promise<UnifiedEnvelope | undefined> {
     const db = this.requireDb();
     const row = db.prepare(`SELECT ${COLUMNS} FROM messages WHERE id = ?`).get(messageId);
-    return row ? this.rowToEnvelope(row as Record<string, unknown>) : undefined;
+    return row ? rowToEnvelope(row as Record<string, unknown>) : undefined;
   }
 
   async count(filters?: Partial<MessageQuery>): Promise<number> {
@@ -135,7 +142,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     if (!filters || Object.keys(filters).length === 0) {
       return (db.prepare('SELECT COUNT(*) as total FROM messages').get() as { total: number }).total;
     }
-    const { where, params } = this.buildWhere(filters as MessageQuery);
+    const { where, params } = buildMessageWhere(filters, placeholder);
     return (db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number }).total;
   }
 
@@ -162,7 +169,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).all(...params, limit, offset);
 
     return {
-      messages: rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>)),
+      messages: rows.map((r) => rowToEnvelope(r as Record<string, unknown>)),
       total: countRow.total,
       limit,
       offset,
@@ -172,52 +179,18 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async getStats(options?: StatsOptions): Promise<MessageStats> {
     const db = this.requireDb();
 
-    const conditions: string[] = [];
-    const params: unknown[] = [];
+    const { where, params } = buildMessageWhere(options ?? {}, placeholder);
+    const sql = statsQueries(where, STATS_DIALECT);
+    const all = <Row>(query: string) => db.prepare(query).all(...params) as Row[];
 
-    if (options?.accountId) { conditions.push('account_id = ?'); params.push(options.accountId); }
-    if (options?.since) { conditions.push('timestamp >= ?'); params.push(toUTC(options.since)); }
-    if (options?.until) { conditions.push('timestamp <= ?'); params.push(toUTC(options.until)); }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const totalRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
-
-    const channelRows = db.prepare(`SELECT channel, COUNT(*) as cnt FROM messages ${where} GROUP BY channel`).all(...params) as Array<{ channel: string; cnt: number }>;
-    const byChannel: Record<string, number> = {};
-    for (const r of channelRows) { byChannel[r.channel] = r.cnt; }
-
-    const typeRows = db.prepare(`SELECT content_type, COUNT(*) as cnt FROM messages ${where} GROUP BY content_type`).all(...params) as Array<{ content_type: string; cnt: number }>;
-    const byContentType: Record<string, number> = {};
-    for (const r of typeRows) { byContentType[r.content_type] = r.cnt; }
-
-    const dirRows = db.prepare(`SELECT direction, COUNT(*) as cnt FROM messages ${where} GROUP BY direction`).all(...params) as Array<{ direction: string; cnt: number }>;
-    const byDirection: Record<string, number> = {};
-    for (const r of dirRows) { byDirection[r.direction] = r.cnt; }
-
-    const convRows = db.prepare(
-      `SELECT conversation_id, COUNT(*) as cnt, MAX(content_preview) as last_preview FROM messages ${where} GROUP BY conversation_id ORDER BY cnt DESC LIMIT 10`,
-    ).all(...params) as Array<{ conversation_id: string; cnt: number; last_preview: string | null }>;
-    const topConversations = convRows.map((r) => ({
-      conversationId: r.conversation_id,
-      count: r.cnt,
-      lastMessage: r.last_preview ?? undefined,
-    }));
-
-    const hourRows = db.prepare(
-      `SELECT CAST(strftime('%H', timestamp, 'utc') AS INTEGER) as hour, COUNT(*) as cnt FROM messages ${where} GROUP BY hour`,
-    ).all(...params) as Array<{ hour: number; cnt: number }>;
-    const byHour: number[] = new Array<number>(24).fill(0);
-    for (const r of hourRows) { byHour[r.hour] = r.cnt; }
-
-    return {
-      totalMessages: totalRow.total,
-      byChannel,
-      byContentType,
-      byDirection,
-      topConversations,
-      byHour,
-    };
+    return statsFromRows({
+      total: (db.prepare(sql.total).get(...params) as { total: number }).total,
+      channels: all<StatsRows['channels'][number]>(sql.channels),
+      types: all<StatsRows['types'][number]>(sql.types),
+      directions: all<StatsRows['directions'][number]>(sql.directions),
+      conversations: all<StatsRows['conversations'][number]>(sql.conversations),
+      hours: all<StatsRows['hours'][number]>(sql.hours),
+    });
   }
 
   async getConversationHistory(
@@ -251,7 +224,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
       `SELECT * FROM (SELECT ${COLUMNS} FROM messages ${where} ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC`,
     ).all(...params, limit);
 
-    const envelopes = rows.map((r) => this.rowToEnvelope(r as Record<string, unknown>));
+    const envelopes = rows.map((r) => rowToEnvelope(r as Record<string, unknown>));
 
     // Extract group name from last message's channel details
     const lastRow = rows[rows.length - 1] as Record<string, unknown> | undefined;
@@ -335,7 +308,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).all(q.accountId, q.afterAccountSeq, limit + 1) as Array<Record<string, unknown>>;
 
     const hasMore = rows.length > limit;
-    const messages = rows.slice(0, limit).map((r) => this.rowToEnvelope(r));
+    const messages = rows.slice(0, limit).map((r) => rowToEnvelope(r));
     const last = messages[messages.length - 1];
     return { messages, nextAfterAccountSeq: hasMore && last?.accountSeq != null ? last.accountSeq : null };
   }
@@ -347,7 +320,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).get(accountId, waMessageId) as Record<string, unknown> | undefined;
     if (!row) return undefined;
     const raw = parseJsonColumn(row.raw_json as string | null);
-    return raw === undefined ? this.rowToEnvelope(row) : { ...this.rowToEnvelope(row), raw };
+    return raw === undefined ? rowToEnvelope(row) : { ...rowToEnvelope(row), raw };
   }
 
   async updateMedia(id: string, media: Partial<MediaInfo>): Promise<void> {
@@ -409,40 +382,5 @@ export class SqliteMessageStore implements FullMessageStorePort {
       throw new Error('SqliteMessageStore not initialized — call init() first');
     }
     return this.db;
-  }
-
-  private buildWhere(filters: MessageQuery): { where: string; params: unknown[] } {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-
-    if (filters.accountId) { conditions.push('account_id = ?'); params.push(filters.accountId); }
-    if (filters.channel) { conditions.push('channel = ?'); params.push(filters.channel); }
-    if (filters.conversationId) { conditions.push('conversation_id = ?'); params.push(filters.conversationId); }
-    if (filters.senderId) { conditions.push('sender_id = ?'); params.push(filters.senderId); }
-    if (filters.contentType) { conditions.push('content_type = ?'); params.push(filters.contentType); }
-    if (filters.direction) { conditions.push('direction = ?'); params.push(filters.direction); }
-    if (filters.since) { conditions.push('timestamp >= ?'); params.push(toUTC(filters.since)); }
-    if (filters.until) { conditions.push('timestamp <= ?'); params.push(toUTC(filters.until)); }
-
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    return { where, params };
-  }
-
-  private rowToEnvelope(row: Record<string, unknown>): UnifiedEnvelope {
-    return {
-      id: row.id as string,
-      accountId: row.account_id as string,
-      channel: row.channel,
-      direction: row.direction,
-      timestamp: new Date(row.timestamp as string),
-      conversationId: row.conversation_id as string,
-      sender: readSender(row),
-      recipient: { id: row.recipient_id as string },
-      content: parseJsonColumnRequired(row.content_json as string),
-      context: parseJsonColumn(row.context_json as string | null) ?? undefined,
-      channelDetails: parseJsonColumn(row.channel_details_json as string | null) ?? undefined,
-      gateway: parseJsonColumnRequired(row.gateway_json as string),
-      ...readLogFields(row),
-    } as UnifiedEnvelope;
   }
 }
