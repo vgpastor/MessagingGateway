@@ -158,7 +158,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `GET` | `/api/v1/accounts` | List all accounts |
 | `GET` | `/api/v1/accounts/:id` | Get account (includes QR code while connecting) |
 | `POST` | `/api/v1/accounts` | Create account |
-| `PUT` | `/api/v1/accounts/:id` | Update account. `status: suspended` closes its connection and keeps the session on disk; reactivating connects it again with no new QR |
+| `PUT` | `/api/v1/accounts/:id` | Update account. `status: suspended` closes its connection and keeps the session on disk; reactivating connects it again with no new QR. While suspended, connect, pair and reset answer `409 ACCOUNT_SUSPENDED` |
 | `DELETE` | `/api/v1/accounts/:id` | Delete account |
 | `POST` | `/api/v1/accounts/:id/connect` | Initiate connection (generates QR) — self-auth providers |
 | `POST` | `/api/v1/accounts/:id/pair` | Request a pairing code instead of a QR — self-auth providers |

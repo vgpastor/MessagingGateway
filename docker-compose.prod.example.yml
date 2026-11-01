@@ -4,6 +4,8 @@
 #   Provide the variables below through the shell or an env file
 #   (docker compose --env-file prod.env -f docker-compose.prod.yml up -d).
 # Required: POSTGRES_PASSWORD, API_KEY. See .env.example for the full list.
+# POSTGRES_PASSWORD goes as it is into DATABASE_URL, so it must be valid in a URL. Percent-encoding it does not
+# help, because Postgres would take the encoded text as its password: use only letters and digits (openssl rand -hex 32).
 # Adjust the host paths (/opt/messaging-gateway/...) and the external network to your server.
 #
 # Before deploying, subscribe consumers such as n8n or a CRM to explicit events:
@@ -33,7 +35,8 @@ services:
   gateway:
     image: vgpastor/messaging-gateway:latest
     ports:
-      - "32768:3000"
+      # This machine only: reach it from outside through a reverse proxy with TLS.
+      - "127.0.0.1:32768:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
