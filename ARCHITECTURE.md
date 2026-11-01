@@ -285,6 +285,16 @@ EventBus.emit('message.inbound', envelope) ← Core domain
          Update conversation thread
 ```
 
+### 5.1.1 What happens when the message log does not take a message
+
+`InboundPipeline` stores a message before emitting it, so `accountSeq` is contiguous per account. A message the log does not take is still delivered live, without a number, and goes to the failed log (`data/failed-inbound.jsonl`).
+
+- **Outage.** A message that runs out of retries opens the circuit (`StoreGuard`): new messages go straight to the failed log. Every 30 s a real committed write to `store_health` tells whether the store is back; a read-only database answers a `SELECT 1`, so that would not do.
+- **Recovery.** When the probe writes, the failed log is replayed. Until a pass finds nothing new, live messages keep going behind it, so numbers follow the order of arrival per account. A failure during the replay is the store's if the probe fails right after it: the circuit opens again.
+- **What stays.** A LID that cannot be resolved yet, and an entry that fails with the probe working, stay in the failed log. What their account has behind them stays too, and the other accounts go on. They do not hold the recovery: it closes and live messages are stored directly. While anything stays, the log is replayed every 5 minutes.
+- **The price of that.** What is held behind an entry that waits gets a later `accountSeq` than the live messages that arrived after it. Inside the failed log the order holds; against live messages it does not, for that account.
+- **What leaves for good.** An explicit `PermanentStoreError`, an unreadable line and a LID unresolved after 7 days on an account that is active and connected go to `data/failed-inbound.rejected.jsonl`, which nothing reads back: someone has to look at it (`umg_inbound_rejected_total`). Failing repeatedly is never a reason: a store can fail on `messages` alone while the probe works. So an entry that always fails stays until someone removes it, and holds back what its account collects behind it in later outages.
+
 ### 5.2 Outbound Message (API)
 
 ```
