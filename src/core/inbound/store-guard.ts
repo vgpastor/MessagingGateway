@@ -10,25 +10,13 @@ export const PERSIST_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 
 export const STORE_PROBE_INTERVAL_MS = 30_000;
 
 /**
- * How many recoveries in a row the same entry of the failed log may fail with a store that writes, as the probe right
- * after the failure shows, before the failure is taken for the entry's. A failure the probe confirms as the store's
- * does not count, and it starts the count again: what stands against an entry must be failures in a row of it alone.
- */
-export const MAX_RECOVERY_FAILURES = 3;
-
-/**
- * Failures that say something about the message, not about the store: another attempt would end the same.
- * Not a `TypeError`: a library may throw one for a lost connection. One that is really the message's ends
- * up opening the circuit, and {@link MAX_RECOVERY_FAILURES} takes it out of the way.
+ * Failures of a live message that another attempt would not change, so it goes to the failed log at once.
+ * Not a `TypeError`: a library may throw one for a lost connection.
  */
 const isPermanentFailure = (err: unknown): boolean =>
   err instanceof PermanentStoreError || err instanceof RangeError;
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-/** A permanent failure as the failed log understands it. */
-const asRefusal = (err: unknown): PermanentStoreError =>
-  (err instanceof PermanentStoreError ? err : new PermanentStoreError(errorMessage(err), { cause: err }));
 
 export interface StoreGuardOptions {
   /** {@link PERSIST_RETRY_DELAYS_MS} by default. */
@@ -55,15 +43,14 @@ interface Diversion {
  *
  * What is in the failed log arrived first. So when the probe writes the circuit does not close yet: it is
  * recovering, the failed log goes in through {@link insertOnce}, and live messages keep rejecting, to
- * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again, unless the
- * same entry has been the one to fail too many times: then it is refused, so one message cannot keep every account out.
+ * queue up behind it, until {@link finishRecovery}. A failure during that opens the circuit again if the probe
+ * fails too. If the probe writes, the store is taking messages and this one is not going in for now: it stays where
+ * it is, safe, and nothing else stops. Nothing but an explicit `PermanentStoreError` gives up on a message.
  *
  * A failure of the message itself is not retried and opens nothing.
  */
 export class StoreGuard {
   private diversion: Diversion | undefined;
-  /** The entry that last failed during a recovery with a store that writes, and how many in a row. */
-  private suspect: { id: string; failures: number } | undefined;
   private probeTimer: NodeJS.Timeout | undefined;
   private stopped = false;
   /** Wakes a message waiting for its next attempt. */
@@ -103,8 +90,8 @@ export class StoreGuard {
   }
 
   /**
-   * Stores a message of the failed log: one attempt, since it is safe where it is. A store that is down opens
-   * the circuit; a failure that is the message's rejects with a `PermanentStoreError`.
+   * Stores a message of the failed log: one attempt, since it is safe where it is. It rejects when not stored, and
+   * only a `PermanentStoreError` means never. A failure the probe confirms, right after, opens the circuit.
    */
   async insertOnce(envelope: UnifiedEnvelope, raw: unknown): Promise<InsertResult> {
     if (this.stopped) throw new Error('shutting down');
@@ -112,9 +99,16 @@ export class StoreGuard {
     try {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
-      if (isPermanentFailure(err)) throw asRefusal(err);
-      if (this.recovering && await this.failedTooOften(envelope)) throw asRefusal(err);
-      this.open(err);
+      if (err instanceof PermanentStoreError) throw err;
+      try {
+        await this.store.probeWrite();
+      } catch {
+        this.open(err);
+        throw err;
+      }
+      this.logger.error('A message of the failed log could not be stored with the message log working: it stays there', {
+        accountId: envelope.accountId, messageId: envelope.id, error: errorMessage(err),
+      });
       throw err;
     }
   }
@@ -150,20 +144,6 @@ export class StoreGuard {
   private settleRetried(envelope: UnifiedEnvelope, result: InsertResult): InsertResult {
     if (result.inserted || result.storedId !== envelope.id) return result;
     return { inserted: true, seq: result.seq, accountSeq: result.accountSeq };
-  }
-
-  /** Whether this failure of an entry is one too many. Only the probe, right after it, can tell it from the store's. */
-  private async failedTooOften(envelope: UnifiedEnvelope): Promise<boolean> {
-    try {
-      await this.store.probeWrite();
-    } catch {
-      this.suspect = undefined;
-      return false;
-    }
-    // Another entry at the head starts from one.
-    const failures = this.suspect?.id === envelope.id ? this.suspect.failures + 1 : 1;
-    this.suspect = { id: envelope.id, failures };
-    return failures >= MAX_RECOVERY_FAILURES;
   }
 
   private open(cause: unknown): void {

@@ -129,8 +129,9 @@ export class InboundPipeline {
    * The conversation filter applies again. What it excludes, and what belongs to an account that no
    * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays:
    * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start,
-   * up to {@link LID_MAX_WAIT_MS}. That, and what the store refuses, go to the log of rejects. What its account has
-   * behind one that stays stays too, to keep their order, and the other accounts go on: what stays means a LID waiting and those.
+   * up to {@link LID_MAX_WAIT_MS}. That, and what the store explicitly refuses, go to the log of rejects. What the store
+   * fails to take without saying why stays. What its account has behind one that stays stays too, to keep their order,
+   * and the other accounts go on. It gets a later number than the live messages that arrive meanwhile.
    * Resolves to how many entries reached the log.
    */
   async replayFailed(): Promise<number> {
@@ -141,16 +142,18 @@ export class InboundPipeline {
     const heldBack = new Set<string>();
     const { saved, kept, rejected } = await failedLog.replay(async ({ envelope, raw }) => {
       if (heldBack.has(envelope.accountId)) throw new Error('an earlier message of its account is still waiting');
-      const reason = await this.replayRejection(envelope).catch((err: unknown) => {
+      try {
+        const reason = await this.replayRejection(envelope);
+        if (reason) {
+          discarded += 1;
+          this.logger.warn('Discarded an inbound message from the failed log', { accountId: envelope.accountId, messageId: envelope.id, reason });
+          return;
+        }
+        await guard.insertOnce(envelope, raw);
+      } catch (err) {
         if (!(err instanceof PermanentStoreError)) heldBack.add(envelope.accountId);
         throw err;
-      });
-      if (reason) {
-        discarded += 1;
-        this.logger.warn('Discarded an inbound message from the failed log', { accountId: envelope.accountId, messageId: envelope.id, reason });
-        return;
       }
-      await guard.insertOnce(envelope, raw);
     });
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
@@ -164,7 +167,7 @@ export class InboundPipeline {
 
   /**
    * After an outage: passes over the failed log until one started with nothing new on its way, which leaves only
-   * LIDs waiting. There is no `await` between that check and {@link StoreGuard.finishRecovery}, so a message that
+   * what is waiting. There is no `await` between that check and {@link StoreGuard.finishRecovery}, so a message that
    * finds the log closed from here on goes straight in. One refused before it and still being written is
    * {@link persist}'s to finish. A failed log that cannot be read must not leave a working store out of use.
    */

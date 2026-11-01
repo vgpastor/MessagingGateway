@@ -549,7 +549,7 @@ describe('InboundPipeline', () => {
         }
         return { saved: 1, kept: 2, rejected: 0 };
       });
-      probeWrite.mockResolvedValue();
+      probeWrite.mockResolvedValueOnce(); // what ends the outage; the one after the failed insert finds it down again
       insertInbound
         .mockResolvedValueOnce({ inserted: true, seq: 1, accountSeq: 1 })
         .mockRejectedValueOnce(new Error('down again'));
@@ -560,6 +560,7 @@ describe('InboundPipeline', () => {
       expect(insertInbound).toHaveBeenCalledTimes(2);
 
       vi.mocked(failedLog.replay).mockClear();
+      probeWrite.mockResolvedValue();
       await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
 
       expect(failedLog.replay).toHaveBeenCalledTimes(1);
@@ -735,13 +736,13 @@ describe('InboundPipeline', () => {
       return verdict;
     }
 
-    it.each([
-      ['a refusal of the store', new PermanentStoreError('value too long')],
-      ['a RangeError', new RangeError('Invalid time value')],
-    ])('tells the failed log that %s is for good', async (_name, failure) => {
-      const context = setup({ insert: failure });
+    it('tells the failed log that an explicit refusal of the store is for good, and nothing else', async () => {
+      expect(await replayVerdict(setup({ insert: new PermanentStoreError('value too long') }), makeEnvelope())).toBeInstanceOf(PermanentStoreError);
 
-      expect(await replayVerdict(context, makeEnvelope())).toBeInstanceOf(PermanentStoreError);
+      for (const failure of [new RangeError('Invalid time value'), new TypeError('bad value'), new Error('lock timeout')]) {
+        const verdict = await replayVerdict(setup({ insert: failure }), makeEnvelope());
+        expect(verdict).toBe(failure);
+      }
     });
 
     it('counts and logs as an error what the failed log rejected', async () => {

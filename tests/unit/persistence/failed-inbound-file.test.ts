@@ -13,7 +13,7 @@ import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
 import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import { noopMediaService } from '../../../src/core/inbound/media-service.js';
-import { MAX_RECOVERY_FAILURES } from '../../../src/core/inbound/store-guard.js';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import { noopMetrics } from '../../../src/core/metrics/metrics.port.js';
 import type { ChannelAccount } from '../../../src/core/accounts/channel-account.js';
 import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
@@ -314,10 +314,10 @@ describe('FailedInboundFile', () => {
 
   describe('a recovery that fails', () => {
     const rejectedPath = () => join(dir, 'nested', 'failed-inbound.rejected.jsonl');
-    const rejectedIds = async () => (await readFile(rejectedPath(), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(JSON.parse(line).line).envelope.id as string);
     const fileIds = async () => (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id as string);
-    const storedIds = async () => (await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 20 })).messages.map((m) => [m.id, m.accountSeq]);
+    const storedIds = async (accountId = 'wa-1') => (await store.queryAfter({ accountId, afterAccountSeq: 0, limit: 20 })).messages.map((m) => [m.id, m.accountSeq]);
+    const other = { ...account, id: 'wa-2' } as ChannelAccount;
+    const ofOther = (id: string) => ({ ...envelope(id, `W-${id}`), accountId: 'wa-2' });
 
     const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
 
@@ -325,34 +325,10 @@ describe('FailedInboundFile', () => {
 
     function pipelineOver(log: Pick<MessageLogPort, 'insertInbound' | 'probeWrite'>) {
       return new InboundPipeline({
-        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics, accounts: knownAccount,
+        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics,
+        accounts: { findById: async (id: string) => (id === 'wa-2' ? other : account) },
         persistRetryDelaysMs: [0], storeProbeIntervalMs: 1,
       });
-    }
-
-    /**
-     * A store whose inserts always fail. The probe that opens each cycle goes through, so every cycle tries
-     * the entry; the one right after the failed insert follows `afterFailure`, in turn.
-     */
-    function failingStore(afterFailure: boolean[]) {
-      const attempts: string[] = [];
-      let justFailed = false;
-      let turn = 0;
-      return {
-        attempts,
-        insertInbound: async (e: UnifiedEnvelope) => {
-          attempts.push(e.id);
-          justFailed = true;
-          throw new Error('could not write');
-        },
-        probeWrite: async () => {
-          if (!justFailed) return;
-          justFailed = false;
-          const writes = afterFailure[turn % afterFailure.length];
-          turn += 1;
-          if (!writes) throw new Error('could not write either');
-        },
-      };
     }
 
     it('a database that answers SELECT 1 and refuses writes, for many cycles: the circuit stays open, nothing is rejected, and it all gets in when it is back', async () => {
@@ -378,76 +354,114 @@ describe('FailedInboundFile', () => {
       await pipeline.drain(10);
     });
 
-    it('a failure the probe right after confirms as the store\'s does not count: nothing is rejected, however many cycles', async () => {
+    it('a store that also fails the probe right after the failed insert reopens the circuit, for many cycles, and nothing is rejected', async () => {
       await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
-      await file.append({ envelope: envelope('m2', 'W2'), raw: undefined });
-      const log = failingStore([false]);
-      const pipeline = pipelineOver(log);
-
-      await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(() => expect(log.attempts.filter((id) => id === 'm1').length).toBeGreaterThan(MAX_RECOVERY_FAILURES * 4));
-
-      expect(existsSync(rejectedPath())).toBe(false);
-      await pipeline.drain(10);
-      expect(await fileIds()).toEqual(['m1', 'm2', 'opener']);
-    });
-
-    it('a store that comes and goes starts the count again: only failures in a row with a store that writes add up', async () => {
-      await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
-      const log = failingStore([...Array<boolean>(MAX_RECOVERY_FAILURES - 1).fill(true), false]);
-      const pipeline = pipelineOver(log);
-
-      await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(() => expect(log.attempts.filter((id) => id === 'm1').length).toBeGreaterThan(MAX_RECOVERY_FAILURES * 4));
-
-      expect(existsSync(rejectedPath())).toBe(false);
-      await pipeline.drain(10);
-    });
-
-    it('an entry that really fails with a healthy store goes to the rejected log, only that one, and the circuit closes', async () => {
-      const typedFails = {
-        insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
-          if (e.id === 'typed') throw new TypeError('Cannot read properties of null');
-          return store.insertInbound(e, r);
+      const attempts: string[] = [];
+      let justFailed = false;
+      const pipeline = pipelineOver({
+        insertInbound: async (e: UnifiedEnvelope) => {
+          attempts.push(e.id);
+          justFailed = true;
+          throw new Error('could not write');
         },
-        probeWrite: () => store.probeWrite(),
-      };
-      const pipeline = pipelineOver(typedFails);
+        probeWrite: async () => {
+          if (!justFailed) return;
+          justFailed = false;
+          throw new Error('could not write either');
+        },
+      });
 
-      await pipeline.handle(account, envelope('typed', 'W1'), {});
-      await pipeline.handle(account, envelope('during', 'W2'), {});
+      await pipeline.handle(account, envelope('opener', 'W0'), {});
+      await vi.waitFor(() => expect(attempts.filter((id) => id === 'm1').length).toBeGreaterThan(12));
 
-      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
-      expect(existsSync(path)).toBe(false);
-      await pipeline.handle(account, envelope('after', 'W3'), {});
-
-      expect(await storedIds()).toEqual([['during', 1], ['after', 2]]);
-      expect(await rejectedIds()).toEqual(['typed']);
+      expect(existsSync(rejectedPath())).toBe(false);
       await pipeline.drain(10);
+      expect(await fileIds()).toEqual(['m1', 'opener']);
     });
 
-    it('the count starts again when the head changes: two entries with a couple of failures each are not one too many', async () => {
-      const failuresLeft = new Map([['m1', MAX_RECOVERY_FAILURES - 1], ['m2', MAX_RECOVERY_FAILURES - 1], ['opener', 2]]);
-      await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
-      await file.append({ envelope: envelope('m2', 'W2'), raw: undefined });
+    it('a failure only in messages, with the probe fine, for many cycles: nothing is rejected, nothing is lost, and it all gets in when it passes', async () => {
+      let failing = true;
+      const attempts: string[] = [];
       const pipeline = pipelineOver({
         insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
-          const left = failuresLeft.get(e.id) ?? 0;
-          if (left > 0) {
-            failuresLeft.set(e.id, left - 1);
-            throw new Error('still settling');
-          }
+          attempts.push(e.id);
+          if (failing) throw new Error('canceling statement due to lock timeout');
           return store.insertInbound(e, r);
         },
         probeWrite: () => store.probeWrite(),
       });
 
-      await pipeline.handle(account, envelope('opener', 'W0'), {});
-      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
-      await vi.waitFor(async () => expect((await storedIds()).length).toBe(3));
+      for (let cycle = 0; cycle < 12; cycle++) {
+        await pipeline.handle(account, envelope(`m${cycle}`, `W${cycle}`), {});
+        // Its two live attempts opened the circuit; the pass that closes it tries the head, and holds back the rest.
+        expect(attempts.filter((id) => id === `m${cycle}`).length).toBeGreaterThanOrEqual(2);
+        await vi.waitFor(() => expect(attempts.filter((id) => id === 'm0').length).toBe(cycle + 3));
+      }
 
-      expect((await storedIds()).map(([id]) => id)).toEqual(['m1', 'm2', 'opener']);
       expect(existsSync(rejectedPath())).toBe(false);
+      expect(await store.count({ accountId: 'wa-1' })).toBe(0);
+      expect((await fileIds()).length).toBe(12);
+
+      failing = false;
+      await pipeline.replayFailed();
+      expect((await storedIds()).map(([id]) => id)).toEqual(Array.from({ length: 12 }, (_, i) => `m${i}`));
+      expect(existsSync(path)).toBe(false);
+      await pipeline.drain(10);
+    });
+
+    it('a deterministic TypeError stays in the file with what its account has behind it, logged, without holding the other accounts or leaving the circuit open', async () => {
+      const error = vi.fn();
+      const fake = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), child: () => fake };
+      const originalLogger = getLogger();
+      setGlobalLogger(fake as unknown as Logger);
+      try {
+        await file.append({ envelope: envelope('typed', 'W1'), raw: undefined });
+        await file.append({ envelope: envelope('behind', 'W2'), raw: undefined });
+        await file.append({ envelope: ofOther('other'), raw: undefined });
+        const insertInbound = vi.fn(async (e: UnifiedEnvelope, r?: unknown) => {
+          if (e.id === 'typed' || e.id === 'opener') {
+            if (e.id === 'opener' && insertInbound.mock.calls.filter(([x]) => x.id === 'opener').length > 2) return store.insertInbound(e, r);
+            throw new TypeError('Cannot read properties of null');
+          }
+          return store.insertInbound(e, r);
+        });
+        const pipeline = pipelineOver({ insertInbound, probeWrite: () => store.probeWrite() });
+
+        await pipeline.handle(other, ofOther('opener'), {});
+        await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalled());
+
+        expect(await fileIds()).toEqual(['typed', 'behind']);
+        expect(existsSync(rejectedPath())).toBe(false);
+        expect(await storedIds('wa-2')).toEqual([['other', 1], ['opener', 2]]);
+        expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'typed' }));
+
+        // The circuit is closed: both accounts store directly, and what is live goes ahead of what is held.
+        await pipeline.handle(other, ofOther('after-other'), {});
+        await pipeline.handle(account, envelope('after', 'W3'), {});
+        expect(await storedIds('wa-2')).toEqual([['other', 1], ['opener', 2], ['after-other', 3]]);
+        expect(await storedIds()).toEqual([['after', 1]]);
+        await pipeline.drain(10);
+      } finally {
+        setGlobalLogger(originalLogger);
+      }
+    });
+
+    it('only what is explicitly refused goes to the rejected log', async () => {
+      await file.append({ envelope: envelope('refused', 'W1'), raw: undefined });
+      await file.append({ envelope: envelope('ranged', 'W2'), raw: undefined });
+      const pipeline = pipelineOver({
+        insertInbound: async (e: UnifiedEnvelope) => {
+          if (e.id === 'refused') throw new PermanentStoreError('value too long');
+          throw new RangeError('Invalid time value');
+        },
+        probeWrite: () => store.probeWrite(),
+      });
+
+      await pipeline.replayFailed();
+
+      expect(await fileIds()).toEqual(['ranged']);
+      const rejected = (await readFile(rejectedPath(), 'utf8')).trim().split('\n').map((line) => JSON.parse(JSON.parse(line).line).envelope.id);
+      expect(rejected).toEqual(['refused']);
       await pipeline.drain(10);
     });
   });
