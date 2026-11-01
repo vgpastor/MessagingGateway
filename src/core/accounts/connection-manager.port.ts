@@ -33,6 +33,12 @@ export interface ConnectionManagerPort {
   disconnect(accountId: string): Promise<void>;
 
   /**
+   * Close the connection and keep it closed until the next {@link connect}, which resumes
+   * the stored session: no logout, no new pairing.
+   */
+  closeConnection(accountId: string): void;
+
+  /**
    * Clear the persisted session/credentials so the next {@link connect} starts a
    * fresh pairing and emits a new QR. Use when stored auth is expired and the
    * account is stuck reconnecting without producing a QR. Optional capability.

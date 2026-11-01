@@ -35,6 +35,10 @@ export class BaileysConnectionManager implements ConnectionManagerPort, PairingC
     await this.socketManager.disconnect(accountId);
   }
 
+  closeConnection(accountId: string): void {
+    this.socketManager.closeConnection(accountId);
+  }
+
   async clearSession(accountId: string, providerConfig: Record<string, unknown>): Promise<void> {
     const config = parseBaileysConfig(providerConfig);
     await this.socketManager.clearSession(accountId, config);

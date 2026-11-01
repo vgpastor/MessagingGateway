@@ -349,9 +349,14 @@ export async function accountsController(
       return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found after update' });
     }
 
-    // A suspended account was left out of the boot wiring and connection, and nothing else will open them.
     const manager = deps.providerRegistry.getConnectionManager(updated.provider);
-    if (manager && wasSuspended && updated.status !== 'suspended') {
+    const isSuspended = updated.status === 'suspended';
+    if (manager && !wasSuspended && isSuspended) {
+      // An open socket would keep receiving. Closed without a logout: reactivating must not need a new QR.
+      manager.closeConnection(id);
+    }
+    // A suspended account was left out of the boot wiring and connection, and nothing else will open them.
+    if (manager && wasSuspended && !isSuspended) {
       connectWired(updated, manager).catch((err) => {
         fastify.log.warn(`Connecting reactivated account ${id} failed: ${(err as Error).message}`);
       });

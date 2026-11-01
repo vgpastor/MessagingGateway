@@ -140,6 +140,107 @@ describe('BaileysSocketManager.closeAll', () => {
   });
 });
 
+describe('BaileysSocketManager.closeConnection', () => {
+  const ID = 'test-close-one';
+  const OTHER = 'test-close-other';
+  const authDirOf = (id: string) => resolve(process.cwd(), 'data', 'baileys-auth', id);
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    fakeSockets.length = 0;
+    await rm(authDirOf(ID), { recursive: true, force: true });
+    await rm(authDirOf(OTHER), { recursive: true, force: true });
+  });
+
+  it('closes that socket without logging out and keeps the session on disk; the other accounts are not touched', async () => {
+    const manager = new BaileysSocketManager();
+    await manager.connect(OTHER, {});
+    const other = vi.spyOn(fakeSockets.at(-1)!, 'end');
+    await manager.connect(ID, {});
+    const socket = fakeSockets.at(-1)!;
+    const end = vi.spyOn(socket, 'end');
+    const logout = vi.spyOn(socket, 'logout');
+    await mkdir(authDirOf(ID), { recursive: true });
+    await writeFile(resolve(authDirOf(ID), 'creds.json'), '{}');
+
+    manager.closeConnection(ID);
+
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(logout).not.toHaveBeenCalled();
+    expect(existsSync(resolve(authDirOf(ID), 'creds.json'))).toBe(true);
+    expect(manager.hasSocket(ID)).toBe(false);
+    expect(other).not.toHaveBeenCalled();
+    expect(manager.hasSocket(OTHER)).toBe(true);
+  });
+
+  it('tells the subscribers it was on purpose, so nobody takes it for an outage', async () => {
+    const manager = new BaileysSocketManager();
+    const seen: unknown[] = [];
+    manager.onConnectionUpdate(ID, (update) => seen.push([update.connection, manager.getConnectionEnd(ID)]));
+    await manager.connect(ID, {});
+
+    manager.closeConnection(ID);
+
+    expect(seen).toEqual([['close', 'closed']]);
+  });
+
+  it('does not reconnect: not from the close event, a timer already scheduled or the health checker', async () => {
+    vi.useFakeTimers();
+    const manager = new BaileysSocketManager({ random: () => 0.5 });
+    manager.onMessage(ID, () => {});
+    await manager.connect(ID, {});
+    const socket = fakeSockets.at(-1)!;
+    const before = fakeSockets.length;
+    socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: new Error('blip') } });
+
+    manager.closeConnection(ID);
+    socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: new Error('closed') } });
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(manager.ensureConnected(ID, {})).toBe(false);
+    expect(fakeSockets.length).toBe(before);
+  });
+
+  it('does not open the socket of a connect that was already in flight', async () => {
+    const manager = new BaileysSocketManager();
+    const before = fakeSockets.length;
+
+    const connecting = manager.connect(ID, {});
+    manager.closeConnection(ID);
+    await connecting;
+
+    expect(fakeSockets.length).toBe(before);
+    expect(manager.hasSocket(ID)).toBe(false);
+  });
+
+  it('an explicit connect opens it again, and the messages reach the same subscribers', async () => {
+    const manager = new BaileysSocketManager();
+    const onMessage = vi.fn();
+    manager.onMessage(ID, onMessage);
+    await manager.connect(ID, {});
+    manager.closeConnection(ID);
+
+    await manager.connect(ID, {});
+    fakeSockets.at(-1)!.ev.emit('messages.upsert', { messages: [], type: 'notify' });
+
+    expect(manager.hasSocket(ID)).toBe(true);
+    expect(manager.getConnectionEnd(ID)).toBeUndefined();
+    expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('an explicit connect while the closed one is still in flight wins: the account does not stay down', async () => {
+    const manager = new BaileysSocketManager();
+
+    const first = manager.connect(ID, {});
+    manager.closeConnection(ID);
+    await manager.connect(ID, {});
+    await first;
+
+    expect(manager.hasSocket(ID)).toBe(true);
+    expect(manager.getConnectionEnd(ID)).toBeUndefined();
+  });
+});
+
 describe('BaileysSocketManager containment', () => {
   const ID = 'test-containment';
   const original = getLogger();

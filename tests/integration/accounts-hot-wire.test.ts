@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ChannelAccount } from '../../src/core/accounts/channel-account.js';
 import type { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
 
 // A fake WhatsApp socket per makeWASocket(); the test drives its 'messages.upsert'.
-const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn> }> = [];
+const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }> = [];
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
   default: () => {
-    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: () => {} };
+    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: vi.fn() };
     sockets.push(socket);
     return socket;
   },
@@ -217,6 +217,42 @@ describe('accounts created at runtime', () => {
     await flush();
 
     expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('suspending a connected account closes its socket, keeps the session, and reactivating resumes it', async () => {
+    await create('hot-10b');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-10b/connect', headers: HEADERS });
+    const socket = sockets.at(-1)!;
+    const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-10b');
+    await mkdir(authDir, { recursive: true });
+    await writeFile(resolve(authDir, 'creds.json'), '{}');
+
+    const suspended = await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10b', headers: HEADERS, payload: { status: 'suspended' } });
+
+    expect(suspended.statusCode).toBe(200);
+    expect(socket.end).toHaveBeenCalledTimes(1);
+    expect(socket.logout).not.toHaveBeenCalled();
+    expect(existsSync(resolve(authDir, 'creds.json'))).toBe(true);
+    expect(registry.getConnectionManager('baileys')!.hasConnection('hot-10b')).toBe(false);
+
+    const before = sockets.length;
+    await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10b', headers: HEADERS, payload: { status: 'active' } });
+    await waitForNewSocket(before);
+    sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
+    await flush();
+
+    expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PUT on an account already suspended closes nothing again', async () => {
+    await create('hot-10c');
+    await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { status: 'suspended' } });
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-10c/connect', headers: HEADERS });
+    const socket = sockets.at(-1)!;
+
+    await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { alias: 'renamed' } });
+
+    expect(socket.end).not.toHaveBeenCalled();
   });
 
   it('a PUT that does not reactivate opens nothing', async () => {

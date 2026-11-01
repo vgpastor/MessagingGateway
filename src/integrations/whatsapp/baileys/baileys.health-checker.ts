@@ -23,6 +23,15 @@ export class BaileysHealthChecker implements ProviderHealthChecker {
 
     this.reconnectIfNeeded(account, config);
 
+    // Closed on purpose with its session intact: the /reset that advice below points to would throw that session away.
+    if (account.status === 'suspended') {
+      return {
+        status: 'suspended',
+        credentialsConfigured: true,
+        detail: 'Suspended: its connection stays closed until the account is reactivated.',
+      };
+    }
+
     if (this.socketManager.getConnectionEnd(account.id)) {
       return {
         status: 'auth_expired',

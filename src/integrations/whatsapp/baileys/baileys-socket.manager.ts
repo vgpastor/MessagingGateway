@@ -120,7 +120,13 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       return;
     }
 
-    if (this.sockets.has(accountId) || this.connecting.has(accountId)) {
+    if (this.sockets.has(accountId)) {
+      return;
+    }
+
+    if (this.connecting.has(accountId)) {
+      // It may have been closed since it started, and whoever asks now wants it open.
+      this.ended.delete(accountId);
       return;
     }
 
@@ -352,11 +358,31 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       this.cancelReconnect(accountId);
     }
     for (const entry of this.sockets.values()) {
-      // Same teardown as clearSession: without the handlers the 'close' cannot schedule a reconnect.
-      try { entry.socket.ev.removeAllListeners('connection.update'); } catch { /* best-effort */ }
-      try { entry.socket.end(undefined); } catch { /* best-effort */ }
+      this.closeSocket(entry);
     }
     this.sockets.clear();
+  }
+
+  /**
+   * Close one account's socket and keep it closed until an explicit {@link connect}. As in
+   * {@link closeAll} there is no `logout()` and the auth state stays on disk, so that connect
+   * resumes the session without a new QR. The subscriptions stay too, for the same reason.
+   */
+  closeConnection(accountId: string): void {
+    this.ended.set(accountId, 'closed');
+    this.cancelReconnect(accountId);
+    const entry = this.sockets.get(accountId);
+    if (entry) {
+      this.closeSocket(entry);
+      this.sockets.delete(accountId);
+    }
+    this.notify(this.connectionHandlers, accountId, { connection: 'close' });
+  }
+
+  /** Without the handlers the 'close' cannot schedule a reconnect; `end` closes locally, with no network logout. */
+  private closeSocket(entry: SocketEntry): void {
+    try { entry.socket.ev.removeAllListeners('connection.update'); } catch { /* best-effort */ }
+    try { entry.socket.end(undefined); } catch { /* best-effort */ }
   }
 
   /**
@@ -381,10 +407,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     try {
       const entry = this.sockets.get(accountId);
       if (entry) {
-        // Drop the connection handlers first so the imminent 'close' can't
-        // schedule a reconnect, then close locally (no network logout).
-        try { entry.socket.ev.removeAllListeners('connection.update'); } catch { /* best-effort */ }
-        try { entry.socket.end(undefined); } catch { /* best-effort */ }
+        this.closeSocket(entry);
         this.sockets.delete(accountId);
       }
       await rm(authDir, { recursive: true, force: true });

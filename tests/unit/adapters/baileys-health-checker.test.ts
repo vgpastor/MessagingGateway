@@ -109,6 +109,15 @@ describe('BaileysHealthChecker verdict', () => {
     expect(result.detail).toContain('/reset');
   });
 
+  it('a suspended account is not told to re-pair: /reset would throw away the session it keeps', async () => {
+    await writeFile(join(dir, 'creds.json'), '{}');
+
+    const result = await withAuthDir({ getConnectionEnd: vi.fn().mockReturnValue('closed') }).validate(makeAccount({ status: 'suspended' }));
+
+    expect(result.status).toBe('suspended');
+    expect(result.detail).not.toContain('/reset');
+  });
+
   it('an account showing a QR is waiting to be paired, whatever is on disk', async () => {
     await writeFile(join(dir, 'creds.json'), '{}');
 
