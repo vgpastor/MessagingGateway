@@ -108,7 +108,7 @@ describe('the failed log through a real start', () => {
     ? (await readFile(path, 'utf8')).trim().split(/\r?\n/).map((line) => JSON.parse(line).envelope.id as string)
     : []);
 
-  it('before connecting a LID cannot be judged and stays; what can be judged is settled; after connecting the LID is stored', async () => {
+  it('before connecting a LID cannot be judged: it stays, and what its account has behind it too; after connecting they go in, in their order', async () => {
     await file.append({ envelope: envelope('lid', KNOWN_LID), raw: undefined });
     await file.append({ envelope: envelope('excluded', 'other@s.whatsapp.net'), raw: undefined });
     await file.append({ envelope: envelope('orphan', PHONE_JID, 'gone'), raw: undefined });
@@ -117,8 +117,8 @@ describe('the failed log through a real start', () => {
 
     await pipeline.replayFailed();
 
-    expect(await fileIds()).toEqual(['lid']);
-    expect((await store.queryAfter({ accountId: ACCOUNT_ID, afterAccountSeq: 0, limit: 10 })).messages.map((m) => m.id)).toEqual(['allowed']);
+    expect(await fileIds()).toEqual(['lid', 'excluded', 'allowed']);
+    expect(await store.count({ accountId: ACCOUNT_ID })).toBe(0);
 
     await connect();
     pipeline.replayAfterConnecting(1);
@@ -126,8 +126,8 @@ describe('the failed log through a real start', () => {
 
     const page = await store.queryAfter({ accountId: ACCOUNT_ID, afterAccountSeq: 0, limit: 10 });
     expect(page.messages.map((m) => [m.id, m.accountSeq, m.conversationId])).toEqual([
-      ['allowed', 1, PHONE_JID],
-      ['lid', 2, PHONE_JID],
+      ['lid', 1, PHONE_JID],
+      ['allowed', 2, PHONE_JID],
     ]);
     await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalledTimes(1));
     await pipeline.drain(10);

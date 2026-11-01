@@ -129,7 +129,8 @@ export class InboundPipeline {
    * The conversation filter applies again. What it excludes, and what belongs to an account that no
    * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays:
    * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start,
-   * up to {@link LID_MAX_WAIT_MS}. That, and what the store refuses, go to the log of rejects: what stays means a LID waiting.
+   * up to {@link LID_MAX_WAIT_MS}. That, and what the store refuses, go to the log of rejects. What its account has
+   * behind one that stays stays too, to keep their order, and the other accounts go on: what stays means a LID waiting and those.
    * Resolves to how many entries reached the log.
    */
   async replayFailed(): Promise<number> {
@@ -137,8 +138,13 @@ export class InboundPipeline {
     const { failedLog } = this.deps;
     if (!guard || !failedLog) return 0;
     let discarded = 0;
+    const heldBack = new Set<string>();
     const { saved, kept, rejected } = await failedLog.replay(async ({ envelope, raw }) => {
-      const reason = await this.replayRejection(envelope);
+      if (heldBack.has(envelope.accountId)) throw new Error('an earlier message of its account is still waiting');
+      const reason = await this.replayRejection(envelope).catch((err: unknown) => {
+        if (!(err instanceof PermanentStoreError)) heldBack.add(envelope.accountId);
+        throw err;
+      });
       if (reason) {
         discarded += 1;
         this.logger.warn('Discarded an inbound message from the failed log', { accountId: envelope.accountId, messageId: envelope.id, reason });

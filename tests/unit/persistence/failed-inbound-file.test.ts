@@ -238,7 +238,7 @@ describe('FailedInboundFile', () => {
         store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics,
         accounts: { findById: async () => withList }, persistRetryDelaysMs: [], storeProbeIntervalMs: 1,
       });
-      await file.append({ envelope: { ...envelope('lid', 'W1'), conversationId: '1@lid' }, raw: undefined });
+      await file.append({ envelope: { ...envelope('lid', 'W1'), accountId: 'wa-2', conversationId: '1@lid' }, raw: undefined });
       const failing = vi.spyOn(log, 'insertInbound').mockRejectedValueOnce(new Error('blip'));
 
       await pipeline.handle(withList, envelope('opener', 'W2'), {});
@@ -248,6 +248,66 @@ describe('FailedInboundFile', () => {
 
       expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq])).toEqual([['opener', 1], ['after', 2]]);
       expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['lid']);
+      await pipeline.drain(10);
+    });
+
+    it('what its account has behind a waiting LID stays behind it, the other accounts go on, and the recovery still closes', async () => {
+      const phone = '34600111222@s.whatsapp.net';
+      const withList = { ...account, conversations: [phone] } as ChannelAccount;
+      const other = { ...account, id: 'wa-2' } as ChannelAccount;
+      const of = (accountId: string, id: string, conversationId = phone) => ({
+        ...envelope(id, `W-${id}`), accountId, conversationId,
+      });
+      const log = { insertInbound: async (e: UnifiedEnvelope, r?: unknown) => store.insertInbound(e, r), probeWrite: async () => {} };
+      const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
+      let resolvable = false;
+      const pipeline = new InboundPipeline({
+        store: log as MessageLogPort, failedLog: file, eventBus: new EventBus(), media, metrics: noopMetrics,
+        accounts: { findById: async (id: string) => (id === 'wa-1' ? withList : other) },
+        resolveLidToPhone: async () => (resolvable ? phone : undefined),
+        persistRetryDelaysMs: [], storeProbeIntervalMs: 1,
+      });
+      await file.append({ envelope: of('wa-1', 'lid', '1@lid'), raw: undefined });
+      await file.append({ envelope: of('wa-1', 'behind'), raw: undefined });
+      await file.append({ envelope: of('wa-2', 'other'), raw: undefined });
+      const failing = vi.spyOn(log, 'insertInbound').mockRejectedValueOnce(new Error('blip'));
+
+      await pipeline.handle(other, of('wa-2', 'opener'), {});
+      await vi.waitFor(() => expect(media.resumePendingMedia).toHaveBeenCalledTimes(1));
+      failing.mockRestore();
+
+      const fileIds = async () => (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id);
+      const numbers = async (accountId: string) => (await store.queryAfter({ accountId, afterAccountSeq: 0, limit: 10 })).messages.map((m) => [m.id, m.accountSeq]);
+      expect(await fileIds()).toEqual(['lid', 'behind']);
+      expect(await numbers('wa-1')).toEqual([]);
+
+      // Closed: both accounts store directly.
+      await pipeline.handle(other, of('wa-2', 'after'), {});
+      expect(await numbers('wa-2')).toEqual([['other', 1], ['opener', 2], ['after', 3]]);
+
+      resolvable = true;
+      await pipeline.replayFailed();
+      expect(await numbers('wa-1')).toEqual([['lid', 1], ['behind', 2]]);
+      expect(existsSync(path)).toBe(false);
+      await pipeline.drain(10);
+    });
+
+    it('an account that cannot be looked up holds back what it has behind too, and nothing else', async () => {
+      const other = { ...account, id: 'wa-2' } as ChannelAccount;
+      const pipeline = new InboundPipeline({
+        store, failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics,
+        accounts: { findById: async (id: string) => {
+          if (id === 'wa-1') throw new Error('repo down');
+          return other;
+        } },
+        persistRetryDelaysMs: [],
+      });
+      await file.append({ envelope: envelope('first', 'W1'), raw: undefined });
+      await file.append({ envelope: { ...envelope('elsewhere', 'W2'), accountId: 'wa-2' }, raw: undefined });
+
+      await pipeline.replayFailed();
+
+      expect((await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line).envelope.id)).toEqual(['first']);
       await pipeline.drain(10);
     });
   });

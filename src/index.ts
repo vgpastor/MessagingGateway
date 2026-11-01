@@ -247,8 +247,8 @@ async function main() {
   process.on('SIGINT', () => void shutdown.run('SIGINT'));
 
   try {
-    // What the previous run could not store takes its number ahead of anything new,
-    // except a LID of an account with a list: it needs a socket, so the second pass below looks at it.
+    // What the previous run could not store takes its number ahead of anything new, except a LID of an account
+    // with a list and what that account has behind it: it needs a socket, so the second pass below looks at them.
     await inboundPipeline.replayFailed().catch((err) => {
       logger.error('Failed to replay the failed inbound log', { error: err instanceof Error ? err.message : String(err) });
     });
