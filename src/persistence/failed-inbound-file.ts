@@ -1,4 +1,5 @@
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PermanentStoreError } from '../core/errors.js';
 import type { FailedInboundEntry, FailedInboundLog, FailedInboundReplay } from '../core/inbound/failed-inbound-log.js';
@@ -24,6 +25,14 @@ function parseEntry(line: string): FailedInboundEntry {
 const CANNOT_SYNC_A_DIRECTORY = new Set(['EPERM', 'EISDIR', 'EINVAL']);
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** A crash halfway through an append leaves a last line with no end, and whatever came next would be glued to it. */
+async function endsCutShort(file: FileHandle): Promise<boolean> {
+  const { size } = await file.stat();
+  if (size === 0) return false;
+  const { buffer } = await file.read(Buffer.alloc(1), 0, 1, size - 1);
+  return buffer[0] !== 0x0a;
+}
 
 /** A line on its way to the rejected file, as it was in the log: it may not even be JSON. */
 interface RejectedLine {
@@ -51,9 +60,9 @@ export class FailedInboundFile implements FailedInboundLog {
     const line = `${JSON.stringify(entry)}\n`;
     return this.onFile(async () => {
       await mkdir(dirname(this.path), { recursive: true });
-      const file = await open(this.path, 'a');
+      const file = await open(this.path, 'a+');
       try {
-        await file.appendFile(line);
+        await file.appendFile(await endsCutShort(file) ? `\n${line}` : line);
         await file.sync();
       } finally {
         await file.close();

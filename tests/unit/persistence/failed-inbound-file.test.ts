@@ -528,6 +528,40 @@ describe('FailedInboundFile', () => {
     });
   });
 
+  describe('a crash in the middle of an append', () => {
+    const truncated = '{"envelope":{"id":"trunc';
+
+    it('the next entry starts on a line of its own, so only the cut one is lost', async () => {
+      await file.append({ envelope: envelope('first', 'W1'), raw: undefined });
+      await writeFile(path, `${await readFile(path, 'utf8')}${truncated}`);
+
+      await file.append({ envelope: envelope('after-crash', 'W2'), raw: undefined });
+
+      const lines = (await readFile(path, 'utf8')).split('\n');
+      expect(lines[1]).toBe(truncated);
+      expect(JSON.parse(lines[2]!).envelope.id).toBe('after-crash');
+      const seen: string[] = [];
+      expect(await file.replay(async ({ envelope: e }) => { seen.push(e.id); })).toEqual({ saved: 2, kept: 0, rejected: 1 });
+      expect(seen).toEqual(['first', 'after-crash']);
+    });
+
+    it('adds no empty line to a file that ends as it should', async () => {
+      await file.append({ envelope: envelope('a', 'W1'), raw: undefined });
+      await file.append({ envelope: envelope('b', 'W2'), raw: undefined });
+
+      expect((await readFile(path, 'utf8')).split('\n').map((line) => line.length > 0)).toEqual([true, true, false]);
+    });
+
+    it('with a file that is only a cut line too', async () => {
+      await mkdir(join(dir, 'nested'), { recursive: true });
+      await writeFile(path, truncated);
+
+      await file.append({ envelope: envelope('after-crash', 'W1'), raw: undefined });
+
+      expect(JSON.parse((await readFile(path, 'utf8')).split('\n')[1]!).envelope.id).toBe('after-crash');
+    });
+  });
+
   it('does not lose what arrives while it replays: appends go on during an outage', async () => {
     await file.append({ envelope: envelope('saved', 'W1'), raw: undefined });
     await file.append({ envelope: envelope('kept', 'W2'), raw: undefined });
