@@ -15,6 +15,16 @@ npm install @messaging-gateway/sdk
   `afterAccountSeq` and the server heartbeat (the release that ships with this SDK). Against an
   older gateway the WebSocket handshake is rejected with `4401` and the client keeps retrying.
 
+### Upgrading from 0.3.x
+
+- The fields of `gateway` and `channelDetails.platform` are optional, in the manual types and the generated
+  ones: a stored message keeps the shape of the version that wrote it. Handle them being `undefined`.
+- The generated functions answer `{ data, status, headers }`, as their types always said, instead of the
+  bare body. A binary body is a `Blob`.
+- `client.health()` no longer has the status `error`.
+- REST requests time out after 30 s: set `timeoutMs` if you need longer.
+- Node.js 20 below 20.19 and 21 are out.
+
 ## REST Client
 
 ```typescript

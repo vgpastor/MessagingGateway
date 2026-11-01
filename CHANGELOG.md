@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Registro de mensajes con `accountSeq`**: cada mensaje entrante guardado lleva un número contiguo por cuenta, con deduplicación por id de WhatsApp. `GET /api/v1/messages?accountId=&afterAccountSeq=` lee lo que sigue a un cursor y devuelve `nextAfterAccountSeq`, `lastAccountSeq` y `firstAccountSeq`, para ponerse al día sin perder mensajes. Los sobres añaden `seq`, `accountSeq`, `sentAt` y, en el remitente, `phone` y `lid`.
+- **Medios en disco**: la entrada se descarga a `MEDIA_DIR` con tamaño máximo (`MEDIA_MAX_BYTES`) y reintentos, y se sirve con `GET /api/v1/media/:id` (200, 202 mientras se descarga, 410 si se omitió o caducó).
+- **Retención**: `MEDIA_RETENTION_DAYS` (30 por defecto) y `MESSAGE_RETENTION_DAYS` (opcional: con 0, el valor por defecto, nunca se borra un mensaje).
+- **`READ_API_KEY`**: clave de solo lectura para los mensajes, los medios y el flujo de eventos por WebSocket.
+- **`conversations`** en cada cuenta (`accounts.yaml` y `POST /api/v1/accounts`): limita qué conversaciones entrantes se guardan.
+- **Métricas Prometheus** en `/metrics`, solo con la clave de administración.
+- **Alertas de cuenta caída** en `ALERT_WEBHOOK_URL`: `auth_expired` al momento y `disconnected` tras 15 minutos, reintentadas hasta un 2xx y repetidas cada 6 horas. Los webhooks de las cuentas pueden suscribirse a `connection.update`.
+- **WebSocket**: autenticación por cabecera o subprotocolo (`umg.<clave>`) y ping cada 30 s, que corta a quien no responde.
+- **SDK**: `messages.after()`, `messages.media()`, `timeoutMs` en el cliente REST, reconexión con espera creciente y vigilancia del latido. El paquete se puede cargar con `require()` desde CommonJS.
+
+### Changed
+
+- **Rompe, al actualizar el SDK de 0.3.x a 0.4.0:**
+  - Los campos de `gateway` y `channelDetails.platform` pasan a ser opcionales, en los tipos manuales y en los generados: un mensaje guardado conserva la forma de la versión que lo escribió. Hay que contemplar `undefined`.
+  - Las funciones generadas devuelven `{ data, status, headers }`, como ya decían sus tipos, y no el cuerpo a secas. Un cuerpo binario llega como `Blob`, no como texto corrupto.
+  - `HealthStatus.status` deja de incluir `error`, y `qr` puede ser `null` con la clave de lectura.
+  - Las peticiones REST caducan a los 30 s por defecto (`timeoutMs`).
+  - `engines` pasa a `>=20.19 <21 || >=22.12`, lo que necesita `require(esm)`.
+  - La autenticación del WebSocket exige un gateway de esta versión: uno anterior rechaza el handshake con `4401`.
+- **Rompe, en el gateway:**
+  - La media entrante ya no viaja en base64 dentro del sobre: se descarga con `media.url` cuando `media.status` es `ready`.
+  - `/metrics` exige la clave de administración.
+  - `?token=` en el WebSocket queda obsoleto, porque las URL acaban en los logs. Sigue funcionando.
+- **`/health` informa de verdad**, pero solo del estado general: `degraded` si una cuenta no suspendida no está `active` o ha perdido la conexión. Es público, así que no nombra cuentas; el detalle está en `GET /api/v1/accounts`.
+- **`GET /api/v1/accounts/:id` solo lee**: ya no abre conexiones.
+- **El primer arranque aplica las migraciones `postgres/002_message_log` y `sqlite/003_message_log`**, que reescriben la tabla de mensajes y pueden tardar. Se aplican sin límite de tiempo.
+
+### Fixed
+
+- **Suspender una cuenta cierra su socket**, sin `logout` y conservando la sesión en disco, y reactivarla reconecta sin QR nuevo. Antes una cuenta ya conectada seguía recibiendo mensajes. Ninguna señal de conexión ni comprobación de salud saca a una cuenta de `suspended`.
+- **Una conexión caída ya no se confunde con una sesión perdida**, y la reconexión usa espera creciente con jitter, sin tope de intentos; solo se detiene con una sesión perdida, una desconexión deliberada o un reset.
+- **Una cuenta creada en caliente recibe sus eventos sin reiniciar**, reactivar una cuenta suspendida la conecta, y borrar una cuenta cierra su socket y su sesión.
+- **Ningún mensaje se pierde si el almacén lo rechaza**: se entrega en directo, sin `accountSeq`, y se guarda en el siguiente arranque, de modo que puede llegar dos veces: hay que deduplicar por `id`. Los webhooks ya no frenan la cola de entrada y caducan a los 10 s.
+- **Postgres**: cada consulta tiene un límite de 30 s, para que un insert colgado no retenga la cola de la cuenta; una transacción abierta e inactiva termina a los 60 s, para que una partición de red no retenga el contador de la cuenta; y un insert fallido descarta su conexión. La retención dispone de 15 minutos por consulta.
+- **Filas de versiones anteriores**: ya no bloquean la lectura del registro, y el historial en base64 queda fuera de las lecturas. Toda lectura limita el tamaño de la página.
+- **Apagado**: termina limpio en 10 s y sin `logout`, de modo que el siguiente arranque retoma las sesiones.
+- **Un fallo al guardar credenciales o un handler que lanza** ya no terminan el proceso.
+- **OpenAPI y SDK**: `POST /api/v1/accounts` declara `conversations`, el SDK deja de prometer `accounts` en `/health` y `sdk-build` corre por fin las pruebas del SDK en CI.
+
+### Security
+
+- Los logs ya no llevan claves ni tokens en las URL, y de un webhook solo registran el host.
+
 ## [0.5.1] - 2026-09-05
 
 ### Fixed

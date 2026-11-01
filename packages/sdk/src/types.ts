@@ -240,13 +240,14 @@ export interface WebhookConfigInput {
 // ── Health ───────────────────────────────────────────────────────
 
 export interface HealthStatus {
-  /** `degraded`: an account that is not deliberately suspended is not `active` */
+  /**
+   * `degraded`: an account that is not deliberately suspended is not `active` or has lost its connection.
+   * The detail per account is in `accounts.list()`: this route is public and names none.
+   */
   status: 'ok' | 'degraded';
   timestamp: string;
   version: string;
   uptime: number;
-  /** Status of each account, by id */
-  accounts: Record<string, AccountStatus>;
 }
 
 // ── Error ────────────────────────────────────────────────────────
