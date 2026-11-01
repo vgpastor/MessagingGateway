@@ -7,6 +7,7 @@ import type { InboundWebhookPort } from '../core/messaging/inbound-webhook.port.
 import type { ConnectionManagerPort } from '../core/accounts/connection-manager.port.js';
 import type { EventBus } from '../core/event-bus.js';
 import type { InboundPipeline } from '../core/inbound/inbound-pipeline.js';
+import { getLogger } from '../core/logger/logger.port.js';
 import { AdapterNotFoundError } from '../core/errors.js';
 
 // ── Factory function types for ProviderBundle ───────────────────
@@ -35,6 +36,8 @@ export interface ProviderBundle {
   connection?: ConnectionAdapterFactory;
   /** Wire inbound messages (through the pipeline) and connection updates (to the EventBus) for a given account */
   wireEvents?: (account: ChannelAccount, eventBus: EventBus, inbound: InboundPipeline) => Promise<void>;
+  /** The process is exiting: close open connections WITHOUT logging out, so the next start resumes them. */
+  shutdown?: () => void;
 }
 
 // ── ProviderRegistry ────────────────────────────────────────────
@@ -95,6 +98,17 @@ export class ProviderRegistry implements ProviderLookupPort {
 
   getInboundAdapter(providerId: ProviderType): InboundWebhookPort<unknown, unknown> | undefined {
     return this.providers.get(providerId)?.inbound?.();
+  }
+
+  /** Close every provider's connections for a process exit. One provider failing does not affect the others. */
+  shutdownAll(): void {
+    for (const bundle of this.providers.values()) {
+      try {
+        bundle.shutdown?.();
+      } catch (err) {
+        getLogger().error('Provider shutdown failed', { provider: bundle.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
   }
 
   listProviders(): Array<{ id: ProviderType; channel: ChannelType; displayName: string }> {

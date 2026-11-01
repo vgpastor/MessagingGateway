@@ -62,6 +62,74 @@ describe('BaileysSocketManager.clearSession', () => {
   });
 });
 
+describe('BaileysSocketManager.closeAll', () => {
+  const CLOSE_ID = 'test-close-all';
+  const closeAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', CLOSE_ID);
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    fakeSockets.length = 0;
+    await rm(closeAuthDir, { recursive: true, force: true });
+  });
+
+  async function connected(manager: BaileysSocketManager) {
+    await manager.connect(CLOSE_ID, {});
+    const socket = fakeSockets.at(-1)!;
+    const end = vi.spyOn(socket, 'end');
+    const logout = vi.spyOn(socket, 'logout');
+    return { socket, end, logout };
+  }
+
+  it('closes the socket without logging out and keeps the auth state, so the next start resumes the session', async () => {
+    const manager = new BaileysSocketManager();
+    const { end, logout } = await connected(manager);
+    await writeFile(resolve(closeAuthDir, 'creds.json'), '{}');
+
+    manager.closeAll();
+
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(logout).not.toHaveBeenCalled();
+    expect(existsSync(resolve(closeAuthDir, 'creds.json'))).toBe(true);
+    expect(manager.hasSocket(CLOSE_ID)).toBe(false);
+  });
+
+  it('does not reconnect: neither from the close event nor from a timer already scheduled', async () => {
+    vi.useFakeTimers();
+    const manager = new BaileysSocketManager({ random: () => 0.5 });
+    const { socket } = await connected(manager);
+    const before = fakeSockets.length;
+    socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: new Error('blip') } });
+
+    manager.closeAll();
+    socket.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: new Error('closed') } });
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(fakeSockets.length).toBe(before);
+  });
+
+  it('refuses to open a socket afterwards', async () => {
+    const manager = new BaileysSocketManager();
+    manager.closeAll();
+    const before = fakeSockets.length;
+
+    await manager.connect(CLOSE_ID, {});
+
+    expect(fakeSockets.length).toBe(before);
+    expect(manager.hasSocket(CLOSE_ID)).toBe(false);
+  });
+
+  it('does not open the socket of a connect that was already in flight', async () => {
+    const manager = new BaileysSocketManager();
+    const before = fakeSockets.length;
+
+    const connecting = manager.connect(CLOSE_ID, {});
+    manager.closeAll();
+    await connecting;
+
+    expect(fakeSockets.length).toBe(before);
+  });
+});
+
 describe('BaileysSocketManager subscriptions', () => {
   it('accepts a handler registered before the first connect', () => {
     const manager = new BaileysSocketManager();

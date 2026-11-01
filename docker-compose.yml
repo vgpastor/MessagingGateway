@@ -20,6 +20,8 @@ services:
       timeout: 3s
       start_period: 5s
       retries: 3
+    # Graceful shutdown takes up to 10 s: docker's default of 10 s would kill it at the limit.
+    stop_grace_period: 15s
     restart: unless-stopped
 
   # ── Local testing profiles ──────────────────────────────────────

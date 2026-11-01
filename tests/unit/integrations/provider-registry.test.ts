@@ -116,6 +116,18 @@ describe('ProviderRegistry', () => {
     expect(registry.getInboundAdapter('minimal-provider')).toBeUndefined();
   });
 
+  it('shuts down every provider that has connections, even if one of them fails', () => {
+    const registry = new ProviderRegistry();
+    const closed: string[] = [];
+    registry.register({ ...mockBundle, id: 'failing', shutdown: () => { throw new Error('boom'); } });
+    registry.register({ ...mockBundle, id: 'working', shutdown: () => { closed.push('working'); } });
+    registry.register(minimalBundle);
+
+    expect(() => registry.shutdownAll()).not.toThrow();
+
+    expect(closed).toEqual(['working']);
+  });
+
   it('should create messaging adapter with accountId injected', () => {
     const registry = new ProviderRegistry();
     let capturedConfig: Record<string, unknown> | undefined;

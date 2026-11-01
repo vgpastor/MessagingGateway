@@ -66,6 +66,7 @@ export const baileysProvider: ProviderBundle = {
   inbound: () => new BaileysWebhookAdapter(),
   health: () => new BaileysHealthChecker(socketManager),
   connection: () => new BaileysConnectionManager(socketManager),
+  shutdown: () => socketManager.closeAll(),
 
   /**
    * Idempotent per account: the socket manager appends handlers on every

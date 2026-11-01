@@ -80,6 +80,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
    * because the entry is replaced on every reconnect. Reset when the socket opens.
    */
   private reconnectAttempts = new Map<string, number>();
+  /** The process is exiting ({@link closeAll}): no socket opens from here on. */
+  private closed = false;
   /** Where Baileys finds messages it must re-send or retry-decrypt; unset until a message log exists. */
   private messageLookup: BaileysMessageLookup | undefined;
   /**
@@ -98,7 +100,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
   }
 
   async connect(accountId: string, config: BaileysProviderConfig): Promise<void> {
-    if (this.clearing.has(accountId)) {
+    if (this.closed || this.clearing.has(accountId)) {
       return;
     }
 
@@ -127,6 +129,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     const version = await this.resolveWaVersion(config);
+
+    if (this.closed) {
+      return;
+    }
 
     const socket = makeWASocket({
       auth: state,
@@ -289,6 +295,25 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       await entry.socket.logout().catch(() => {});
       this.sockets.delete(accountId);
     }
+  }
+
+  /**
+   * For a process exit: close every socket locally and stop reconnecting. Unlike
+   * {@link disconnect} there is no `logout()`, which would unlink the device, and unlike
+   * {@link clearSession} the auth state stays on disk, so the next start resumes each session.
+   * Messages that arrive before the socket closes still reach their handlers.
+   */
+  closeAll(): void {
+    this.closed = true;
+    for (const accountId of [...this.reconnectTimers.keys()]) {
+      this.cancelReconnect(accountId);
+    }
+    for (const entry of this.sockets.values()) {
+      // Same teardown as clearSession: without the handlers the 'close' cannot schedule a reconnect.
+      try { entry.socket.ev.removeAllListeners('connection.update'); } catch { /* best-effort */ }
+      try { entry.socket.end(undefined); } catch { /* best-effort */ }
+    }
+    this.sockets.clear();
   }
 
   /**

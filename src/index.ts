@@ -19,6 +19,7 @@ import { DiskMediaService, noopMediaService, type MediaService } from './core/in
 import { toStorableRaw, restoreBaileysRaw } from './integrations/whatsapp/baileys/baileys-storable-raw.js';
 import { downloadBaileysMedia } from './integrations/whatsapp/baileys/baileys-media.js';
 import { DiskMediaStore } from './persistence/media/disk-media-store.js';
+import { FailedInboundFile } from './persistence/failed-inbound-file.js';
 import { startRetentionSchedule, type RetentionSchedule } from './core/retention/retention-job.js';
 import { noopMetrics, type MetricsPort } from './core/metrics/metrics.port.js';
 import { PrometheusMetrics } from './infrastructure/metrics/prometheus-metrics.js';
@@ -34,6 +35,7 @@ import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
 import { connectManagedProviders } from './infrastructure/connect-managed-providers.js';
+import { createGracefulShutdown, gatewayShutdownSteps } from './infrastructure/graceful-shutdown.js';
 import type { ChannelAccount } from './core/accounts/channel-account.js';
 
 /** Register all supported providers and inject the credential resolver */
@@ -71,6 +73,7 @@ function wireEventBus(
       account: env.accountId,
       content_type: env.content.type,
     });
+    // Only queues it: storing the next message never waits for a webhook.
     await webhookForwarder.forward(env);
   });
 
@@ -206,6 +209,7 @@ async function main() {
   // before emitting keeps `accountSeq` gaps meaningful for consumers.
   const inboundPipeline = new InboundPipeline({
     store: messageStore,
+    failedLog: new FailedInboundFile(resolve(process.cwd(), 'data/failed-inbound.jsonl')),
     eventBus,
     media: mediaService,
     metrics,
@@ -230,12 +234,35 @@ async function main() {
     metricsEnabled: envConfig.metricsEnabled,
   });
 
+  // Before anything can arrive: a signal during startup must find the handlers in place.
+  let retention: RetentionSchedule | undefined;
+  const shutdown = createGracefulShutdown(gatewayShutdownSteps({
+    server,
+    stopSchedules: () => {
+      retention?.stop();
+      healthCheckScheduler.stop();
+    },
+    closeProviders: async () => providerRegistry.shutdownAll(),
+    inbound: inboundPipeline,
+    webhooks: webhookForwarder,
+    store: messageStore,
+  }));
+  process.on('SIGTERM', () => void shutdown.run('SIGTERM'));
+  process.on('SIGINT', () => void shutdown.run('SIGINT'));
+
   try {
+    // What the previous run could not store takes its number ahead of anything new.
+    await inboundPipeline.replayFailed().catch((err) => {
+      logger.error('Failed to replay the failed inbound log', { error: err instanceof Error ? err.message : String(err) });
+    });
+
     await server.listen({ port: envConfig.port, host: '0.0.0.0' });
     logger.info('Unified Messaging Gateway listening', { port: envConfig.port });
     logger.info('Swagger UI available', { url: `http://localhost:${envConfig.port}/docs` });
 
     await connectManagedProviders(accounts, providerRegistry, eventBus, inboundPipeline);
+    if (shutdown.started) return;
+
     // Media left pending by a previous run (crash between persisting the message and downloading it).
     mediaService.resumePendingMedia().catch((err) => {
       logger.error('Failed to resume pending media', { error: err instanceof Error ? err.message : String(err) });
@@ -243,7 +270,6 @@ async function main() {
     healthCheckScheduler.start();
 
     // Daily retention (also once now, off the startup path). Needs the message log: without it nothing is stored.
-    let retention: RetentionSchedule | undefined;
     if (messageStore) {
       logger.info('Retention schedule started', {
         mediaRetentionDays: envConfig.mediaRetentionDays || 'disabled',
@@ -256,16 +282,6 @@ async function main() {
         messageRetentionDays: envConfig.messageRetentionDays,
       });
     }
-
-    const shutdown = async () => {
-      logger.info('Shutting down gracefully...');
-      retention?.stop();
-      healthCheckScheduler.stop();
-      await server.close();
-      process.exit(0);
-    };
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
   } catch (err) {
     server.log.error(err);
     process.exit(1);
