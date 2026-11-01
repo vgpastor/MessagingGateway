@@ -8,12 +8,12 @@ import { accountSchema } from '../../../src/infrastructure/config/accounts.schem
 describe('account id', () => {
   const withId = (id: string) => ({ id, alias: 'a', channel: 'whatsapp', provider: 'baileys', metadata: { owner: 'o' } });
 
-  it.each(['wa-vgpastor', 'wa-rocstatus', 'wa-patroltech', 'my-whatsapp', 'A1_b-2', '7'])('takes %s', (id) => {
+  it.each(['wa-vgpastor', 'wa-rocstatus', 'wa-patroltech', 'my-whatsapp', 'A1_b-2', '7', 'wa.acme', 'a.b-c_d', 'a..b'])('takes %s', (id) => {
     expect(accountSchema.safeParse(withId(id)).success).toBe(true);
   });
 
   // It names a folder: '..' would put the credentials in data/.
-  it.each(['..', '.', 'a/b', 'a\\b', '../x', '.hidden', '-x', '_x', 'a b', 'a.b', 'a\n', ''])('refuses %j', (id) => {
+  it.each(['..', '.', '...', 'a/b', 'a\\b', '../x', '..\\x', 'a/../b', 'a:b', '.hidden', '-x', '_x', 'a b', 'a\n', 'a\0b', ''])('refuses %j', (id) => {
     expect(accountSchema.safeParse(withId(id)).success).toBe(false);
   });
 });

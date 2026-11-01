@@ -340,7 +340,7 @@ describe('accounts created at runtime', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe('INVALID_PAYLOAD');
     expect(await repository.findById('..')).toBeUndefined();
-    expect(body.properties.id.pattern).toBe('^[A-Za-z0-9][A-Za-z0-9_-]*$');
+    expect(body.properties.id.pattern).toBe('^[A-Za-z0-9][A-Za-z0-9._-]*$');
   });
 
   it('POST /accounts keeps the conversations it was given', async () => {
@@ -684,6 +684,45 @@ describe('accounts created at runtime', () => {
     expect(created.statusCode).toBe(201);
     const connect = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-6/connect', headers: HEADERS });
     expect(connect.statusCode).toBe(200);
+  });
+});
+
+describe('the id of an account created through the API', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    const repository = new InMemoryAccountRepository([]);
+    const registry = new ProviderRegistry();
+    registry.register(baileysProvider);
+    app = await createServer({
+      accountRepository: repository,
+      webhookConfigRepo: {} as never,
+      providerRegistry: registry,
+      messageRouter: new MessageRouterService(repository, registry),
+      credentialValidator: new CredentialValidator(registry),
+      webhookForwarder: new WebhookForwarder({} as never, undefined, undefined),
+      apiKey: 'test-api-key',
+      port: 0,
+      logLevel: 'silent',
+    });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('may hold a dot', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: newAccountBody('wa.acme') });
+
+    expect(res.statusCode).toBe(201);
+    expect((await app.inject({ method: 'GET', url: '/api/v1/accounts/wa.acme', headers: HEADERS })).statusCode).toBe(200);
+  });
+
+  it.each(['..', '.', '../x', 'a/b', 'a\\b', 'a/../b', '..\\x'])('may not be %j, which would point elsewhere on disk', async (id) => {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: newAccountBody(id) });
+
+    expect(res.statusCode).toBe(400);
   });
 });
 

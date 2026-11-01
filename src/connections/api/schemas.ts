@@ -226,7 +226,7 @@ export const errorResponseSchema = {
 export const createAccountBodySchema = {
   type: 'object' as const,
   properties: {
-    id: { type: 'string' as const, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$', description: 'Unique account identifier (e.g. "wa-acme")' },
+    id: { type: 'string' as const, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$', description: 'Unique account identifier (e.g. "wa-acme")' },
     alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: {
