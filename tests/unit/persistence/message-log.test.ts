@@ -468,6 +468,21 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       expect((await store.search('primera')).total).toBe(0);
     });
 
+    it('findPendingMedia reads on from a cursor, in order, whatever stays pending behind it', async () => {
+      const image = (wa: string) => makeEnvelope('acc-a', wa, {
+        content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'pending' } },
+      } as Partial<UnifiedEnvelope>);
+      const [a, b, c] = [image('P1'), image('P2'), image('P3')];
+      for (const e of [a!, b!, c!]) await store.insertInbound(e, { key: { id: e.id } });
+
+      const first = await store.findPendingMedia(2);
+      expect(first.map((row) => row.id)).toEqual([a!.id, b!.id]);
+
+      const second = await store.findPendingMedia(2, first[1]!.seq);
+      expect(second.map((row) => row.id)).toEqual([c!.id]);
+      expect(await store.findPendingMedia(2, second[0]!.seq)).toEqual([]);
+    });
+
     it('findPendingMedia returns raw for pending media and updateMedia merges the result', async () => {
       const pending = makeEnvelope('acc-a', 'IMG1', {
         content: { type: 'image', media: { mimeType: 'image/jpeg', status: 'pending' } },
@@ -477,7 +492,7 @@ function messageLogSuite(name: string, create: () => Promise<Backend>, skip = fa
       await store.insertInbound(makeEnvelope('acc-a', 'TXT1'), { key: { id: 'TXT1' } });
 
       const found = await store.findPendingMedia(10);
-      expect(found).toEqual([{ id: pending.id, accountId: 'acc-a', raw }]);
+      expect(found).toEqual([{ seq: expect.any(Number), id: pending.id, accountId: 'acc-a', raw }]);
 
       await store.updateMedia(pending.id, { status: 'ready', size: 10, url: `/api/v1/media/${pending.id}` } as never);
       const updated = await store.findById(pending.id);

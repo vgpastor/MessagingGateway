@@ -98,14 +98,15 @@ export class DiskMediaService implements MediaService {
 
   async resumePendingMedia(): Promise<number> {
     const batchSize = this.deps.resumeBatchSize ?? DEFAULT_RESUME_BATCH;
-    const seen = new Set<string>();
+    let afterSeq: number | undefined;
     let picked = 0;
     for (;;) {
-      const batch = (await this.deps.store.findPendingMedia(batchSize)).filter((row) => !seen.has(row.id));
+      // By cursor: a row that stays `pending` (its outcome could not be recorded) must not hide the ones behind it.
+      const batch = await this.deps.store.findPendingMedia(batchSize, afterSeq);
       if (batch.length === 0) break;
-      for (const row of batch) seen.add(row.id);
       picked += batch.length;
       await Promise.all(batch.map((row) => this.run(row.id, row.accountId, () => (this.deps.restoreRaw ?? ((v) => v))(row.raw))));
+      afterSeq = batch.at(-1)?.seq;
     }
     if (picked > 0) this.logger.info('Resumed pending media', { count: picked });
     return picked;

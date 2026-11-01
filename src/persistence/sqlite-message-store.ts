@@ -356,14 +356,14 @@ export class SqliteMessageStore implements FullMessageStorePort {
     ).run(toJsonColumn(media), id);
   }
 
-  async findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>> {
+  async findPendingMedia(limit: number, afterSeq = 0): Promise<Array<{ seq: number; id: string; accountId: string; raw: unknown }>> {
     const db = this.requireDb();
     const rows = db.prepare(
-      `SELECT id, account_id, raw_json FROM messages
-       WHERE json_extract(content_json, '$.media.status') = 'pending' AND raw_json IS NOT NULL
+      `SELECT seq, id, account_id, raw_json FROM messages
+       WHERE json_extract(content_json, '$.media.status') = 'pending' AND raw_json IS NOT NULL AND seq > ?
        ORDER BY seq ASC LIMIT ?`,
-    ).all(limit) as Array<{ id: string; account_id: string; raw_json: string }>;
-    return rows.map((r) => ({ id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
+    ).all(afterSeq, limit) as Array<{ seq: number; id: string; account_id: string; raw_json: string }>;
+    return rows.map((r) => ({ seq: r.seq, id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
   }
 
   async deleteOlderThan(days: number): Promise<number> {

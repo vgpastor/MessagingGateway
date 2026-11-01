@@ -113,8 +113,8 @@ export interface MessageLogPort {
   /** Merge media fields (status, size, url, ...) into the message's media content */
   updateMedia(id: string, media: Partial<MediaInfo>): Promise<void>;
 
-  /** Messages whose media is still `pending`, with the raw payload needed to download it */
-  findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>>;
+  /** Messages after the `afterSeq` cursor whose media is still `pending`, in `seq` order, with the raw payload needed to download it */
+  findPendingMedia(limit: number, afterSeq?: number): Promise<Array<{ seq: number; id: string; accountId: string; raw: unknown }>>;
 
   /** Delete messages whose `created_at` is older than `days`; returns the number removed */
   deleteOlderThan(days: number): Promise<number>;

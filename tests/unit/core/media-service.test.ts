@@ -23,7 +23,7 @@ function envelope(id = 'MSG1', accountId = 'wa-1'): UnifiedEnvelope {
   } as UnifiedEnvelope;
 }
 
-function setup(download: MediaDownload, retry: readonly number[] = []) {
+function setup(download: MediaDownload, retry: readonly number[] = [], resumeBatchSize?: number) {
   const metrics = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(),
     persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
@@ -35,7 +35,7 @@ function setup(download: MediaDownload, retry: readonly number[] = []) {
   };
   const files = { write: vi.fn().mockResolvedValue({ path: '/media/x.jpg', size: 10 }) };
   const restoreRaw = vi.fn((stored: unknown) => ({ restored: stored }));
-  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX, metrics, retryDelaysMs: retry });
+  const service = new DiskMediaService({ store, files, download, restoreRaw, maxBytes: MAX, metrics, retryDelaysMs: retry, resumeBatchSize });
   return { service, store, files, restoreRaw, metrics };
 }
 
@@ -293,15 +293,35 @@ describe('DiskMediaService.resumePendingMedia', () => {
     expect(store.updateMedia).toHaveBeenCalledWith('OK', expect.objectContaining({ status: 'ready' }));
   });
 
+  /** Reads as the real stores do: rows after the cursor, in order, however long they stay pending. */
+  function pendingRows(ids: string[]) {
+    const rows = ids.map((id, index) => ({ seq: index + 1, id, accountId: 'wa-1', raw: {} }));
+    return async (limit: number, afterSeq = 0) => rows.filter((row) => row.seq > afterSeq).slice(0, limit);
+  }
+
   it('does not loop forever on rows that stay pending', async () => {
     const download = vi.fn<MediaDownload>().mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' });
     const { service, store } = setup(download);
-    store.findPendingMedia.mockResolvedValue([{ id: 'A', accountId: 'wa-1', raw: {} }]);
+    store.findPendingMedia.mockImplementation(pendingRows(['A']));
     store.updateMedia.mockRejectedValue(new Error('db down'));
 
     const count = await service.resumePendingMedia();
 
     expect(count).toBe(1);
+  });
+
+  it('gets past a whole page of rows that stay pending, to what follows it', async () => {
+    const download = vi.fn<MediaDownload>().mockResolvedValue({ data: Buffer.alloc(1), mimeType: 'image/jpeg' });
+    const { service, store } = setup(download, [], 2);
+    store.findPendingMedia.mockImplementation(pendingRows(['A', 'B', 'C', 'D', 'E']));
+    store.updateMedia.mockImplementation(async (id: string) => {
+      if (id === 'A' || id === 'B') throw new Error('stays pending');
+    });
+
+    const count = await service.resumePendingMedia();
+
+    expect(count).toBe(5);
+    expect(store.updateMedia).toHaveBeenCalledWith('E', expect.objectContaining({ status: 'ready' }));
   });
 
   it('returns 0 when nothing is pending', async () => {

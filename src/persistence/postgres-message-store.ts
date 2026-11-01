@@ -430,15 +430,15 @@ export class PostgresMessageStore implements FullMessageStorePort {
     );
   }
 
-  async findPendingMedia(limit: number): Promise<Array<{ id: string; accountId: string; raw: unknown }>> {
+  async findPendingMedia(limit: number, afterSeq = 0): Promise<Array<{ seq: number; id: string; accountId: string; raw: unknown }>> {
     const pool = this.requirePool();
     const res = await pool.query(
-      `SELECT id, account_id, raw_json FROM messages
-       WHERE (content_json->'media'->>'status') = 'pending' AND raw_json IS NOT NULL
+      `SELECT seq, id, account_id, raw_json FROM messages
+       WHERE (content_json->'media'->>'status') = 'pending' AND raw_json IS NOT NULL AND seq > $2
        ORDER BY seq ASC LIMIT $1`,
-      [limit],
+      [limit, afterSeq],
     );
-    return res.rows.map((r) => ({ id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
+    return res.rows.map((r) => ({ seq: Number(r.seq), id: r.id, accountId: r.account_id, raw: parseJsonColumn(r.raw_json) }));
   }
 
   async deleteOlderThan(days: number): Promise<number> {
