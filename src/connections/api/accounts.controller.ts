@@ -1,6 +1,6 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { ChannelAccount, AccountStatus } from '../../core/accounts/channel-account.js';
+import { hasRequiredCredentials, MISSING_CREDENTIALS_MESSAGE, type ChannelAccount, type AccountStatus } from '../../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
@@ -37,10 +37,23 @@ export interface ValidatedAccountData {
   };
 }
 
-/** Result of validating a create-account request body */
-export interface AccountValidationResult {
+/** Validated shape of an update: only what the request changes. */
+export interface ValidatedAccountUpdate {
+  alias?: string;
+  provider?: string;
+  status?: string;
+  identity?: Record<string, unknown>;
+  credentialsRef?: string;
+  credentials?: string;
+  providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
+  metadata?: Partial<ValidatedAccountData['metadata']>;
+}
+
+/** Result of validating an account request body */
+export interface ValidationResult<T> {
   success: boolean;
-  data?: ValidatedAccountData;
+  data?: T;
   error?: string;
 }
 
@@ -56,7 +69,41 @@ export interface AccountsControllerDeps {
    */
   wireAccount?: (account: ChannelAccount) => Promise<void>;
   /** Validate create-account request body (injected to avoid schema library coupling) */
-  validateAccountBody: (body: unknown) => AccountValidationResult;
+  validateAccountBody: (body: unknown) => ValidationResult<ValidatedAccountData>;
+  /** Validate update-account request body: what passes can be written and loaded back at the next start. */
+  validateAccountUpdate: (body: unknown) => ValidationResult<ValidatedAccountUpdate>;
+}
+
+/**
+ * Replaces the body with what the validator returns, or answers 400. It runs before Fastify's schema step
+ * because that step coerces: `"todo"` or `5` would arrive here as the valid lists `["todo"]` and `["5"]`.
+ */
+function validatedBody<T>(validate: (body: unknown) => ValidationResult<T>) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = validate(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'INVALID_PAYLOAD',
+        message: parsed.error ?? 'Invalid account payload',
+      });
+    }
+    request.body = parsed.data;
+  };
+}
+
+/** Enough to tell two numbers apart in a log, not enough to contact anyone. */
+function maskPhone(phoneNumber: string): string {
+  return `***${phoneNumber.slice(-4)}`;
+}
+
+/** A suspended account must not connect: only reactivating it does, through PUT. */
+function accountSuspended(accountId: string) {
+  return {
+    error: 'Conflict',
+    code: 'ACCOUNT_SUSPENDED',
+    message: `Account '${accountId}' is suspended. Reactivate it with PUT /api/v1/accounts/${accountId} first.`,
+  };
 }
 
 function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
@@ -76,6 +123,7 @@ function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderLook
     provider: account.provider,
     status: account.status,
     identity: account.identity,
+    conversations: account.conversations,
     connection: connectionInfo.managed
       ? { managed: true, status: connectionInfo.status, qr: connectionInfo.qr }
       : undefined,
@@ -111,6 +159,12 @@ export async function accountsController(
   async function connectWired(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
     await wire(account);
     await manager.connect(account.id, account.providerConfig);
+  }
+
+  /** Unlink the device and delete what is left of the session, so the next connect pairs from scratch. */
+  async function logOut(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await manager.disconnect(account.id);
+    await manager.clearSession?.(account.id, account.providerConfig);
   }
 
   const idParamsSchema = {
@@ -224,6 +278,7 @@ export async function accountsController(
 
   // POST /api/v1/accounts — create a new account
   fastify.post('/api/v1/accounts', {
+    preValidation: validatedBody(deps.validateAccountBody),
     schema: {
       description: 'Create a new messaging account',
       tags: ['Accounts'],
@@ -236,18 +291,7 @@ export async function accountsController(
       },
     },
   }, async (request, reply) => {
-    const body = request.body as Record<string, unknown>;
-
-    const parsed = deps.validateAccountBody(body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: 'Bad Request',
-        code: 'INVALID_PAYLOAD',
-        message: parsed.error ?? 'Invalid account payload',
-      });
-    }
-
-    const data = parsed.data!;
+    const data = request.body as ValidatedAccountData;
     const channel = data.channel as ChannelType;
 
     const account: ChannelAccount = {
@@ -305,6 +349,7 @@ export async function accountsController(
 
   // PUT /api/v1/accounts/:id — update an existing account
   fastify.put<{ Params: { id: string } }>('/api/v1/accounts/:id', {
+    preValidation: validatedBody(deps.validateAccountUpdate),
     schema: {
       description: 'Update an existing messaging account',
       tags: ['Accounts'],
@@ -312,6 +357,7 @@ export async function accountsController(
       body: updateAccountBodySchema,
       response: {
         200: accountResponseSchema,
+        400: errorResponseSchema,
         404: errorResponseSchema,
       },
     },
@@ -328,10 +374,18 @@ export async function accountsController(
       });
     }
 
+    const credentialsOwner = {
+      provider: body.provider ?? existing.provider,
+      credentialsRef: body.credentialsRef ?? existing.credentialsRef,
+      credentials: body.credentials ?? existing.credentials,
+    };
+    if (!hasRequiredCredentials(credentialsOwner)) {
+      return reply.status(400).send({ error: 'Bad Request', code: 'INVALID_PAYLOAD', message: MISSING_CREDENTIALS_MESSAGE });
+    }
+
     // If identity is provided, ensure channel discriminator is set
     if (body.identity) {
-      const channel = (body as Record<string, unknown>)['channel'] ?? existing.channel;
-      (body.identity as unknown as Record<string, unknown>)['channel'] = channel;
+      (body.identity as unknown as Record<string, unknown>)['channel'] = existing.channel;
     }
 
     const wasSuspended = existing.status === 'suspended';
@@ -399,11 +453,11 @@ export async function accountsController(
     // account created later with this id would inherit the session. Failing here must not stop the deletion.
     const manager = deps.providerRegistry.getConnectionManager(account.provider);
     try {
-      await manager?.disconnect(id);
-      await manager?.clearSession?.(id, account.providerConfig);
+      if (manager) await logOut(account, manager);
     } catch (err) {
       fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
     }
+    manager?.forgetAccount?.(id);
 
     await deps.accountRepository.remove(id);
     fastify.log.info(`Account deleted: ${id}`);
@@ -424,6 +478,7 @@ export async function accountsController(
         200: accountResponseSchema,
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -443,6 +498,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support managed connections. Use credentials instead.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     await connectWired(account, manager);
@@ -478,6 +537,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -497,6 +557,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support pairing codes.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     const phoneNumber = request.body?.phoneNumber
@@ -527,7 +591,7 @@ export async function accountsController(
       const pairingCode = await (manager as unknown as PairingCodeCapable).requestPairingCode(account.id, phoneNumber);
 
       fastify.log.info(
-        { accountId: account.id, phoneNumber },
+        { accountId: account.id, phoneNumber: maskPhone(phoneNumber) },
         'Pairing code requested',
       );
 
@@ -541,10 +605,12 @@ export async function accountsController(
     }
   });
 
-  // POST /api/v1/accounts/:id/disconnect — disconnect and clear session
+  // POST /api/v1/accounts/:id/disconnect — log out and delete the session
   fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/disconnect', {
     schema: {
-      description: 'Disconnect a self-auth provider account and clear its session',
+      description:
+        'Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next ' +
+        'connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.',
       tags: ['Accounts'],
       params: idParamsSchema,
       response: {
@@ -558,6 +624,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -579,7 +646,16 @@ export async function accountsController(
       });
     }
 
-    await manager.disconnect(account.id);
+    try {
+      await logOut(account, manager);
+    } catch (error) {
+      fastify.log.error({ accountId: account.id, err: error }, 'Account logout failed');
+      return reply.status(500).send({
+        error: 'Internal Server Error',
+        code: 'DISCONNECT_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to delete the session',
+      });
+    }
     fastify.log.info({ accountId: account.id }, 'Account disconnected');
 
     return { accountId: account.id, status: 'disconnected' };
@@ -606,6 +682,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
         500: errorResponseSchema,
       },
     },
@@ -626,6 +703,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support managed connections.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     const clearSession = manager.clearSession?.bind(manager);

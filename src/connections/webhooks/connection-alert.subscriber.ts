@@ -3,14 +3,13 @@ import type { EventBus, DomainEvent } from '../../core/event-bus.js';
 import { Events } from '../../core/events.js';
 import type { ConnectionUpdatePayload } from '../../core/events.js';
 import { getLogger } from '../../core/logger/logger.port.js';
+import { STABLE_CONNECTION_MS } from '../../core/accounts/connection-manager.port.js';
 import type { WebhookForwarder } from './webhook-forwarder.js';
 
 /** How long a dropped connection may stay down before someone is told. */
 export const DOWN_ALERT_AFTER_MS = 15 * 60 * 1000;
 /** How often the alert repeats, once delivered, while the account stays down. */
 export const ALERT_REPEAT_MS = 6 * 60 * 60 * 1000;
-/** A connection that lasted less than this was not a recovery. */
-const STABLE_CONNECTION_MS = 60_000;
 const RETRY_BASE_MS = 30_000;
 const RETRY_MAX_MS = 15 * 60 * 1000;
 const CHECK_INTERVAL_MS = 30_000;

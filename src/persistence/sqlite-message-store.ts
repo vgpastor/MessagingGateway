@@ -153,7 +153,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const offset = options?.offset ?? 0;
 
     let where = 'messages_fts MATCH ?';
-    const params: unknown[] = [query];
+    const params: unknown[] = [`"${query.replace(/\0/g, '').replace(/"/g, '""')}"`]; // one literal phrase: the text is data, not FTS5 syntax (which ends at a NUL)
 
     if (options?.accountId) {
       where += ' AND m.account_id = ?';

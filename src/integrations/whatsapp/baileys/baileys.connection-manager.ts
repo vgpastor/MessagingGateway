@@ -44,6 +44,10 @@ export class BaileysConnectionManager implements ConnectionManagerPort, PairingC
     await this.socketManager.clearSession(accountId, config);
   }
 
+  forgetAccount(accountId: string): void {
+    this.socketManager.forgetAccount(accountId);
+  }
+
   async getGroups(accountId: string): Promise<GroupInfo[]> {
     return this.socketManager.getGroups(accountId);
   }

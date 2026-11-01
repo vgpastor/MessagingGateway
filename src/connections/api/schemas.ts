@@ -172,6 +172,14 @@ export const messageResultSchema = {
   required: ['messageId', 'status', 'timestamp'] as const,
 };
 
+const conversationsSchema = {
+  description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
+  anyOf: [
+    { type: 'string' as const, enum: ['*'] },
+    { type: 'array' as const, items: { type: 'string' as const } },
+  ],
+};
+
 export const accountResponseSchema = {
   type: 'object' as const,
   properties: {
@@ -181,6 +189,7 @@ export const accountResponseSchema = {
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
+    conversations: conversationsSchema,
     connection: {
       type: 'object' as const,
       description: 'Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.',
@@ -217,7 +226,7 @@ export const errorResponseSchema = {
 export const createAccountBodySchema = {
   type: 'object' as const,
   properties: {
-    id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-acme")' },
+    id: { type: 'string' as const, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$', description: 'Unique account identifier (e.g. "wa-acme")' },
     alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: {
@@ -228,13 +237,7 @@ export const createAccountBodySchema = {
     credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
     credentials: { type: 'string' as const, minLength: 1, description: 'Inline credential string (e.g. "user:apiKey@host:port"). Stored in YAML, used when env vars are not available.' },
     providerConfig: { type: 'object' as const, additionalProperties: true },
-    conversations: {
-      description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
-      anyOf: [
-        { type: 'string' as const, enum: ['*'] },
-        { type: 'array' as const, items: { type: 'string' as const } },
-      ],
-    },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {
@@ -258,6 +261,7 @@ export const createAccountBodySchema = {
 
 export const updateAccountBodySchema = {
   type: 'object' as const,
+  additionalProperties: false,
   properties: {
     alias: { type: 'string' as const, minLength: 1 },
     provider: {
@@ -269,6 +273,7 @@ export const updateAccountBodySchema = {
     credentials: { type: 'string' as const, minLength: 1 },
     providerConfig: { type: 'object' as const, additionalProperties: true },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {

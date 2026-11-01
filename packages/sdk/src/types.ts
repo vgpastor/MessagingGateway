@@ -166,6 +166,8 @@ export interface Account {
   provider: ProviderType;
   status: AccountStatus;
   identity: Record<string, unknown>;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `'*'` or absent keeps them all. */
+  conversations?: '*' | string[];
   connection?: {
     managed: boolean;
     status?: 'disconnected' | 'connecting' | 'connected';
@@ -189,6 +191,7 @@ export interface CreateAccountInput {
   identity?: Record<string, unknown>;
   credentialsRef?: string;
   providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata: { owner: string; environment: string; tags?: string[] };
 }
 
@@ -197,6 +200,7 @@ export interface UpdateAccountInput {
   status?: AccountStatus;
   identity?: Record<string, unknown>;
   providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata?: Partial<AccountMetadata>;
 }
 

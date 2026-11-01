@@ -8,12 +8,12 @@ import type { ChannelAccount } from '../../src/core/accounts/channel-account.js'
 import type { InboundPipeline } from '../../src/core/inbound/inbound-pipeline.js';
 
 // A fake WhatsApp socket per makeWASocket(); the test drives its 'messages.upsert'.
-const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }> = [];
+const sockets: Array<{ ev: EventEmitter; logout: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; requestPairingCode: ReturnType<typeof vi.fn> }> = [];
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
   default: () => {
-    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: vi.fn() };
+    const socket = { ev: new EventEmitter(), logout: vi.fn(async () => {}), end: vi.fn(), requestPairingCode: vi.fn(async () => 'ABCD1234') };
     sockets.push(socket);
     return socket;
   },
@@ -31,6 +31,8 @@ const { CredentialValidator } = await import('../../src/infrastructure/credentia
 const { createServer } = await import('../../src/infrastructure/server.js');
 const { connectManagedProviders } = await import('../../src/infrastructure/connect-managed-providers.js');
 const { EventBus } = await import('../../src/core/event-bus.js');
+
+const { createLogCapture } = await import('./helpers/test-server.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const HEADERS = { 'x-api-key': 'test-api-key' };
@@ -247,7 +249,7 @@ describe('accounts created at runtime', () => {
   it('a PUT on an account already suspended closes nothing again', async () => {
     await create('hot-10c');
     await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { status: 'suspended' } });
-    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-10c/connect', headers: HEADERS });
+    await baileysProvider.connection!().connect('hot-10c', {});
     const socket = sockets.at(-1)!;
 
     await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { alias: 'renamed' } });
@@ -290,6 +292,26 @@ describe('accounts created at runtime', () => {
     }
   });
 
+  it('DELETE /accounts/:id releases what the connection manager keeps for the account', async () => {
+    await create('hot-12b');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12b/connect', headers: HEADERS });
+    const socketManager = baileysProvider.connection!() as unknown as { socketManager: { getConnectionEnd(id: string): unknown } };
+
+    await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-12b', headers: HEADERS });
+
+    expect(socketManager.socketManager.getConnectionEnd('hot-12b')).toBeUndefined();
+  });
+
+  it('POST /accounts/:id/disconnect keeps it closed: only DELETE forgets the account', async () => {
+    await create('hot-12c');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12c/connect', headers: HEADERS });
+    const socketManager = baileysProvider.connection!() as unknown as { socketManager: { getConnectionEnd(id: string): unknown } };
+
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12c/disconnect', headers: HEADERS });
+
+    expect(socketManager.socketManager.getConnectionEnd('hot-12c')).toBe('closed');
+  });
+
   it('DELETE /accounts/:id still deletes the account when closing it fails', async () => {
     await create('hot-13');
     const manager = baileysProvider.connection!();
@@ -307,6 +329,17 @@ describe('accounts created at runtime', () => {
   it('DELETE /accounts/:id answers 404 for an unknown account', async () => {
     const response = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/nobody', headers: HEADERS });
     expect(response.statusCode).toBe(404);
+  });
+
+  it('POST /accounts refuses an id that is not a safe folder name, and the contract says so', async () => {
+    const response = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: newAccountBody('..') });
+    const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
+    const body = spec.json().paths['/api/v1/accounts'].post.requestBody.content['application/json'].schema;
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('INVALID_PAYLOAD');
+    expect(await repository.findById('..')).toBeUndefined();
+    expect(body.properties.id.pattern).toBe('^[A-Za-z0-9][A-Za-z0-9_-]*$');
   });
 
   it('POST /accounts keeps the conversations it was given', async () => {
@@ -352,6 +385,25 @@ describe('accounts created at runtime', () => {
     expect(await repository.findById('hot-14b')).toBeUndefined();
   });
 
+  it.each([
+    ['all', '*'],
+    ['a list', ['34600111222@s.whatsapp.net']],
+    ['none', []],
+  ])('every account response tells the conversations: %s', async (name, conversations) => {
+    const id = `hot-14d-${name.replace(' ', '-')}`;
+    ids.push(id);
+
+    const created = await app.inject({ method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody(id), conversations } });
+    const read = await app.inject({ method: 'GET', url: `/api/v1/accounts/${id}`, headers: HEADERS });
+    const listed = await app.inject({ method: 'GET', url: '/api/v1/accounts', headers: HEADERS });
+    const updated = await app.inject({ method: 'PUT', url: `/api/v1/accounts/${id}`, headers: HEADERS, payload: { alias: 'renamed' } });
+
+    expect(created.json().conversations).toEqual(conversations);
+    expect(read.json().conversations).toEqual(conversations);
+    expect(listed.json().find((a: { id: string }) => a.id === id).conversations).toEqual(conversations);
+    expect(updated.json().conversations).toEqual(conversations);
+  });
+
   it('GET /accounts/:id/health reports a suspended account as suspended, and leaves it so', async () => {
     ids.push('hot-15');
     await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-15'))), status: 'suspended', providerConfig: {}, credentialsRef: '' });
@@ -360,6 +412,62 @@ describe('accounts created at runtime', () => {
 
     expect(response.json().status).toBe('suspended');
     expect((await repository.findById('hot-15'))?.status).toBe('suspended');
+  });
+
+  describe('POST /accounts/:id/disconnect', () => {
+    it('logs out and deletes the session, and the next connect pairs from scratch', async () => {
+      await create('hot-22');
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/connect', headers: HEADERS });
+      const socket = sockets.at(-1)!;
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-22');
+      await mkdir(authDir, { recursive: true });
+      await writeFile(resolve(authDir, 'creds.json'), '{}');
+
+      const response = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/disconnect', headers: HEADERS });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().status).toBe('disconnected');
+      expect(socket.logout).toHaveBeenCalledTimes(1);
+      expect(existsSync(authDir)).toBe(false);
+      expect(registry.getConnectionManager('baileys')!.hasConnection('hot-22')).toBe(false);
+
+      const before = sockets.length;
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-22/connect', headers: HEADERS });
+      expect(sockets.length).toBe(before + 1);
+    });
+
+    it('does not wait for a logout that hangs for more than 5 s', async () => {
+      await create('hot-23');
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-23/connect', headers: HEADERS });
+      const socket = sockets.at(-1)!;
+      socket.logout.mockImplementation(() => new Promise(() => {}));
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-23');
+      await mkdir(authDir, { recursive: true });
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const pending = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-23/disconnect', headers: HEADERS });
+        await vi.advanceTimersByTimeAsync(5_000);
+        vi.useRealTimers();
+        const response = await pending;
+
+        expect(response.statusCode).toBe(200);
+        expect(socket.end).toHaveBeenCalled();
+        expect(existsSync(authDir)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('says so when the session could not be deleted', async () => {
+      ids.push('hot-24');
+      await repository.save({ ...JSON.parse(JSON.stringify(newAccountBody('hot-24'))), status: 'active', providerConfig: { authDir: '../outside' }, credentialsRef: '' });
+
+      const response = await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-24/disconnect', headers: HEADERS });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json().code).toBe('DISCONNECT_FAILED');
+    });
   });
 
   it('wires again when POST /accounts/:id/reset re-pairs after a disconnect', async () => {
@@ -384,14 +492,187 @@ describe('accounts created at runtime', () => {
     await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/disconnect', headers: HEADERS });
     const before = sockets.length;
 
-    // The fake socket has no requestPairingCode, so the request ends 400; the connection is what matters.
-    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
-    expect(sockets.length).toBeGreaterThan(before);
+    const pair = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-9/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
+    await waitForNewSocket(before);
+    sockets.at(-1)!.ev.emit('connection.update', { qr: 'QR' });
+    expect((await pair).statusCode).toBe(200);
 
     sockets.at(-1)!.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
     await flush();
 
     expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a suspended account opens no socket', () => {
+    async function suspended(id: string) {
+      await create(id);
+      await app.inject({ method: 'PUT', url: `/api/v1/accounts/${id}`, headers: HEADERS, payload: { status: 'suspended' } });
+    }
+
+    it.each([
+      ['connect', undefined],
+      ['pair', { phoneNumber: '+34600000009' }],
+      ['reset', undefined],
+    ])('POST /accounts/:id/%s answers 409 and connects nothing', async (action, payload) => {
+      const id = `hot-20-${action}`;
+      await suspended(id);
+      const before = sockets.length;
+
+      const response = await app.inject({ method: 'POST', url: `/api/v1/accounts/${id}/${action}`, headers: HEADERS, payload });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe('ACCOUNT_SUSPENDED');
+      expect(sockets).toHaveLength(before);
+      expect(registry.getConnectionManager('baileys')!.hasConnection(id)).toBe(false);
+    });
+
+    it('POST /accounts/:id/reset keeps the session of a suspended account', async () => {
+      await suspended('hot-21');
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-21');
+      await mkdir(authDir, { recursive: true });
+      await writeFile(resolve(authDir, 'creds.json'), '{}');
+
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-21/reset', headers: HEADERS });
+
+      expect(existsSync(resolve(authDir, 'creds.json'))).toBe(true);
+    });
+
+    it('declares the 409 in the contract', async () => {
+      const paths = (await app.inject({ method: 'GET', url: '/openapi.json' })).json().paths;
+
+      for (const action of ['connect', 'pair', 'reset']) {
+        expect(paths[`/api/v1/accounts/{id}/${action}`].post.responses['409']).toBeDefined();
+      }
+    });
+  });
+
+  describe('PUT /accounts/:id validates what it stores', () => {
+    async function put(id: string, payload: unknown) {
+      return app.inject({ method: 'PUT', url: `/api/v1/accounts/${id}`, headers: HEADERS, payload: payload as object });
+    }
+
+    it.each([
+      ['a word as conversations', { conversations: 'todo' }],
+      ['a number as conversations', { conversations: 5 }],
+      ['a list of numbers as conversations', { conversations: [1, 2] }],
+      ['an identity of no channel', { identity: { foo: 'bar' } }],
+      ['an identity that is not an object', { identity: 'wa' }],
+      ['an unknown field', { nickname: 'x' }],
+      ['an empty alias', { alias: '' }],
+      ['an empty owner', { metadata: { owner: '' } }],
+      ['half a rate limit', { metadata: { rateLimit: { maxPerMinute: 1 } } }],
+    ])('refuses %s and changes nothing', async (_name, payload) => {
+      await create('hot-16');
+      const before = JSON.stringify(await repository.findById('hot-16'));
+
+      const response = await put('hot-16', payload);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe('INVALID_PAYLOAD');
+      expect(JSON.stringify(await repository.findById('hot-16'))).toBe(before);
+      await repository.remove('hot-16');
+    });
+
+    it('takes valid conversations, and a change of the alias alone resets nothing', async () => {
+      await create('hot-17');
+      const conversations = ['123@g.us'];
+
+      expect((await put('hot-17', { status: 'active', conversations })).statusCode).toBe(200);
+      expect((await put('hot-17', { alias: 'renamed' })).statusCode).toBe(200);
+
+      const stored = await repository.findById('hot-17');
+      expect(stored?.alias).toBe('renamed');
+      expect(stored?.conversations).toEqual(conversations);
+      expect(stored?.status).toBe('active');
+    });
+
+    it('refuses a provider that needs credentials on an account that has none: the next start could not load it', async () => {
+      await create('hot-18');
+
+      const response = await put('hot-18', { provider: 'twilio' });
+
+      expect(response.statusCode).toBe(400);
+      expect((await repository.findById('hot-18'))?.provider).toBe('baileys');
+    });
+
+    it('keeps the channel of the account in the identity, and the fields of an SMS one', async () => {
+      await create('hot-19');
+
+      const response = await put('hot-19', { identity: { phoneNumber: '+34600000002', senderId: 'ACME' } });
+
+      expect(response.statusCode).toBe(200);
+      expect((await repository.findById('hot-19'))?.identity).toEqual({ channel: 'whatsapp', phoneNumber: '+34600000002', senderId: 'ACME' });
+    });
+
+    it('declares conversations and refuses other fields in the contract', async () => {
+      const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
+      const body = spec.json().paths['/api/v1/accounts/{id}'].put.requestBody.content['application/json'].schema;
+
+      expect(body.properties.conversations.anyOf).toBeDefined();
+      expect(body.additionalProperties).toBe(false);
+    });
+  });
+
+  it('POST /accounts refuses a word as conversations, which the schema step would turn into a list', async () => {
+    ids.push('hot-14c');
+
+    const response = await app.inject({
+      method: 'POST', url: '/api/v1/accounts', headers: HEADERS, payload: { ...newAccountBody('hot-14c'), conversations: 'todo' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe('INVALID_PAYLOAD');
+    expect(await repository.findById('hot-14c')).toBeUndefined();
+  });
+
+  it('POST /accounts/:id/pair asks for the code only once WhatsApp has answered the handshake', async () => {
+    await create('hot-25');
+    const before = sockets.length;
+
+    const pair = app.inject({ method: 'POST', url: '/api/v1/accounts/hot-25/pair', headers: HEADERS, payload: { phoneNumber: '+34 600 000 009' } });
+    await waitForNewSocket(before);
+    const socket = sockets.at(-1)!;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(socket.requestPairingCode).not.toHaveBeenCalled();
+
+    socket.ev.emit('connection.update', { qr: 'QR' });
+    const response = await pair;
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().pairingCode).toBe('ABCD1234');
+    expect(socket.requestPairingCode).toHaveBeenCalledWith('34600000009');
+  });
+
+  it('POST /accounts/:id/pair logs the phone masked', async () => {
+    const capture = createLogCapture();
+    const logged = await createServer({
+      accountRepository: repository,
+      webhookConfigRepo: {} as never,
+      providerRegistry: registry,
+      messageRouter: new MessageRouterService(repository, registry),
+      credentialValidator: new CredentialValidator(registry),
+      webhookForwarder: new WebhookForwarder({} as never, undefined, undefined),
+      apiKey: 'test-api-key',
+      port: 0,
+      logLevel: 'info',
+      logStream: capture.stream,
+    });
+    await logged.ready();
+    try {
+      await create('hot-26');
+      await baileysProvider.connection!().connect('hot-26', {});
+      sockets.at(-1)!.ev.emit('connection.update', { qr: 'QR' });
+
+      const response = await logged.inject({ method: 'POST', url: '/api/v1/accounts/hot-26/pair', headers: HEADERS, payload: { phoneNumber: '+34600000009' } });
+
+      expect(response.statusCode).toBe(200);
+      expect(capture.text()).toContain('Pairing code requested');
+      expect(capture.text()).toContain('***0009');
+      expect(capture.text()).not.toContain('34600000009');
+    } finally {
+      await logged.close();
+    }
   });
 
   it('still creates and connects the account when wiring fails', async () => {

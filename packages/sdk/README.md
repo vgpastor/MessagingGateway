@@ -13,7 +13,7 @@ npm install @messaging-gateway/sdk
 - **Node.js** `>=20.19 <21 || >=22.12`: CommonJS consumers load the ESM build through `require(esm)`.
 - **Gateway:** SDK 0.4.x requires a gateway release with header/subprotocol WebSocket auth,
   `afterAccountSeq` and the server heartbeat (the release that ships with this SDK). Against an
-  older gateway the WebSocket handshake is rejected with `4401` and the client keeps retrying.
+  older gateway the WebSocket handshake is rejected with `4401`: the client emits `error` and does not retry.
 
 ### Upgrading from 0.3.x
 
@@ -85,6 +85,11 @@ const { data, status, headers } = await getApiV1Messages({ accountId: 'my-whatsa
 throws (with `statusCode`, `code` and the body in `response`) instead of being returned, even when the
 generated type lists it: those types only know the errors a route documents.
 
+`configure()` holds one configuration for the whole process, and the last call wins. For several gateways or
+keys, use one `MessagingGatewayClient` each, or pass the key for a single call:
+`getApiV1Messages(params, { headers: { 'X-API-Key': 'other-key' } })`. Requests time out after 30 s, reading
+the body included, with a `TimeoutError`: set `timeoutMs` in `configure()` if you need longer.
+
 ## WebSocket Events
 
 ```typescript
@@ -135,6 +140,9 @@ events.unsubscribe(['my-whatsapp']);                  // removing the last one a
 // Disconnect
 events.disconnect();
 ```
+
+After a close with `4401` the gateway refused the API key, so the client emits `error` and does not reconnect,
+whatever `autoReconnect` says, until you call `connect()` again.
 
 `subscribe()` and `unsubscribe()` throw when the socket is not connected, and then nothing changes:
 call them again on `connected`, or set `accounts` in the config.

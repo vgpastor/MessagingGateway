@@ -22,6 +22,54 @@ describe('customFetch', () => {
     expect(new Headers(init.headers).get('X-API-Key')).toBe('k');
   });
 
+  it('a key passed for one call wins over the configured one, so two keys can live together', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    configure({ baseUrl: 'http://gw.test', apiKey: 'global' });
+
+    await customFetch('/x', { headers: { 'X-API-Key': 'other' } });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get('X-API-Key')).toBe('other');
+  });
+
+  /** A server that never answers: the request only ends when its signal aborts. */
+  function neverAnswers() {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
+    })));
+  }
+
+  it('gives up after timeoutMs with a TimeoutError', async () => {
+    neverAnswers();
+    configure({ baseUrl: 'http://gw.test', timeoutMs: 5 });
+
+    await expect(customFetch('/x', {})).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it('has a limit of 30 s unless told otherwise', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    configure({ baseUrl: 'http://gw.test' });
+
+    await customFetch('/x', {});
+
+    expect(timeout).toHaveBeenCalledWith(30_000);
+    timeout.mockRestore();
+  });
+
+  it('still obeys the signal of the caller', async () => {
+    neverAnswers();
+    configure({ baseUrl: 'http://gw.test' });
+    const controller = new AbortController();
+
+    const request = customFetch('/x', { signal: controller.signal });
+    controller.abort(new Error('changed my mind'));
+
+    await expect(request).rejects.toThrow('changed my mind');
+  });
+
   it('answers data, status and headers: what the generated types promise', async () => {
     respondWith(JSON.stringify({ a: 1 }), { status: 201, headers: { 'content-type': 'application/json', 'x-y': 'z' } });
 

@@ -163,10 +163,16 @@ export class WebSocketBroadcaster {
 
     for (const client of [...this.clients]) {
       if (client.socket.readyState !== WS_OPEN) continue;
-      if (accountId && client.accountFilter && !client.accountFilter.has(accountId)) continue;
+      if (!this.wants(client, accountId)) continue;
 
       this.deliver(client, client.scope === 'read' ? readMessage : message);
     }
+  }
+
+  /** An event with no account says nothing of who it concerns: only an admin listening to everything may see it. */
+  private wants(client: WsClient, accountId: string | undefined): boolean {
+    if (!accountId) return client.scope !== 'read' && !client.accountFilter;
+    return !client.accountFilter || client.accountFilter.has(accountId);
   }
 
   private sendTo(client: WsClient, data: unknown): void {

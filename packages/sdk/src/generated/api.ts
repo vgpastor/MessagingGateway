@@ -385,6 +385,8 @@ export type GetApiV1Accounts200Item = {
   provider: string;
   status: GetApiV1Accounts200ItemStatus;
   identity?: GetApiV1Accounts200ItemIdentity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: GetApiV1Accounts200ItemConnection;
   metadata?: GetApiV1Accounts200ItemMetadata;
@@ -447,7 +449,7 @@ export type PostApiV1AccountsBodyMetadata = {
 export type PostApiV1AccountsBody = {
   /**
      * Unique account identifier (e.g. "wa-acme")
-     * @minLength 1
+     * @pattern ^[A-Za-z0-9][A-Za-z0-9_-]*$
      */
   id: string;
   /**
@@ -532,6 +534,8 @@ export type PostApiV1Accounts201 = {
   provider: string;
   status: PostApiV1Accounts201Status;
   identity?: PostApiV1Accounts201Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PostApiV1Accounts201Connection;
   metadata?: PostApiV1Accounts201Metadata;
@@ -612,6 +616,8 @@ export type GetApiV1AccountsId200 = {
   provider: string;
   status: GetApiV1AccountsId200Status;
   identity?: GetApiV1AccountsId200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: GetApiV1AccountsId200Connection;
   metadata?: GetApiV1AccountsId200Metadata;
@@ -685,6 +691,8 @@ export type PutApiV1AccountsIdBody = {
   credentials?: string;
   providerConfig?: PutApiV1AccountsIdBodyProviderConfig;
   status?: PutApiV1AccountsIdBodyStatus;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   metadata?: PutApiV1AccountsIdBodyMetadata;
 };
 
@@ -745,9 +753,17 @@ export type PutApiV1AccountsId200 = {
   provider: string;
   status: PutApiV1AccountsId200Status;
   identity?: PutApiV1AccountsId200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PutApiV1AccountsId200Connection;
   metadata?: PutApiV1AccountsId200Metadata;
+};
+
+export type PutApiV1AccountsId400 = {
+  error: string;
+  code?: string;
+  message: string;
 };
 
 export type PutApiV1AccountsId404 = {
@@ -849,6 +865,8 @@ export type PostApiV1AccountsIdConnect200 = {
   provider: string;
   status: PostApiV1AccountsIdConnect200Status;
   identity?: PostApiV1AccountsIdConnect200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PostApiV1AccountsIdConnect200Connection;
   metadata?: PostApiV1AccountsIdConnect200Metadata;
@@ -861,6 +879,12 @@ export type PostApiV1AccountsIdConnect400 = {
 };
 
 export type PostApiV1AccountsIdConnect404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdConnect409 = {
   error: string;
   code?: string;
   message: string;
@@ -889,6 +913,12 @@ export type PostApiV1AccountsIdPair404 = {
   message: string;
 };
 
+export type PostApiV1AccountsIdPair409 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
 export type PostApiV1AccountsIdDisconnect200 = {
   accountId: string;
   status: string;
@@ -901,6 +931,12 @@ export type PostApiV1AccountsIdDisconnect400 = {
 };
 
 export type PostApiV1AccountsIdDisconnect404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdDisconnect500 = {
   error: string;
   code?: string;
   message: string;
@@ -919,6 +955,12 @@ export type PostApiV1AccountsIdReset400 = {
 };
 
 export type PostApiV1AccountsIdReset404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdReset409 = {
   error: string;
   code?: string;
   message: string;
@@ -1320,6 +1362,7 @@ offset?: string;
 /**
  * Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.
  * @minimum 0
+ * @maximum 9007199254740991
  */
 afterAccountSeq?: number;
 };
@@ -1474,7 +1517,7 @@ since?: string;
 
 export type GetApiV1MessagesSearchParams = {
 /**
- * Search query (FTS5 syntax)
+ * Text to look for, taken literally: quotes and operators are plain text. SQLite looks for it as one phrase, Postgres for all its words.
  */
 q: string;
 accountId?: string;
@@ -2082,6 +2125,11 @@ export type putApiV1AccountsIdResponse200 = {
   status: 200
 }
 
+export type putApiV1AccountsIdResponse400 = {
+  data: PutApiV1AccountsId400
+  status: 400
+}
+
 export type putApiV1AccountsIdResponse404 = {
   data: PutApiV1AccountsId404
   status: 404
@@ -2090,7 +2138,7 @@ export type putApiV1AccountsIdResponse404 = {
 export type putApiV1AccountsIdResponseSuccess = (putApiV1AccountsIdResponse200) & {
   headers: Headers;
 };
-export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse404) & {
+export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse400 | putApiV1AccountsIdResponse404) & {
   headers: Headers;
 };
 
@@ -2228,10 +2276,15 @@ export type postApiV1AccountsIdConnectResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdConnectResponse409 = {
+  data: PostApiV1AccountsIdConnect409
+  status: 409
+}
+
 export type postApiV1AccountsIdConnectResponseSuccess = (postApiV1AccountsIdConnectResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdConnectResponseError = (postApiV1AccountsIdConnectResponse400 | postApiV1AccountsIdConnectResponse404) & {
+export type postApiV1AccountsIdConnectResponseError = (postApiV1AccountsIdConnectResponse400 | postApiV1AccountsIdConnectResponse404 | postApiV1AccountsIdConnectResponse409) & {
   headers: Headers;
 };
 
@@ -2276,10 +2329,15 @@ export type postApiV1AccountsIdPairResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdPairResponse409 = {
+  data: PostApiV1AccountsIdPair409
+  status: 409
+}
+
 export type postApiV1AccountsIdPairResponseSuccess = (postApiV1AccountsIdPairResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdPairResponseError = (postApiV1AccountsIdPairResponse400 | postApiV1AccountsIdPairResponse404) & {
+export type postApiV1AccountsIdPairResponseError = (postApiV1AccountsIdPairResponse400 | postApiV1AccountsIdPairResponse404 | postApiV1AccountsIdPairResponse409) & {
   headers: Headers;
 };
 
@@ -2331,10 +2389,15 @@ export type postApiV1AccountsIdDisconnectResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdDisconnectResponse500 = {
+  data: PostApiV1AccountsIdDisconnect500
+  status: 500
+}
+
 export type postApiV1AccountsIdDisconnectResponseSuccess = (postApiV1AccountsIdDisconnectResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdDisconnectResponseError = (postApiV1AccountsIdDisconnectResponse400 | postApiV1AccountsIdDisconnectResponse404) & {
+export type postApiV1AccountsIdDisconnectResponseError = (postApiV1AccountsIdDisconnectResponse400 | postApiV1AccountsIdDisconnectResponse404 | postApiV1AccountsIdDisconnectResponse500) & {
   headers: Headers;
 };
 
@@ -2349,7 +2412,7 @@ export const getPostApiV1AccountsIdDisconnectUrl = (id: string,) => {
 }
 
 /**
- * Disconnect a self-auth provider account and clear its session
+ * Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.
  */
 export const postApiV1AccountsIdDisconnect = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<postApiV1AccountsIdDisconnectResponse> => {
 
@@ -2379,6 +2442,11 @@ export type postApiV1AccountsIdResetResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdResetResponse409 = {
+  data: PostApiV1AccountsIdReset409
+  status: 409
+}
+
 export type postApiV1AccountsIdResetResponse500 = {
   data: PostApiV1AccountsIdReset500
   status: 500
@@ -2387,7 +2455,7 @@ export type postApiV1AccountsIdResetResponse500 = {
 export type postApiV1AccountsIdResetResponseSuccess = (postApiV1AccountsIdResetResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404 | postApiV1AccountsIdResetResponse500) & {
+export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404 | postApiV1AccountsIdResetResponse409 | postApiV1AccountsIdResetResponse500) & {
   headers: Headers;
 };
 

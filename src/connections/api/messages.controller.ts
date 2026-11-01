@@ -26,6 +26,16 @@ function parseOffset(raw: string | undefined): number | undefined {
 }
 
 /**
+ * One CSV cell. A spreadsheet runs a cell that starts with one of these as a formula, and the text comes
+ * from whoever wrote to the account: the leading `'` makes it show as text.
+ */
+function csvCell(value: unknown): string {
+  const text = String(value ?? '');
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+/**
  * Response of `GET /api/v1/messages`. Two shapes share one schema:
  * - legacy filtering (no `afterAccountSeq`): `messages`, `total`, `limit`, `offset`
  * - keyset paging (`afterAccountSeq`): `messages`, `nextAfterAccountSeq`, `lastAccountSeq`, `firstAccountSeq`
@@ -104,6 +114,7 @@ export async function messagesController(
           afterAccountSeq: {
             type: 'integer' as const,
             minimum: 0,
+            maximum: Number.MAX_SAFE_INTEGER,
             description: 'Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.',
           },
         },
@@ -195,7 +206,10 @@ export async function messagesController(
       querystring: {
         type: 'object' as const,
         properties: {
-          q: { type: 'string' as const, description: 'Search query (FTS5 syntax)' },
+          q: {
+            type: 'string' as const,
+            description: 'Text to look for, taken literally: quotes and operators are plain text. SQLite looks for it as one phrase, Postgres for all its words.',
+          },
           accountId: { type: 'string' as const },
           limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
           offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
@@ -293,7 +307,7 @@ export async function messagesController(
           m.conversationId,
           m.content.type,
           preview,
-        ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
+        ].map(csvCell).join(',');
       });
       const csv = [headers.join(','), ...csvRows].join('\n');
 

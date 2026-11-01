@@ -18,6 +18,7 @@ import { TtlCache } from '../../../core/util/ttl-cache.js';
 import type { BaileysMessageLookup } from './baileys-message-lookup.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
 import type { GroupInfo } from '../../../core/groups/group.types.js';
+import { STABLE_CONNECTION_MS } from '../../../core/accounts/connection-manager.port.js';
 
 /**
  * Fallback WhatsApp Web version, used only when {@link fetchLatestBaileysVersion}
@@ -50,14 +51,17 @@ const SESSION_LOST_CODES: ReadonlySet<number> = new Set([DisconnectReason.logged
 /** WhatsApp rejects the version we advertise. Baileys has no name for this code. */
 const VERSION_REJECTED_CODE = 405;
 
-/** An open socket this young says nothing about the connection being good: the failure streak stays. */
-const STABLE_CONNECTION_MS = 60_000;
-
 /**
  * After a 440 another session holds the account. Coming back soon just kicks that one out, which then
  * does the same to us. Waiting this long keeps the fight harmless, while a passing conflict still heals by itself.
  */
 const CONNECTION_REPLACED_MIN_DELAY_MS = 5 * 60 * 1000;
+
+/** A logout is one frame to WhatsApp, and whoever asked for it is waiting: on a bad connection it is not worth more. */
+const LOGOUT_TIMEOUT_MS = 5_000;
+
+/** How long a pairing request waits for a socket that is still connecting; the handshake takes a few seconds. */
+const PAIRING_READY_TIMEOUT_MS = 15_000;
 
 /** How long Baileys' retry counters and group metadata stay cached. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -66,6 +70,22 @@ const CACHE_MAX_ENTRIES = 5000;
 /** Baileys types its caches with a generic `get<T>`; ours is typed by value, so adapt once here. */
 function asCacheStore(cache: TtlCache<unknown>): CacheStore {
   return cache as unknown as CacheStore;
+}
+
+function toGroupInfo(group: GroupMetadata): GroupInfo {
+  return {
+    id: group.id,
+    name: group.subject,
+    description: group.desc ?? undefined,
+    participants: group.participants.map(p => ({
+      id: p.id,
+      isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      isSuperAdmin: p.admin === 'superadmin',
+    })),
+    createdAt: group.creation ? new Date(group.creation * 1000).toISOString() : undefined,
+    createdBy: group.subjectOwner ?? undefined,
+    isAnnouncement: group.announce ?? false,
+  };
 }
 
 export interface BaileysSocketManagerOptions {
@@ -202,7 +222,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
       if (connection === 'close') {
         entry.connectionStatus = 'disconnected';
-        // Keep lastQr across reconnections so the API can still serve it
+        // It belonged to this connection: nobody can pair with it any more.
+        entry.lastQr = undefined;
         const error = lastDisconnect?.error as Boom | undefined;
         const statusCode = error?.output?.statusCode;
         const sessionLost = statusCode !== undefined && SESSION_LOST_CODES.has(statusCode);
@@ -218,8 +239,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
         const isCurrent = this.sockets.get(accountId) === entry;
 
         if (shouldReconnect) {
-          // Keep the dead entry (status 'disconnected', QR intact) until the
-          // timer replaces it, so the account stays registered while it backs off.
+          // Keep the dead entry (status 'disconnected') until the timer
+          // replaces it, so the account stays registered while it backs off.
           if (isCurrent) {
             if (entry.openedAt !== undefined && Date.now() - entry.openedAt >= STABLE_CONNECTION_MS) {
               this.reconnectAttempts.delete(accountId);
@@ -257,7 +278,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
     socket.ev.on('messages.upsert', (event) => {
       const handlers = this.handlersFor(this.messageHandlers, accountId);
-      getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
+      getLogger().debug('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
       this.notify(this.messageHandlers, accountId, event);
     });
 
@@ -341,9 +362,33 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     this.cancelReconnect(accountId);
     const entry = this.sockets.get(accountId);
     if (entry) {
-      await entry.socket.logout().catch(() => {});
+      await this.logoutWithinLimit(entry.socket);
+      // A logout that failed or hung left the socket open.
+      this.closeSocket(entry);
       this.sockets.delete(accountId);
     }
+  }
+
+  private async logoutWithinLimit(socket: WASocket): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, LOGOUT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([socket.logout().catch(() => {}), limit]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** For an account that no longer exists, after {@link disconnect}: {@link ended} and the caches would stay for good. */
+  forgetAccount(accountId: string): void {
+    // A connect still in flight reads this flag to give up: without it, it would open a socket for nobody.
+    if (!this.connecting.has(accountId)) {
+      this.ended.delete(accountId);
+    }
+    this.retryCounters.delete(accountId);
+    this.groupMetadata.delete(accountId);
   }
 
   /**
@@ -496,6 +541,8 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
       throw new Error(`No socket for account '${accountId}'. Connect first.`);
     }
 
+    await this.waitUntilPairable(accountId, entry);
+
     if (entry.connectionStatus === 'connected') {
       throw new Error(`Account '${accountId}' is already connected.`);
     }
@@ -506,25 +553,43 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     return code;
   }
 
+  /**
+   * Baileys sends the request over the socket as it is: while it is still opening that throws
+   * "Connection Closed", and before the handshake ends WhatsApp could not read it. The first QR is
+   * the sign that an unpaired session got there. An open or a close also ends the wait: the caller
+   * answers those.
+   */
+  private waitUntilPairable(accountId: string, entry: SocketEntry): Promise<void> {
+    if (entry.lastQr !== undefined || entry.connectionStatus !== 'connecting') {
+      return Promise.resolve();
+    }
+    const events = entry.socket.ev;
+    return new Promise((resolve, reject) => {
+      const onUpdate = (update: Partial<BaileysEventMap['connection.update']>) => {
+        if (update.qr || update.connection === 'open' || update.connection === 'close') {
+          stop();
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        stop();
+        reject(new Error(`The connection of account '${accountId}' is not ready for pairing yet. Try again.`));
+      }, PAIRING_READY_TIMEOUT_MS);
+      const stop = () => {
+        clearTimeout(timer);
+        events.off('connection.update', onUpdate);
+      };
+      events.on('connection.update', onUpdate);
+    });
+  }
+
   async getGroups(accountId: string): Promise<GroupInfo[]> {
     const socket = this.getSocket(accountId);
     if (!socket) return [];
     const groups = await socket.groupFetchAllParticipating();
     const cache = this.groupMetadataFor(accountId);
     for (const metadata of Object.values(groups)) cache.set(metadata.id, metadata);
-    return Object.values(groups).map(g => ({
-      id: g.id,
-      name: g.subject,
-      description: g.desc ?? undefined,
-      participants: g.participants.map(p => ({
-        id: p.id,
-        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
-        isSuperAdmin: p.admin === 'superadmin',
-      })),
-      createdAt: g.creation ? new Date(g.creation * 1000).toISOString() : undefined,
-      createdBy: g.subjectOwner ?? undefined,
-      isAnnouncement: g.announce ?? false,
-    }));
+    return Object.values(groups).map(toGroupInfo);
   }
 
   async getGroupInfo(accountId: string, groupId: string): Promise<GroupInfo | undefined> {
@@ -533,19 +598,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     try {
       const metadata = await socket.groupMetadata(groupId);
       this.groupMetadataFor(accountId).set(groupId, metadata);
-      return {
-        id: metadata.id,
-        name: metadata.subject,
-        description: metadata.desc ?? undefined,
-        participants: metadata.participants.map(p => ({
-          id: p.id,
-          isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
-          isSuperAdmin: p.admin === 'superadmin',
-        })),
-        createdAt: metadata.creation ? new Date(metadata.creation * 1000).toISOString() : undefined,
-        createdBy: metadata.subjectOwner ?? undefined,
-        isAnnouncement: metadata.announce ?? false,
-      };
+      return toGroupInfo(metadata);
     } catch {
       return undefined;
     }
@@ -613,16 +666,10 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     if (this.clearing.has(accountId) || this.ended.has(accountId)) {
       return;
     }
-    // Carry the last QR over so the API can keep serving it until a new one arrives.
-    const prevQr = this.sockets.get(accountId)?.lastQr;
     this.sockets.delete(accountId);
 
     try {
       await this.connect(accountId, config);
-      const entry = this.sockets.get(accountId);
-      if (entry && !entry.lastQr && prevQr) {
-        entry.lastQr = prevQr;
-      }
     } catch (err) {
       getLogger().error('Reconnection failed', { provider: 'baileys', accountId, error: err instanceof Error ? err.message : String(err) });
       this.scheduleReconnect(accountId, config, undefined);

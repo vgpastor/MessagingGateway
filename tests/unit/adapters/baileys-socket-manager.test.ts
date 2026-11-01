@@ -316,6 +316,147 @@ describe('BaileysSocketManager subscriptions', () => {
   });
 });
 
+describe('BaileysSocketManager.forgetAccount', () => {
+  const GONE_ID = 'test-forget';
+  const goneAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', GONE_ID);
+
+  afterEach(async () => {
+    fakeSockets.length = 0;
+    await rm(goneAuthDir, { recursive: true, force: true });
+  });
+
+  function kept(manager: BaileysSocketManager) {
+    const state = manager as unknown as { retryCounters: Map<string, unknown>; groupMetadata: Map<string, unknown> };
+    return [state.retryCounters.has(GONE_ID), state.groupMetadata.has(GONE_ID)];
+  }
+
+  it('releases what is kept for an account beyond its socket', async () => {
+    const manager = new BaileysSocketManager();
+    await manager.connect(GONE_ID, {});
+    await manager.disconnect(GONE_ID);
+    expect(manager.getConnectionEnd(GONE_ID)).toBe('closed');
+    expect(kept(manager)).toEqual([true, true]);
+
+    manager.forgetAccount(GONE_ID);
+
+    expect(manager.getConnectionEnd(GONE_ID)).toBeUndefined();
+    expect(kept(manager)).toEqual([false, false]);
+  });
+
+  it('does not let a connect still in flight open the socket of the account it forgot', async () => {
+    const manager = new BaileysSocketManager();
+
+    const inFlight = manager.connect(GONE_ID, {});
+    await manager.disconnect(GONE_ID);
+    manager.forgetAccount(GONE_ID);
+    await inFlight;
+
+    expect(fakeSockets).toHaveLength(0);
+    expect(manager.hasSocket(GONE_ID)).toBe(false);
+  });
+});
+
+describe('BaileysSocketManager groups', () => {
+  const GROUP_ID = 'test-groups';
+  const groupsAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', GROUP_ID);
+
+  afterEach(async () => {
+    fakeSockets.length = 0;
+    await rm(groupsAuthDir, { recursive: true, force: true });
+  });
+
+  it('the list and the single lookup describe a group the same way', async () => {
+    const metadata = {
+      id: '123@g.us', subject: 'Grupo', desc: 'Una', creation: 1_700_000_000, subjectOwner: 'o@s.whatsapp.net', announce: true,
+      participants: [{ id: 'a', admin: 'superadmin' }, { id: 'b', admin: 'admin' }, { id: 'c', admin: null }],
+    };
+    const manager = new BaileysSocketManager();
+    await manager.connect(GROUP_ID, {});
+    Object.assign(fakeSockets.at(-1)!, {
+      groupFetchAllParticipating: async () => ({ [metadata.id]: metadata }),
+      groupMetadata: async () => metadata,
+    });
+
+    const expected = {
+      id: '123@g.us', name: 'Grupo', description: 'Una', createdAt: new Date(1_700_000_000_000).toISOString(),
+      createdBy: 'o@s.whatsapp.net', isAnnouncement: true,
+      participants: [
+        { id: 'a', isAdmin: true, isSuperAdmin: true },
+        { id: 'b', isAdmin: true, isSuperAdmin: false },
+        { id: 'c', isAdmin: false, isSuperAdmin: false },
+      ],
+    };
+    expect(await manager.getGroups(GROUP_ID)).toEqual([expected]);
+    expect(await manager.getGroupInfo(GROUP_ID, metadata.id)).toEqual(expected);
+  });
+});
+
+describe('BaileysSocketManager.requestPairingCode', () => {
+  const PAIR_ID = 'test-pair';
+  const pairAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', PAIR_ID);
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    fakeSockets.length = 0;
+    await rm(pairAuthDir, { recursive: true, force: true });
+  });
+
+  async function open(manager: BaileysSocketManager) {
+    await manager.connect(PAIR_ID, {});
+    const socket = fakeSockets.at(-1)! as FakeSocket & { requestPairingCode: ReturnType<typeof vi.fn> };
+    socket.requestPairingCode = vi.fn(async () => 'CODE');
+    return socket;
+  }
+
+  it('waits for the first QR, the sign that the handshake is done, before asking', async () => {
+    const manager = new BaileysSocketManager();
+    const socket = await open(manager);
+
+    const code = manager.requestPairingCode(PAIR_ID, '+34 600');
+    await Promise.resolve();
+    expect(socket.requestPairingCode).not.toHaveBeenCalled();
+
+    socket.ev.emit('connection.update', { qr: 'QR' });
+
+    expect(await code).toBe('CODE');
+    expect(socket.requestPairingCode).toHaveBeenCalledWith('34600');
+    expect(socket.ev.listenerCount('connection.update')).toBe(1);
+  });
+
+  it('asks right away when the QR is already there', async () => {
+    const manager = new BaileysSocketManager();
+    const socket = await open(manager);
+    socket.ev.emit('connection.update', { qr: 'QR' });
+
+    expect(await manager.requestPairingCode(PAIR_ID, '34600')).toBe('CODE');
+  });
+
+  it('gives up after its limit when the handshake never ends', async () => {
+    const manager = new BaileysSocketManager();
+    const socket = await open(manager);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const code = manager.requestPairingCode(PAIR_ID, '34600');
+    const failed = expect(code).rejects.toThrow(/not ready/);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await failed;
+    expect(socket.requestPairingCode).not.toHaveBeenCalled();
+    expect(socket.ev.listenerCount('connection.update')).toBe(1);
+  });
+
+  it('a session that opens while it waits needed no pairing', async () => {
+    const manager = new BaileysSocketManager();
+    const socket = await open(manager);
+
+    const code = manager.requestPairingCode(PAIR_ID, '34600');
+    socket.ev.emit('connection.update', { connection: 'open' });
+
+    await expect(code).rejects.toThrow(/already connected/);
+    expect(socket.requestPairingCode).not.toHaveBeenCalled();
+  });
+});
+
 /** The registries are private state; reach in rather than exposing them just for tests. */
 function handlersFor(manager: BaileysSocketManager, accountId: string): unknown[] {
   const registry = (manager as unknown as { messageHandlers: Map<string, unknown[]> }).messageHandlers;
@@ -365,6 +506,25 @@ describe('BaileysSocketManager reconnection', () => {
     await manager.connect(RECONNECT_ID, config);
     await waitForSockets(1);
   }
+
+  it('does not serve the QR of a closed connection, while it waits nor on the socket that replaces it', async () => {
+    useFakeTimeouts();
+    const manager = new BaileysSocketManager({ random: maxJitter });
+    await connected(manager);
+    fakeSockets[0]!.ev.emit('connection.update', { qr: 'OLD-QR' });
+    expect(manager.getLastQr(RECONNECT_ID)).toBe('OLD-QR');
+
+    fakeSockets[0]!.ev.emit('connection.update', close(428));
+    expect(manager.hasSocket(RECONNECT_ID)).toBe(true);
+    expect(manager.getLastQr(RECONNECT_ID)).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await waitForSockets(2);
+    expect(manager.getLastQr(RECONNECT_ID)).toBeUndefined();
+
+    fakeSockets[1]!.ev.emit('connection.update', { qr: 'NEW-QR' });
+    expect(manager.getLastQr(RECONNECT_ID)).toBe('NEW-QR');
+  });
 
   it('reconnects indefinitely on transient close codes', async () => {
     useFakeTimeouts();

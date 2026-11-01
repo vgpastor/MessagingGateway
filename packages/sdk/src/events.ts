@@ -25,6 +25,9 @@ type EventMap = {
 
 interface ServerMessage { event: string; timestamp?: string; data?: unknown; accounts?: string[]; replyTo?: string }
 
+/** The server closes with this when it refuses the API key: retrying with the same key cannot help. */
+const UNAUTHORIZED_CLOSE_CODE = 4401;
+
 /** No server ping and no message for this long means the connection is dead (the server pings every 30 s). */
 const HEARTBEAT_TIMEOUT_MS = 75_000;
 
@@ -34,7 +37,8 @@ const HEARTBEAT_TIMEOUT_MS = 75_000;
  * Authenticates with the API key in an `Authorization` header (Node) or the
  * `umg.<key>` subprotocol (browser) — never in the URL. Reconnects with
  * exponential backoff and full jitter, and drops connections that go silent
- * for 75 s. After a reconnect, use `client.messages.after(...)` with the last
+ * for 75 s, but not after a `4401`: the key was refused, so it emits `error` and stays down until the next
+ * `connect()`. After a reconnect, use `client.messages.after(...)` with the last
  * seen `accountSeq` to catch up on anything missed, and deduplicate by `id`: a
  * message may arrive both ways.
  *
@@ -106,9 +110,13 @@ export class MessagingGatewayEvents {
           this.ws = null;
           this.clearWatchdog();
         }
+        const refused = code === UNAUTHORIZED_CLOSE_CODE;
         // Schedule the reconnect before notifying anyone: nothing a listener does may prevent it
-        if (wasCurrent && this.config.autoReconnect && !this.intentionalClose) {
+        if (wasCurrent && this.config.autoReconnect && !this.intentionalClose && !refused) {
           this.scheduleReconnect();
+        }
+        if (wasCurrent && refused) {
+          this.emit('error', new Error(`The gateway refused the API key, so the client will not reconnect: ${reason}`));
         }
         this.emit('disconnected', code, reason);
       },

@@ -121,7 +121,7 @@ accounts:
       tags: [whatsapp, main]
 ```
 
-`conversations` (also accepted by `POST /api/v1/accounts`) limits which inbound conversations an account keeps: `'*'`, the default, keeps them all; a list of chat/group JIDs drops every other conversation before it is stored.
+`conversations` (also accepted by `POST /api/v1/accounts` and `PUT /api/v1/accounts/:id`) limits which inbound conversations an account keeps: `'*'`, the default, keeps them all; a list of chat/group JIDs drops every other conversation before it is stored.
 
 ## API Reference
 
@@ -158,11 +158,11 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `GET` | `/api/v1/accounts` | List all accounts |
 | `GET` | `/api/v1/accounts/:id` | Get account (includes QR code while connecting) |
 | `POST` | `/api/v1/accounts` | Create account |
-| `PUT` | `/api/v1/accounts/:id` | Update account. `status: suspended` closes its connection and keeps the session on disk; reactivating connects it again with no new QR |
+| `PUT` | `/api/v1/accounts/:id` | Update account. `status: suspended` closes its connection and keeps the session on disk; reactivating connects it again with no new QR. While suspended, connect, pair and reset answer `409 ACCOUNT_SUSPENDED` |
 | `DELETE` | `/api/v1/accounts/:id` | Delete account |
 | `POST` | `/api/v1/accounts/:id/connect` | Initiate connection (generates QR) — self-auth providers |
 | `POST` | `/api/v1/accounts/:id/pair` | Request a pairing code instead of a QR — self-auth providers |
-| `POST` | `/api/v1/accounts/:id/disconnect` | Log out: unlinks the device from WhatsApp, so connecting again needs a new pairing. To stop an account and keep its session, suspend it |
+| `POST` | `/api/v1/accounts/:id/disconnect` | Log out: unlinks the device from WhatsApp and deletes the stored session, so the next connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it |
 | `POST` | `/api/v1/accounts/:id/reset` | Clear the stored session and reconnect for a fresh QR — use when auth is expired and the account is stuck reconnecting without emitting a QR |
 | `GET` | `/api/v1/accounts/:id/health` | Per-account connection health |
 
