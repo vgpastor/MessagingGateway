@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { runRetention, startRetentionSchedule, RETENTION_INTERVAL_MS } from '../../../src/core/retention/retention-job.js';
 import { loadEnvConfig } from '../../../src/infrastructure/config/env.config.js';
-import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
+import { RETENTION_DELETE_BATCH, SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 import { DiskMediaStore } from '../../../src/persistence/media/disk-media-store.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 
@@ -268,5 +268,40 @@ describe('startRetentionSchedule', () => {
     expect(unref).toHaveBeenCalledTimes(1);
     schedule.stop();
     spy.mockRestore();
+  });
+});
+
+describe('SQLite retention over many rows', () => {
+  it('deletes in batches and lets the event loop run between them', async () => {
+    const store = new SqliteMessageStore(':memory:');
+    await store.init();
+    await store.runMigrations();
+    const db = (store as unknown as { db: Database }).db;
+    const total = RETENTION_DELETE_BATCH * 2 + 10;
+    db.transaction(() => {
+      for (let n = 0; n < total; n++) {
+        const row = envelope(`old-${n}`, `WA-${n}`, { type: 'text', body: 'x' });
+        void store.save(row);
+      }
+    })();
+    db.prepare('UPDATE messages SET created_at = ?').run(new Date(Date.now() - 10 * DAY_MS).toISOString());
+    await store.save(envelope('fresh', 'WA-fresh', { type: 'text', body: 'keep me' }));
+
+    let turns = 0;
+    let finished = false;
+    const countTurns = () => {
+      turns += 1;
+      if (!finished) setImmediate(countTurns);
+    };
+    setImmediate(countTurns);
+
+    const deleted = await store.deleteOlderThan(5);
+    finished = true;
+
+    expect(deleted).toBe(total);
+    expect(turns).toBeGreaterThanOrEqual(2);
+    expect(await store.count()).toBe(1);
+    expect((await store.search('keep')).messages.map((m) => m.id)).toEqual(['fresh']);
+    await store.close();
   });
 });

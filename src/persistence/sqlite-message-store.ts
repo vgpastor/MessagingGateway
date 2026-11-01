@@ -32,6 +32,9 @@ const REFUSED_DATA_CODE = /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG)/;
 const isRefusedData = (err: unknown): boolean =>
   typeof (err as { code?: unknown }).code === 'string' && REFUSED_DATA_CODE.test((err as { code: string }).code);
 
+/** Rows a retention delete takes at a time. SQLite runs on the event loop: each batch holds up every request and message. */
+export const RETENTION_DELETE_BATCH = 1_000;
+
 /** Thrown inside the transaction, so it rolls back the number taken for a message already stored. */
 class DuplicateMessage extends Error {
   constructor(readonly result: InsertResult) {
@@ -367,8 +370,16 @@ export class SqliteMessageStore implements FullMessageStorePort {
   }
 
   async deleteOlderThan(days: number): Promise<number> {
-    const db = this.requireDb();
-    return db.prepare('DELETE FROM messages WHERE created_at < ?').run(cutoffUTC(days)).changes;
+    const cutoff = cutoffUTC(days);
+    let deleted = 0;
+    for (;;) {
+      const { changes } = this.requireDb().prepare(
+        'DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages WHERE created_at < ? LIMIT ?)',
+      ).run(cutoff, RETENTION_DELETE_BATCH);
+      deleted += changes;
+      if (changes < RETENTION_DELETE_BATCH) return deleted;
+      await new Promise((resolve) => { setImmediate(resolve); });
+    }
   }
 
   async maxAccountSeq(accountId: string): Promise<number> {
