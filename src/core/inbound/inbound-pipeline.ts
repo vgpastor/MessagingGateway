@@ -1,4 +1,5 @@
 import type { ChannelAccount } from '../accounts/channel-account.js';
+import type { ChannelAccountRepository } from '../accounts/channel-account.repository.js';
 import type { EventBus } from '../event-bus.js';
 import { Events, createEvent } from '../events.js';
 import type { MessageInboundPayload } from '../events.js';
@@ -21,6 +22,8 @@ export interface InboundPipelineDeps {
   eventBus: EventBus;
   media: MediaService;
   metrics: MetricsPort;
+  /** Where {@link InboundPipeline.replayFailed} reads an account as it is today: its list may have changed since. */
+  accounts: Pick<ChannelAccountRepository, 'findById'>;
   /** Resolves a WhatsApp LID to its phone JID (`digits[:device]@s.whatsapp.net`) or bare number. */
   resolveLidToPhone?: (accountId: string, lid: string) => Promise<string | undefined>;
   /** Turns the provider's raw message into something storable as JSON (strip binaries...). Identity by default. */
@@ -95,15 +98,52 @@ export class InboundPipeline {
    * these messages take their `accountSeq` ahead of new ones. They were already delivered live
    * (or a consumer gets them from the log through the gap), so nothing is emitted again; the
    * media they left `pending` is picked up by {@link MediaService.resumePendingMedia}.
+   *
+   * The conversation filter applies again, failing closed like the live path: what it rejects,
+   * or cannot judge, is not stored and leaves the log.
    */
   async replayFailed(): Promise<void> {
     const { store, failedLog } = this.deps;
     if (!store || !failedLog) return;
+    let discarded = 0;
     const { saved, kept } = await failedLog.replay(async ({ envelope, raw }) => {
+      const reason = await this.replayRejection(envelope);
+      if (reason) {
+        discarded += 1;
+        this.logger.warn('Discarded an inbound message from the failed log', { accountId: envelope.accountId, messageId: envelope.id, reason });
+        return;
+      }
       await store.insertInbound(envelope, raw);
     });
-    if (saved > 0) this.logger.info('Stored inbound messages from the failed log', { saved });
+    if (saved > discarded) this.logger.info('Stored inbound messages from the failed log', { saved: saved - discarded });
     if (kept > 0) this.logger.error('Inbound messages remain in the failed log', { kept });
+  }
+
+  /** Why this entry must not be stored, if so. Resolving a LID on the way leaves the envelope as live enrichment would. */
+  private async replayRejection(envelope: UnifiedEnvelope): Promise<string | undefined> {
+    const account = await this.deps.accounts.findById(envelope.accountId);
+    if (!account) return 'the account no longer exists';
+    if (this.judgesConversations(account) && envelope.conversationId.endsWith('@lid')) {
+      const phoneJid = await this.resolveLidToPhoneJid(envelope.accountId, envelope.conversationId);
+      if (!phoneJid) return 'its conversation could not be resolved to judge it';
+      envelope.conversationId = phoneJid;
+      envelope.sender.id = phoneJid;
+    }
+    return this.accepts(account, envelope) ? undefined : 'the account excludes its conversation';
+  }
+
+  private judgesConversations(account: ChannelAccount): boolean {
+    return account.conversations !== undefined && account.conversations !== '*';
+  }
+
+  private async resolveLidToPhoneJid(accountId: string, lid: string): Promise<string | undefined> {
+    try {
+      const digits = (await this.deps.resolveLidToPhone?.(accountId, lid))?.split('@')[0]?.split(':')[0]?.replace(/\D/g, '');
+      return digits ? `${digits}@s.whatsapp.net` : undefined;
+    } catch (err) {
+      this.logger.warn('Failed to resolve a LID from the failed log', { accountId, error: errorMessage(err) });
+      return undefined;
+    }
   }
 
   /**
@@ -125,8 +165,9 @@ export class InboundPipeline {
     this.unsaved.clear();
     for (const { account, envelope, raw, enrich } of left) {
       try {
-        // An envelope still to enrich may carry a conversation the filter cannot judge (a LID): keep it.
-        if (!enrich && !this.accepts(account, envelope)) continue;
+        // Only a LID still to enrich cannot be judged yet: it goes to the log, whose replay judges it again.
+        const unjudgeable = enrich !== undefined && envelope.conversationId.endsWith('@lid');
+        if (!unjudgeable && !this.accepts(account, envelope)) continue;
         this.markMediaPending(envelope);
         await this.writeOff(envelope, this.storableRaw(raw), new Error('shutting down'));
       } catch (err) {

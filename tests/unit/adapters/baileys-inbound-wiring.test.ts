@@ -146,7 +146,7 @@ describe('Baileys inbound wiring: order and robustness', () => {
     const store = new SqliteMessageStore(':memory:');
     await store.init();
     await store.runMigrations();
-    const pipeline = new RealInboundPipeline({ store, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics });
+    const pipeline = new RealInboundPipeline({ store, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics, accounts: { findById: async () => undefined } });
     const account = {
       id: accountId, alias: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {},
       identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
@@ -236,7 +236,7 @@ describe('Baileys inbound wiring: messages that failed to decrypt', () => {
     const eventBus = new EventBus();
     const emitted: Array<{ content: { type: string; body?: string }; accountSeq?: number }> = [];
     eventBus.on<{ envelope: (typeof emitted)[number] }>(Events.MESSAGE_INBOUND, (e) => { emitted.push(e.data.envelope); });
-    const pipeline = new RealInboundPipeline({ store, eventBus, media: noopMediaService, metrics: noopMetrics });
+    const pipeline = new RealInboundPipeline({ store, eventBus, media: noopMediaService, metrics: noopMetrics, accounts: { findById: async () => undefined } });
     const metrics = { ...noopMetrics, inboundSkipped: vi.fn() };
     const provider = createBaileysProvider({ metrics });
     const account = {

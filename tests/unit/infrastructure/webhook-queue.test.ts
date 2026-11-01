@@ -159,7 +159,7 @@ describe('WebhookForwarder delivery queues', () => {
     const forwarder = new WebhookForwarder(noConfigs, 'https://hung.example.com', undefined);
     const eventBus = new EventBus();
     eventBus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (event) => forwarder.forward(event.data.envelope));
-    const pipeline = new InboundPipeline({ store, eventBus, media: noopMediaService, metrics: noopMetrics });
+    const pipeline = new InboundPipeline({ store, eventBus, media: noopMediaService, metrics: noopMetrics, accounts: { findById: async () => undefined } });
     const account = { id: 'wa-1', provider: 'baileys' } as ChannelAccount;
 
     await pipeline.handle(account, envelope('m1'), {});

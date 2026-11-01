@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import { EventBus } from '../../../src/core/event-bus.js';
 import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
@@ -58,6 +59,7 @@ function setup(opts: {
   resolveLidToPhone?: (accountId: string, lid: string) => Promise<string | undefined>;
   toStorableRaw?: (raw: unknown) => unknown;
   persistRetryDelaysMs?: readonly number[];
+  account?: ChannelAccount | undefined;
 } = {}) {
   const eventBus = new EventBus();
   const emitted: UnifiedEnvelope[] = [];
@@ -77,6 +79,7 @@ function setup(opts: {
   const failedLog: FailedInboundLog = { append: vi.fn(async () => {}), replay: vi.fn(async () => ({ saved: 0, kept: 0 })) };
   const pipeline = new InboundPipeline({
     store, failedLog, eventBus, media, metrics,
+    accounts: { findById: async () => ('account' in opts ? opts.account : makeAccount()) },
     resolveLidToPhone: opts.resolveLidToPhone,
     toStorableRaw: opts.toStorableRaw,
     persistRetryDelaysMs: opts.persistRetryDelaysMs ?? [],
@@ -85,6 +88,7 @@ function setup(opts: {
 }
 
 const raw = { key: { id: 'WAID1' } } as never;
+const originalLogger = getLogger();
 
 describe('InboundPipeline', () => {
   it('drops conversations outside account allowlist', async () => {
@@ -255,6 +259,97 @@ describe('InboundPipeline', () => {
 
       expect(insertInbound).toHaveBeenCalledWith(envelope, { stored: true });
       expect(emitted).toEqual([]);
+    });
+
+    async function replayOne(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<void> {
+      vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
+        await save({ envelope, raw: {} });
+        return { saved: 1, kept: 0 };
+      });
+      await context.pipeline.replayFailed();
+    }
+
+    function capturingWarnings() {
+      const warn = vi.fn();
+      const fake = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn(), child: () => fake };
+      setGlobalLogger(fake as unknown as Logger);
+      return warn;
+    }
+
+    afterEach(() => setGlobalLogger(originalLogger));
+
+    it('does not store a conversation the account excludes today, and says so', async () => {
+      const warn = capturingWarnings();
+      const context = setup({ account: makeAccount({ conversations: ['34600999999@s.whatsapp.net'] }) });
+
+      await replayOne(context, makeEnvelope({ id: 'excluded' }));
+
+      expect(context.insertInbound).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'excluded' }));
+    });
+
+    it('does not store a message of an account that no longer exists', async () => {
+      const warn = capturingWarnings();
+      const context = setup({ account: undefined });
+
+      await replayOne(context, makeEnvelope({ id: 'orphan' }));
+
+      expect(context.insertInbound).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'orphan' }));
+    });
+
+    it('does not store a LID it cannot resolve for an account with a list', async () => {
+      const warn = capturingWarnings();
+      const context = setup({
+        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
+        resolveLidToPhone: async () => undefined,
+      });
+
+      await replayOne(context, makeEnvelope({ id: 'unresolved', conversationId: '100000000000001@lid' }));
+
+      expect(context.insertInbound).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ messageId: 'unresolved' }));
+    });
+
+    it('treats a resolver that fails as a LID it cannot resolve', async () => {
+      capturingWarnings();
+      const context = setup({
+        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
+        resolveLidToPhone: async () => { throw new Error('no socket'); },
+      });
+
+      await replayOne(context, makeEnvelope({ conversationId: '100000000000001@lid' }));
+
+      expect(context.insertInbound).not.toHaveBeenCalled();
+    });
+
+    it('judges a LID it can resolve by its phone, and stores it under that conversation', async () => {
+      const allowed = setup({
+        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
+        resolveLidToPhone: async () => '34600111222:5@s.whatsapp.net',
+      });
+      await replayOne(allowed, makeEnvelope({ conversationId: '100000000000001@lid' }));
+      expect(allowed.insertInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: '34600111222@s.whatsapp.net' }), {},
+      );
+
+      capturingWarnings();
+      const excluded = setup({
+        account: makeAccount({ conversations: ['34600999999@s.whatsapp.net'] }),
+        resolveLidToPhone: async () => '34600111222:5@s.whatsapp.net',
+      });
+      await replayOne(excluded, makeEnvelope({ conversationId: '100000000000001@lid' }));
+      expect(excluded.insertInbound).not.toHaveBeenCalled();
+    });
+
+    it('stores a LID as it is when the account has no list: there is nothing to judge', async () => {
+      const context = setup({ account: makeAccount(), resolveLidToPhone: async () => undefined });
+
+      await replayOne(context, makeEnvelope({ conversationId: '100000000000001@lid' }));
+
+      expect(context.insertInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: '100000000000001@lid' }), {},
+      );
     });
 
     it('does nothing when storage is disabled', async () => {
@@ -451,7 +546,7 @@ describe('InboundPipeline', () => {
       expect(insertInbound).toHaveBeenCalledTimes(1);
     });
 
-    it('a shutdown keeps a message it could not enrich: the filter cannot judge an unresolved conversation', async () => {
+    it('a shutdown keeps a message it could not enrich only when its conversation is an unresolved LID', async () => {
       const { pipeline, failedLog } = setup();
       const account = makeAccount({ conversations: ['34600111222@s.whatsapp.net'] });
 
@@ -459,6 +554,25 @@ describe('InboundPipeline', () => {
       await pipeline.drain(10);
 
       expect(failedLog.append).toHaveBeenCalledTimes(1);
+    });
+
+    it('a shutdown applies the filter to a message not enriched yet whose conversation can be judged', async () => {
+      const { pipeline, failedLog } = setup();
+      const account = makeAccount({ conversations: ['34600111222@s.whatsapp.net'] });
+
+      void pipeline.handle(account, makeEnvelope({ conversationId: '120363000000000009@g.us' }), {}, () => new Promise(() => {}));
+      await pipeline.drain(10);
+
+      expect(failedLog.append).not.toHaveBeenCalled();
+    });
+
+    it('an enrichment that fails leaves an unresolved LID out of a filtered account, as in the live path', async () => {
+      const { pipeline, insertInbound } = setup();
+      const account = makeAccount({ conversations: ['34600111222@s.whatsapp.net'] });
+
+      await pipeline.handle(account, makeEnvelope({ conversationId: '100000000000001@lid' }), {}, async () => { throw new Error('no socket'); });
+
+      expect(insertInbound).not.toHaveBeenCalled();
     });
   });
 

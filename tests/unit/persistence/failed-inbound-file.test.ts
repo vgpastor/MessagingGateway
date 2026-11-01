@@ -18,6 +18,7 @@ import { FailedInboundFile } from '../../../src/persistence/failed-inbound-file.
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 
 const account = { id: 'wa-1', provider: 'baileys' } as ChannelAccount;
+const knownAccount = { findById: async () => account };
 
 function envelope(id: string, waId: string, content: UnifiedEnvelope['content'] = { type: 'text', body: 'hola' }): UnifiedEnvelope {
   const when = new Date('2026-05-01T10:00:00.000Z');
@@ -57,13 +58,39 @@ describe('FailedInboundFile', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  const pipelineOn = (log: Pick<MessageLogPort, 'insertInbound'>) => new InboundPipeline({
+  const pipelineOn = (log: Pick<MessageLogPort, 'insertInbound'>, accounts: { findById(id: string): Promise<ChannelAccount | undefined> } = knownAccount) => new InboundPipeline({
     store: log as MessageLogPort,
     failedLog: file,
     eventBus: new EventBus(),
     media: noopMediaService,
     metrics: noopMetrics,
+    accounts,
     persistRetryDelaysMs: [],
+  });
+
+  it('what the filter or a missing account rejects at the next start is neither stored nor kept in the file', async () => {
+    await file.append({ envelope: envelope('stays-out', 'W1'), raw: undefined });
+    const withList = { ...account, conversations: ['other@s.whatsapp.net'] } as ChannelAccount;
+
+    await pipelineOn(store, { findById: async () => withList }).replayFailed();
+
+    expect(await store.count({ accountId: 'wa-1' })).toBe(0);
+    expect(existsSync(path)).toBe(false);
+
+    await file.append({ envelope: envelope('orphan', 'W2'), raw: undefined });
+    await pipelineOn(store, { findById: async () => undefined }).replayFailed();
+
+    expect(await store.count({ accountId: 'wa-1' })).toBe(0);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('keeps the entry when it cannot even look the account up: nothing was decided', async () => {
+    await file.append({ envelope: envelope('m1', 'W1'), raw: undefined });
+
+    await pipelineOn(store, { findById: async () => { throw new Error('repo down'); } }).replayFailed();
+
+    expect(await store.count({ accountId: 'wa-1' })).toBe(0);
+    expect(existsSync(path)).toBe(true);
   });
 
   it('a message the store refused reaches the log at the next start, with its sequence, and the file is emptied', async () => {

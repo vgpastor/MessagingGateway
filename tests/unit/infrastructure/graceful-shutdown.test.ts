@@ -166,6 +166,7 @@ describe('gatewayShutdownSteps', () => {
         eventBus,
         media: noopMediaService,
         metrics: noopMetrics,
+        accounts: { findById: async () => undefined },
       });
       const deps: GatewayShutdownDeps = {
         server: { close: async () => { order.push('server'); } },

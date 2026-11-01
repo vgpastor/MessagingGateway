@@ -306,6 +306,7 @@ describe('Inbound message persistence flow', () => {
       eventBus,
       media: noopMediaService,
       metrics: noopMetrics,
+      accounts: { findById: async () => undefined },
     });
   });
 

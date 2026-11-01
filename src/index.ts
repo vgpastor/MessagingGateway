@@ -213,6 +213,7 @@ async function main() {
     eventBus,
     media: mediaService,
     metrics,
+    accounts: accountRepository,
     resolveLidToPhone: baileysProvider.resolveLidToPhone,
     toStorableRaw,
   });
