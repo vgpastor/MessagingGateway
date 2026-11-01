@@ -745,6 +745,7 @@ describe('the id of an account created through the API', () => {
 describe('an account change that cannot reach the disk', () => {
   let app: FastifyInstance;
   let repository: InstanceType<typeof InMemoryAccountRepository>;
+  let registry: InstanceType<typeof ProviderRegistry>;
   let dir: string;
 
   beforeAll(async () => {
@@ -757,7 +758,7 @@ describe('an account change that cannot reach the disk', () => {
       metadata: { owner: 'org', environment: 'production', tags: [] },
     } as ChannelAccount;
     repository = new InMemoryAccountRepository([existing], join(notADirectory, 'accounts.yaml'));
-    const registry = new ProviderRegistry();
+    registry = new ProviderRegistry();
     registry.register(baileysProvider);
     app = await createServer({
       accountRepository: repository,
@@ -795,12 +796,13 @@ describe('an account change that cannot reach the disk', () => {
   });
 
   it('DELETE answers 500, the account is still there, and its socket and session are left alone', async () => {
-    const manager = baileysProvider.connection!();
-    const disconnect = vi.spyOn(manager, 'disconnect');
-    const clearSession = vi.spyOn(manager, 'clearSession' as never);
-    const forgetAccount = vi.spyOn(manager, 'forgetAccount' as never);
+    const disconnect = vi.fn(async () => {});
+    const clearSession = vi.fn(async () => {});
+    const forgetAccount = vi.fn();
+    const managed = vi.spyOn(registry, 'getConnectionManager').mockReturnValue({ disconnect, clearSession, forgetAccount } as never);
 
     const res = await app.inject({ method: 'DELETE', url: '/api/v1/accounts/existing', headers: HEADERS });
+    managed.mockRestore();
 
     expect(res.statusCode).toBe(500);
     expect(res.json().code).toBe('SAVE_FAILED');
@@ -808,6 +810,5 @@ describe('an account change that cannot reach the disk', () => {
     expect(disconnect).not.toHaveBeenCalled();
     expect(clearSession).not.toHaveBeenCalled();
     expect(forgetAccount).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
   });
 });
