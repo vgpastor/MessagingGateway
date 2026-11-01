@@ -247,7 +247,7 @@ describe('accounts created at runtime', () => {
   it('a PUT on an account already suspended closes nothing again', async () => {
     await create('hot-10c');
     await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { status: 'suspended' } });
-    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-10c/connect', headers: HEADERS });
+    await baileysProvider.connection!().connect('hot-10c', {});
     const socket = sockets.at(-1)!;
 
     await app.inject({ method: 'PUT', url: '/api/v1/accounts/hot-10c', headers: HEADERS, payload: { alias: 'renamed' } });
@@ -392,6 +392,50 @@ describe('accounts created at runtime', () => {
     await flush();
 
     expect(inbound.handle).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a suspended account opens no socket', () => {
+    async function suspended(id: string) {
+      await create(id);
+      await app.inject({ method: 'PUT', url: `/api/v1/accounts/${id}`, headers: HEADERS, payload: { status: 'suspended' } });
+    }
+
+    it.each([
+      ['connect', undefined],
+      ['pair', { phoneNumber: '+34600000009' }],
+      ['reset', undefined],
+    ])('POST /accounts/:id/%s answers 409 and connects nothing', async (action, payload) => {
+      const id = `hot-20-${action}`;
+      await suspended(id);
+      const before = sockets.length;
+
+      const response = await app.inject({ method: 'POST', url: `/api/v1/accounts/${id}/${action}`, headers: HEADERS, payload });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().code).toBe('ACCOUNT_SUSPENDED');
+      expect(sockets).toHaveLength(before);
+      expect(registry.getConnectionManager('baileys')!.hasConnection(id)).toBe(false);
+    });
+
+    it('POST /accounts/:id/reset keeps the session of a suspended account', async () => {
+      await suspended('hot-21');
+      const authDir = resolve(process.cwd(), 'data', 'baileys-auth', 'hot-21');
+      await mkdir(authDir, { recursive: true });
+      await writeFile(resolve(authDir, 'creds.json'), '{}');
+
+      await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-21/reset', headers: HEADERS });
+
+      expect(existsSync(resolve(authDir, 'creds.json'))).toBe(true);
+    });
+
+    it('declares the 409 in the contract', async () => {
+      const paths = (await app.inject({ method: 'GET', url: '/openapi.json' })).json().paths;
+
+      for (const action of ['connect', 'pair', 'reset']) {
+        expect(paths[`/api/v1/accounts/{id}/${action}`].post.responses['409']).toBeDefined();
+      }
+    });
   });
 
   describe('PUT /accounts/:id validates what it stores', () => {

@@ -92,6 +92,15 @@ function validatedBody<T>(validate: (body: unknown) => ValidationResult<T>) {
   };
 }
 
+/** A suspended account must not connect: only reactivating it does, through PUT. */
+function accountSuspended(accountId: string) {
+  return {
+    error: 'Conflict',
+    code: 'ACCOUNT_SUSPENDED',
+    message: `Account '${accountId}' is suspended. Reactivate it with PUT /api/v1/accounts/${accountId} first.`,
+  };
+}
+
 function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
   const manager = registry.getConnectionManager(account.provider);
   if (!manager) return { managed: false as const };
@@ -457,6 +466,7 @@ export async function accountsController(
         200: accountResponseSchema,
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -476,6 +486,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support managed connections. Use credentials instead.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     await connectWired(account, manager);
@@ -511,6 +525,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -530,6 +545,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support pairing codes.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     const phoneNumber = request.body?.phoneNumber
@@ -639,6 +658,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
         500: errorResponseSchema,
       },
     },
@@ -659,6 +679,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support managed connections.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     const clearSession = manager.clearSession?.bind(manager);
