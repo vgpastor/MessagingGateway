@@ -79,6 +79,7 @@ export function createApiKeyGuard(keys: ApiKeys) {
     if (!provided) {
       reply.status(401).send({
         error: 'Unauthorized',
+        code: 'MISSING_API_KEY',
         message: 'Missing API key. Provide via Authorization: Bearer <key> or X-API-Key header.',
       });
       return;
@@ -88,6 +89,7 @@ export function createApiKeyGuard(keys: ApiKeys) {
     if (!scope) {
       reply.status(401).send({
         error: 'Unauthorized',
+        code: 'INVALID_API_KEY',
         message: 'Invalid API key.',
       });
       return;
@@ -96,6 +98,7 @@ export function createApiKeyGuard(keys: ApiKeys) {
     if (scope === 'read' && !isReadScopeAllowed(request)) {
       reply.status(403).send({
         error: 'Forbidden',
+        code: 'READ_ONLY_API_KEY',
         message: 'This API key is read-only: it can only read messages and media.',
       });
       return;

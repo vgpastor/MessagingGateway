@@ -54,6 +54,16 @@ describe('createApiKeyGuard', () => {
 
     expect(reply.statusCode).toBe(401);
     expect((reply.body as Record<string, string>).error).toBe('Unauthorized');
+    expect((reply.body as Record<string, string>).code).toBe('MISSING_API_KEY');
+  });
+
+  it('gives an invalid key its own code', async () => {
+    const guard = createApiKeyGuard({ adminKey: 'correct-key' });
+    const reply = mockReply();
+
+    await guard(mockRequest({ 'x-api-key': 'wrong-key' }), reply);
+
+    expect((reply.body as Record<string, string>).code).toBe('INVALID_API_KEY');
   });
 
   it('should reject invalid key', async () => {
@@ -175,6 +185,7 @@ describe('createApiKeyGuard with a read-only key', () => {
 
     expect(reply.statusCode).toBe(403);
     expect((reply.body as Record<string, string>).error).toBe('Forbidden');
+    expect((reply.body as Record<string, string>).code).toBe('READ_ONLY_API_KEY');
   });
 
   it('rejects an unknown key with 401, not 403', async () => {
