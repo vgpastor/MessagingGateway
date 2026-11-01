@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ChannelAccount } from '../../../core/accounts/channel-account.js';
 import type { ProviderHealthChecker, ValidationResult } from '../../../core/messaging/provider-health.port.js';
 import type { BaileysSocketManager } from './baileys-socket.manager.js';
@@ -9,9 +10,6 @@ export class BaileysHealthChecker implements ProviderHealthChecker {
   constructor(private readonly socketManager: BaileysSocketManager) {}
   async validate(account: ChannelAccount): Promise<ValidationResult> {
     const config = parseBaileysConfig(account.providerConfig);
-    const authDir = this.socketManager.resolveAuthDir(account.id, config);
-    const hasAuthFiles = existsSync(authDir);
-
     if (this.socketManager.isConnected(account.id)) {
       return {
         status: 'active',
@@ -25,18 +23,37 @@ export class BaileysHealthChecker implements ProviderHealthChecker {
 
     this.reconnectIfNeeded(account, config);
 
-    if (hasAuthFiles) {
+    if (this.socketManager.getConnectionEnd(account.id)) {
       return {
         status: 'auth_expired',
         credentialsConfigured: true,
-        detail: 'Auth files exist but socket is not connected. Reconnection in progress.',
+        detail: `Not connected and not trying to: re-pair it with POST /api/v1/accounts/${account.id}/reset.`,
       };
     }
 
+    if (this.socketManager.getLastQr(account.id)) {
+      return {
+        status: 'unchecked',
+        credentialsConfigured: false,
+        detail: 'Waiting for the QR code to be scanned.',
+      };
+    }
+
+    // The auth dir alone says nothing: it exists from the first attempt to connect.
+    const authDir = this.socketManager.resolveAuthDir(account.id, config);
+    if (!existsSync(join(authDir, 'creds.json'))) {
+      return {
+        status: 'unchecked',
+        credentialsConfigured: false,
+        detail: 'No stored session. QR code scan required on first connection.',
+      };
+    }
+
+    // A connection that is down for now settles nothing about the session.
     return {
-      status: 'unchecked',
-      credentialsConfigured: false,
-      detail: 'No auth files found. QR code scan required on first connection.',
+      status: account.status,
+      credentialsConfigured: true,
+      detail: 'Stored session found, not connected right now.',
     };
   }
 

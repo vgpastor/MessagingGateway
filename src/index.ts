@@ -29,6 +29,7 @@ import type { MessageInboundPayload, ConnectionUpdatePayload, MessageSendRequest
 import { messagesTotal, connectionStatus } from './infrastructure/metrics/prometheus.js';
 import { WebhookForwarder } from './connections/webhooks/webhook-forwarder.js';
 import { subscribeConnectionAlerts } from './connections/webhooks/connection-alert.subscriber.js';
+import { subscribeAccountStatus } from './core/accounts/account-status.subscriber.js';
 import { FileWebhookConfigStore } from './connections/webhooks/file-webhook-config.store.js';
 import { WebSocketBroadcaster } from './connections/ws/websocket-broadcaster.js';
 import { CredentialValidator } from './infrastructure/credential-validator.js';
@@ -87,18 +88,6 @@ function wireEventBus(
       { account: accountId, provider: account.provider },
       status === 'connected' ? 1 : 0,
     );
-
-    const logger = getLogger();
-    if (status === 'connected' && account.status !== 'active') {
-      await accountRepository.update(accountId, { status: 'active' });
-      logger.info('Status auto-updated to active (connected)', { accountId });
-    } else if (status === 'auth_expired' && account.status !== 'auth_expired') {
-      await accountRepository.update(accountId, { status: 'auth_expired' });
-      logger.warn('Status auto-updated to auth_expired (session revoked)', { accountId });
-    } else if (status === 'disconnected' && account.status === 'active') {
-      await accountRepository.update(accountId, { status: 'auth_expired' });
-      logger.info('Status auto-updated to auth_expired (disconnected)', { accountId });
-    }
   });
 
   eventBus.on<MessageSendRequestPayload>(Events.MESSAGE_SEND_REQUEST, async (event) => {
@@ -190,6 +179,7 @@ async function main() {
 
   // Wire event bus
   const wsBroadcaster = wireEventBus(eventBus, webhookForwarder, accountRepository, messageRouter, metrics);
+  subscribeAccountStatus(eventBus, accountRepository);
 
   // Inbound media goes to disk (never to the database); without a message log there is nowhere to record it.
   const mediaStore = new DiskMediaStore(envConfig.mediaDir);
