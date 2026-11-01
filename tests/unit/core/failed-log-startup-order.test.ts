@@ -147,6 +147,24 @@ describe('the failed log through a real start', () => {
     await pipeline.drain(10);
   });
 
+  it('a LID unresolved for more than 7 days leaves the file after connecting, not before', async () => {
+    const old = envelope('old', UNKNOWN_LID);
+    old.gateway.receivedAt = new Date(Date.now() - 8 * 86_400_000);
+    await file.append({ envelope: old, raw: undefined });
+    const { pipeline, connect } = start();
+
+    await pipeline.replayFailed();
+    expect(await fileIds()).toEqual(['old']);
+
+    await connect();
+    pipeline.replayAfterConnecting(1);
+    await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+
+    const [rejected] = (await readFile(join(dir, 'failed-inbound.rejected.jsonl'), 'utf8')).trim().split('\n');
+    expect(JSON.parse(JSON.parse(rejected!).line).envelope.id).toBe('old');
+    await pipeline.drain(10);
+  });
+
   it('gives the accounts a margin to connect, and a shutdown cancels the second pass', async () => {
     expect(REPLAY_AFTER_CONNECT_MS).toBeGreaterThanOrEqual(30_000);
     await file.append({ envelope: envelope('lid', KNOWN_LID), raw: undefined });

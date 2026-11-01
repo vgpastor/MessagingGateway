@@ -1,11 +1,14 @@
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { FailedInboundEntry, FailedInboundLog } from '../core/inbound/failed-inbound-log.js';
+import { PermanentStoreError } from '../core/errors.js';
+import type { FailedInboundEntry, FailedInboundLog, FailedInboundReplay } from '../core/inbound/failed-inbound-log.js';
 import { getLogger } from '../core/logger/logger.port.js';
 import type { UnifiedEnvelope } from '../core/messaging/unified-envelope.js';
 
 function parseEntry(line: string): FailedInboundEntry {
   const { envelope, raw } = JSON.parse(line) as { envelope: UnifiedEnvelope; raw?: unknown };
+  // What a LID's wait is measured from: without it, the entry could wait for ever.
+  if (Number.isNaN(new Date(envelope.gateway.receivedAt).getTime())) throw new RangeError('gateway.receivedAt is not a date');
   return {
     envelope: {
       ...envelope,
@@ -20,14 +23,29 @@ function parseEntry(line: string): FailedInboundEntry {
 /** Windows cannot flush a directory (EPERM), and NTFS journals the rename anyway. */
 const CANNOT_SYNC_A_DIRECTORY = new Set(['EPERM', 'EISDIR', 'EINVAL']);
 
-/** {@link FailedInboundLog} on a JSON Lines file: one entry per line, flushed to disk before `append` resolves. */
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** A line on its way to the rejected file, as it was in the log: it may not even be JSON. */
+interface RejectedLine {
+  line: string;
+  reason: string;
+}
+
+/**
+ * {@link FailedInboundLog} on a JSON Lines file: one entry per line, flushed to disk before `append` resolves.
+ * What is rejected goes to `<name>.rejected.jsonl` next to it, for someone to look at, each original line under `line`.
+ */
 export class FailedInboundFile implements FailedInboundLog {
   /** Tail of the operations on the file. Saving an entry is not one of them: an append never waits for a replay's saves. */
   private fileTurn: Promise<unknown> = Promise.resolve();
   /** Tail of the replays. */
   private replayTurn: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly path: string) {}
+  private readonly rejectedPath: string;
+
+  constructor(private readonly path: string) {
+    this.rejectedPath = path.replace(/(\.jsonl)?$/, '.rejected.jsonl');
+  }
 
   append(entry: FailedInboundEntry): Promise<void> {
     const line = `${JSON.stringify(entry)}\n`;
@@ -43,27 +61,57 @@ export class FailedInboundFile implements FailedInboundLog {
     });
   }
 
-  replay(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }> {
+  replay(save: (entry: FailedInboundEntry) => Promise<void>): Promise<FailedInboundReplay> {
     const run = this.replayTurn.then(() => this.replayOnce(save));
     this.replayTurn = run.catch(() => {});
     return run;
   }
 
-  private async replayOnce(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }> {
+  private async replayOnce(save: (entry: FailedInboundEntry) => Promise<void>): Promise<FailedInboundReplay> {
     const { lines, size } = await this.onFile(() => this.read());
     const kept: string[] = [];
+    const rejected: RejectedLine[] = [];
     for (const line of lines) {
+      let entry: FailedInboundEntry;
       try {
-        await save(parseEntry(line));
+        entry = parseEntry(line);
       } catch (err) {
-        kept.push(line);
-        getLogger().warn('Failed inbound entry not stored', { error: err instanceof Error ? err.message : String(err) });
+        rejected.push({ line, reason: `it cannot be read: ${errorMessage(err)}` });
+        continue;
+      }
+      try {
+        await save(entry);
+      } catch (err) {
+        if (err instanceof PermanentStoreError) {
+          rejected.push({ line, reason: err.message });
+        } else {
+          kept.push(line);
+          getLogger().warn('Failed inbound entry not stored', { error: errorMessage(err) });
+        }
       }
     }
 
-    const saved = lines.length - kept.length;
-    if (saved > 0) await this.onFile(() => this.keepOnly(kept, size));
-    return { saved, kept: kept.length };
+    const saved = lines.length - kept.length - rejected.length;
+    // In this order: a crash between the two leaves the entry in both files, and it is rejected again.
+    if (rejected.length > 0) await this.onFile(() => this.reject(rejected));
+    if (saved + rejected.length > 0) await this.onFile(() => this.keepOnly(kept, size));
+    return { saved, kept: kept.length, rejected: rejected.length };
+  }
+
+  private async reject(rejected: RejectedLine[]): Promise<void> {
+    const rejectedAt = new Date().toISOString();
+    const content = rejected.map(({ line, reason }) => `${JSON.stringify({ rejectedAt, reason, line })}\n`).join('');
+    const file = await open(this.rejectedPath, 'a');
+    try {
+      await file.appendFile(content);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await this.syncDirectory();
+    for (const { reason } of rejected) {
+      getLogger().error('Inbound entry moved to the rejected log: it will not be stored', { path: this.rejectedPath, reason });
+    }
   }
 
   private onFile<T>(operation: () => Promise<T>): Promise<T> {

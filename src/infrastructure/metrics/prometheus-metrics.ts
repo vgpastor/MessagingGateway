@@ -3,6 +3,7 @@ import type { InboundFilterReason, InboundSkipReason, MediaSkipReason, MetricsPo
 import {
   registry,
   persistFailuresTotal,
+  inboundRejectedTotal,
   mediaSkippedTotal,
   inboundSkippedTotal,
   inboundFilteredTotal,
@@ -36,6 +37,10 @@ export class PrometheusMetrics implements MetricsPort {
 
   persistFailures(): void {
     persistFailuresTotal.inc();
+  }
+
+  inboundRejected(count: number): void {
+    inboundRejectedTotal.inc(count);
   }
 
   mediaSkipped(reason: MediaSkipReason): void {

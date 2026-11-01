@@ -19,6 +19,8 @@ export interface MetricsPort {
   observeHistogram(name: string, value: number, labels?: Record<string, string>): void;
   /** An inbound message did not reach the message log (refused, retries run out, or down), and went to the failed log */
   persistFailures(): void;
+  /** Entries of the failed log that will never be stored went to the log of rejects */
+  inboundRejected(count: number): void;
   /** An inbound media was not stored (over the size cap, or the download/write failed) */
   mediaSkipped(reason: MediaSkipReason): void;
   /** An inbound provider message was dropped before the pipeline (never logged nor emitted) */
@@ -36,6 +38,7 @@ export const noopMetrics: MetricsPort = {
   incGauge: () => {},
   observeHistogram: () => {},
   persistFailures: () => {},
+  inboundRejected: () => {},
   mediaSkipped: () => {},
   inboundSkipped: () => {},
   inboundFiltered: () => {},

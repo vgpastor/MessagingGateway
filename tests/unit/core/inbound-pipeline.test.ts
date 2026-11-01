@@ -3,7 +3,7 @@ import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logge
 import { EventBus } from '../../../src/core/event-bus.js';
 import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
-import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
+import { InboundPipeline, LID_MAX_WAIT_MS } from '../../../src/core/inbound/inbound-pipeline.js';
 import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
 import { PERSIST_RETRY_DELAYS_MS, STORE_PROBE_INTERVAL_MS } from '../../../src/core/inbound/store-guard.js';
 import { PermanentStoreError } from '../../../src/core/errors.js';
@@ -76,9 +76,9 @@ function setup(opts: {
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
-    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), lastInbound: vi.fn(),
+    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), inboundRejected: vi.fn(), lastInbound: vi.fn(),
   };
-  const failedLog: FailedInboundLog = { append: vi.fn(async () => {}), replay: vi.fn(async () => ({ saved: 0, kept: 0 })) };
+  const failedLog: FailedInboundLog = { append: vi.fn(async () => {}), replay: vi.fn(async () => ({ saved: 0, kept: 0, rejected: 0 })) };
   const pipeline = new InboundPipeline({
     store, failedLog, eventBus, media, metrics,
     accounts: { findById: async () => ('account' in opts ? opts.account : makeAccount()) },
@@ -443,7 +443,7 @@ describe('InboundPipeline', () => {
       const { pipeline, insertInbound, ping, failedLog, media, emitted } = await withOpenCircuit();
       vi.mocked(failedLog.replay).mockImplementation(async (save) => {
         await save({ envelope: makeEnvelope({ id: 'opener' }), raw: {} });
-        return { saved: 1, kept: 0 };
+        return { saved: 1, kept: 0, rejected: 0 };
       });
       insertInbound.mockResolvedValue({ inserted: true, seq: 20, accountSeq: 9 });
       ping.mockResolvedValue();
@@ -467,7 +467,7 @@ describe('InboundPipeline', () => {
         for (const id of ['first', 'second', 'third']) {
           await save({ envelope: makeEnvelope({ id }), raw: {} }).then(() => results.push(`${id}:ok`), () => results.push(`${id}:kept`));
         }
-        return { saved: 1, kept: 2 };
+        return { saved: 1, kept: 2, rejected: 0 };
       });
       ping.mockResolvedValue();
       insertInbound
@@ -537,7 +537,7 @@ describe('InboundPipeline', () => {
       const envelope = makeEnvelope({ id: 'kept' });
       vi.mocked(failedLog.replay).mockImplementation(async (save) => {
         await save({ envelope, raw: { stored: true } });
-        return { saved: 1, kept: 0 };
+        return { saved: 1, kept: 0, rejected: 0 };
       });
 
       await pipeline.replayFailed();
@@ -549,7 +549,7 @@ describe('InboundPipeline', () => {
     async function replayOne(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<void> {
       vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
         await save({ envelope, raw: {} });
-        return { saved: 1, kept: 0 };
+        return { saved: 1, kept: 0, rejected: 0 };
       });
       await context.pipeline.replayFailed();
     }
@@ -588,7 +588,7 @@ describe('InboundPipeline', () => {
       let kept = false;
       vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
         kept = await save({ envelope, raw: {} }).then(() => false, () => true);
-        return kept ? { saved: 0, kept: 1 } : { saved: 1, kept: 0 };
+        return kept ? { saved: 0, kept: 1, rejected: 0 } : { saved: 1, kept: 0, rejected: 0 };
       });
       await context.pipeline.replayFailed();
       return kept;
@@ -642,6 +642,90 @@ describe('InboundPipeline', () => {
       expect(context.insertInbound).toHaveBeenCalledWith(
         expect.objectContaining({ conversationId: '100000000000001@lid' }), {},
       );
+    });
+
+    /** What the failed log hears when it hands the entry over: a refusal for good, a wait, or nothing. */
+    async function replayVerdict(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<unknown> {
+      let verdict: unknown;
+      vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
+        verdict = await save({ envelope, raw: {} }).catch((err: unknown) => err);
+        return { saved: 0, kept: 0, rejected: 0 };
+      });
+      await context.pipeline.replayFailed();
+      return verdict;
+    }
+
+    it.each([
+      ['a refusal of the store', new PermanentStoreError('value too long')],
+      ['a RangeError', new RangeError('Invalid time value')],
+    ])('tells the failed log that %s is for good', async (_name, failure) => {
+      const context = setup({ insert: failure });
+
+      expect(await replayVerdict(context, makeEnvelope())).toBeInstanceOf(PermanentStoreError);
+    });
+
+    it('counts and logs as an error what the failed log rejected', async () => {
+      const error = vi.fn();
+      const fake = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), child: () => fake };
+      setGlobalLogger(fake as unknown as Logger);
+      const context = setup();
+      vi.mocked(context.failedLog.replay).mockResolvedValue({ saved: 3, kept: 0, rejected: 2 });
+
+      expect(await context.pipeline.replayFailed()).toBe(3);
+
+      expect(context.metrics.inboundRejected).toHaveBeenCalledWith(2);
+      expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ rejected: 2 }));
+    });
+
+    it('counts nothing when nothing was rejected', async () => {
+      const context = setup();
+
+      await context.pipeline.replayFailed();
+
+      expect(context.metrics.inboundRejected).not.toHaveBeenCalled();
+    });
+
+    describe('a LID that nobody can resolve', () => {
+      const withList = () => setup({
+        account: makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }),
+        resolveLidToPhone: async () => undefined,
+      });
+      const lidReceivedAgo = (ms: number) => makeEnvelope({
+        conversationId: '100000000000001@lid',
+        gateway: { receivedAt: new Date(Date.now() - ms), adapterId: 'baileys', account: { id: 'wa-1', alias: 'WA 1', owner: 'org', tags: [] } },
+      });
+
+      async function replayAfterConnectingVerdict(context: ReturnType<typeof setup>, envelope: UnifiedEnvelope): Promise<unknown> {
+        let verdict: unknown;
+        vi.mocked(context.failedLog.replay).mockImplementation(async (save) => {
+          verdict = await save({ envelope, raw: {} }).catch((err: unknown) => err);
+          return { saved: 0, kept: 1, rejected: 0 };
+        });
+        context.pipeline.replayAfterConnecting(0);
+        await vi.waitFor(() => expect(context.failedLog.replay).toHaveBeenCalled());
+        await vi.waitFor(() => expect(verdict).toBeDefined());
+        return verdict;
+      }
+
+      it('is refused for good past 7 days, once the accounts have had the time to connect', async () => {
+        const verdict = await replayAfterConnectingVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS + 60_000));
+
+        expect(verdict).toBeInstanceOf(PermanentStoreError);
+      });
+
+      it('keeps waiting before 7 days', async () => {
+        const verdict = await replayAfterConnectingVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS - 60_000));
+
+        expect(verdict).toBeInstanceOf(Error);
+        expect(verdict).not.toBeInstanceOf(PermanentStoreError);
+      });
+
+      it('is not judged by its age before connecting: without a socket no LID can be resolved, however old', async () => {
+        const verdict = await replayVerdict(withList(), lidReceivedAgo(LID_MAX_WAIT_MS * 2));
+
+        expect(verdict).toBeInstanceOf(Error);
+        expect(verdict).not.toBeInstanceOf(PermanentStoreError);
+      });
     });
 
     it('does nothing when storage is disabled', async () => {

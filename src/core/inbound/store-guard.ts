@@ -15,6 +15,10 @@ const isPermanentFailure = (err: unknown): boolean =>
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** A permanent failure as the failed log understands it. */
+const asRefusal = (err: unknown): PermanentStoreError =>
+  (err instanceof PermanentStoreError ? err : new PermanentStoreError(errorMessage(err), { cause: err }));
+
 export interface StoreGuardOptions {
   /** {@link PERSIST_RETRY_DELAYS_MS} by default. */
   retryDelaysMs?: readonly number[];
@@ -79,13 +83,17 @@ export class StoreGuard {
     }
   }
 
-  /** Stores a message of the failed log: one attempt, since it is safe where it is. A store that is down opens the circuit. */
+  /**
+   * Stores a message of the failed log: one attempt, since it is safe where it is. A store that is down opens
+   * the circuit; a failure that is the message's rejects with a `PermanentStoreError`.
+   */
   async insertOnce(envelope: UnifiedEnvelope, raw: unknown): Promise<InsertResult> {
     if (this.outage) throw this.outage.cause;
     try {
       return await this.store.insertInbound(envelope, raw);
     } catch (err) {
-      if (!isPermanentFailure(err)) this.open(err);
+      if (isPermanentFailure(err)) throw asRefusal(err);
+      this.open(err);
       throw err;
     }
   }

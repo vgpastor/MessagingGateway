@@ -1,5 +1,6 @@
 import type { ChannelAccount } from '../accounts/channel-account.js';
 import type { ChannelAccountRepository } from '../accounts/channel-account.repository.js';
+import { PermanentStoreError } from '../errors.js';
 import type { EventBus } from '../event-bus.js';
 import { Events, createEvent } from '../events.js';
 import type { MessageInboundPayload } from '../events.js';
@@ -40,6 +41,9 @@ type PersistOutcome = 'stored' | 'duplicate' | 'written_off';
  * take: by then an account that could connect has a socket, which is what a LID needs to be resolved.
  */
 export const REPLAY_AFTER_CONNECT_MS = 60_000;
+
+/** How long a LID may wait in the failed log to be resolved. Past this, the phone it stands for is not coming. */
+export const LID_MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface InboundMessage {
   account: ChannelAccount;
@@ -85,6 +89,8 @@ export class InboundPipeline {
   private readonly unsaved = new Set<InboundMessage>();
   private readonly guard: StoreGuard | undefined;
   private replayTimer: NodeJS.Timeout | undefined;
+  /** Until then no LID can be resolved, however long it has waited, and that says nothing about the LID. */
+  private accountsHadTimeToConnect = false;
 
   constructor(private readonly deps: InboundPipelineDeps) {
     this.guard = deps.store && new StoreGuard(deps.store, {
@@ -119,7 +125,8 @@ export class InboundPipeline {
    *
    * The conversation filter applies again. What it excludes, and what belongs to an account that no
    * longer exists, leaves the log. What it cannot judge yet (a LID, with no socket to resolve it) stays:
-   * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start.
+   * {@link replayAfterConnecting} looks again, and whatever is still unresolved waits for the next start,
+   * up to {@link LID_MAX_WAIT_MS}. That, and what the store refuses, go to the log of rejects: what stays means a LID waiting.
    * Resolves to how many entries reached the log.
    */
   async replayFailed(): Promise<number> {
@@ -127,7 +134,7 @@ export class InboundPipeline {
     const { failedLog } = this.deps;
     if (!guard || !failedLog) return 0;
     let discarded = 0;
-    const { saved, kept } = await failedLog.replay(async ({ envelope, raw }) => {
+    const { saved, kept, rejected } = await failedLog.replay(async ({ envelope, raw }) => {
       const reason = await this.replayRejection(envelope);
       if (reason) {
         discarded += 1;
@@ -139,6 +146,10 @@ export class InboundPipeline {
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
     if (kept > 0) this.logger.warn('Inbound messages remain in the failed log', { kept });
+    if (rejected > 0) {
+      this.deps.metrics.inboundRejected(rejected);
+      this.logger.error('Inbound messages moved to the log of rejects: they will not be stored', { rejected });
+    }
     return stored;
   }
 
@@ -156,7 +167,10 @@ export class InboundPipeline {
    * it also picks up the media of what it stores. Live messages are flowing by then: what it stores gets a later number.
    */
   replayAfterConnecting(delayMs: number = REPLAY_AFTER_CONNECT_MS): void {
-    this.replayTimer = setTimeout(() => void this.recoverFailedLog(), delayMs);
+    this.replayTimer = setTimeout(() => {
+      this.accountsHadTimeToConnect = true;
+      void this.recoverFailedLog();
+    }, delayMs);
     this.replayTimer.unref();
   }
 
@@ -169,7 +183,11 @@ export class InboundPipeline {
     if (!account) return 'the account no longer exists';
     if (this.judgesConversations(account) && envelope.conversationId.endsWith('@lid')) {
       const phoneJid = await this.resolveLidToPhoneJid(envelope.accountId, envelope.conversationId);
-      if (!phoneJid) throw new Error('its conversation is a LID that cannot be resolved yet, so it cannot be judged');
+      if (!phoneJid) {
+        const waited = Date.now() - envelope.gateway.receivedAt.getTime();
+        if (this.accountsHadTimeToConnect && waited > LID_MAX_WAIT_MS) throw new PermanentStoreError('its conversation is a LID still unresolved after 7 days');
+        throw new Error('its conversation is a LID that cannot be resolved yet, so it cannot be judged');
+      }
       envelope.conversationId = phoneJid;
       envelope.sender.id = phoneJid;
     }

@@ -4,9 +4,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PermanentStoreError } from '../../../src/core/errors.js';
 import { EventBus } from '../../../src/core/event-bus.js';
 import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
@@ -182,7 +183,7 @@ describe('FailedInboundFile', () => {
 
     const result = await file.replay(async (entry) => { await store.insertInbound(entry.envelope, entry.raw); });
 
-    expect(result).toEqual({ saved: 3, kept: 0 });
+    expect(result).toEqual({ saved: 3, kept: 0, rejected: 0 });
     expect(await store.count({ accountId: 'wa-1' })).toBe(2);
     expect(await store.maxAccountSeq('wa-1')).toBe(2);
   });
@@ -199,7 +200,7 @@ describe('FailedInboundFile', () => {
     });
 
     expect(seen).toEqual(['ok-1', 'bad', 'ok-2']);
-    expect(result).toEqual({ saved: 2, kept: 1 });
+    expect(result).toEqual({ saved: 2, kept: 1, rejected: 0 });
     const lines = (await readFile(path, 'utf8')).trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!).envelope.id).toBe('bad');
@@ -211,18 +212,101 @@ describe('FailedInboundFile', () => {
 
     const result = await file.replay(async () => { throw new Error('db down'); });
 
-    expect(result).toEqual({ saved: 0, kept: 1 });
+    expect(result).toEqual({ saved: 0, kept: 1, rejected: 0 });
     expect(await readFile(path, 'utf8')).toBe(before);
   });
 
-  it('keeps a line it cannot read (a crash mid-write) without losing the others', async () => {
-    await file.append({ envelope: envelope('ok', 'W1'), raw: undefined });
-    await writeFile(path, `${await readFile(path, 'utf8')}{"envelope":{"id":"trunc`);
+  describe('what can never get in', () => {
+    const rejectedPath = () => join(dir, 'nested', 'failed-inbound.rejected.jsonl');
+    const rejectedLines = async () => (await readFile(rejectedPath(), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { line: string; reason: string; rejectedAt: string });
 
-    const result = await file.replay(async () => {});
+    it('moves a line it cannot read to the rejected file, as it was, without losing the others', async () => {
+      await file.append({ envelope: envelope('ok', 'W1'), raw: undefined });
+      await writeFile(path, `${await readFile(path, 'utf8')}{"envelope":{"id":"trunc`);
 
-    expect(result).toEqual({ saved: 1, kept: 1 });
-    expect((await readFile(path, 'utf8')).trim()).toBe('{"envelope":{"id":"trunc');
+      const result = await file.replay(async () => {});
+
+      expect(result).toEqual({ saved: 1, kept: 0, rejected: 1 });
+      expect(existsSync(path)).toBe(false);
+      const [rejected] = await rejectedLines();
+      expect(rejected?.line).toBe('{"envelope":{"id":"trunc');
+      expect(rejected?.reason).toContain('cannot be read');
+      expect(Number.isNaN(Date.parse(rejected?.rejectedAt ?? ''))).toBe(false);
+    });
+
+    it('treats as unreadable a line of valid JSON that is not an entry', async () => {
+      await file.append({ envelope: envelope('ok', 'W1'), raw: undefined });
+      await writeFile(path, `${await readFile(path, 'utf8')}{"foo":1}\n"text"\n`);
+
+      const result = await file.replay(async () => {});
+
+      expect(result).toEqual({ saved: 1, kept: 0, rejected: 2 });
+      expect((await rejectedLines()).map((r) => r.line)).toEqual(['{"foo":1}', '"text"']);
+    });
+
+    it('moves what save refuses for good, says why, and keeps what may still pass', async () => {
+      await file.append({ envelope: envelope('poison', 'W1'), raw: { n: 1 } });
+      await file.append({ envelope: envelope('waiting', 'W2'), raw: undefined });
+      await file.append({ envelope: envelope('fine', 'W3'), raw: undefined });
+
+      const result = await file.replay(async ({ envelope: e }) => {
+        if (e.id === 'poison') throw new PermanentStoreError('value too long');
+        if (e.id === 'waiting') throw new Error('not yet');
+      });
+
+      expect(result).toEqual({ saved: 1, kept: 1, rejected: 1 });
+      const lines = (await readFile(path, 'utf8')).trim().split('\n');
+      expect(lines.map((line) => JSON.parse(line).envelope.id)).toEqual(['waiting']);
+      const [rejected] = await rejectedLines();
+      expect(rejected?.reason).toBe('value too long');
+      expect(JSON.parse(rejected!.line)).toMatchObject({ envelope: { id: 'poison' }, raw: { n: 1 } });
+    });
+
+    it('never reads the rejected file back, and adds to what it holds', async () => {
+      await file.append({ envelope: envelope('first', 'W1'), raw: undefined });
+      const refuse = async () => { throw new PermanentStoreError('refused'); };
+      await file.replay(refuse);
+
+      const save = vi.fn(async () => {});
+      expect(await file.replay(save)).toEqual({ saved: 0, kept: 0, rejected: 0 });
+      expect(save).not.toHaveBeenCalled();
+
+      await file.append({ envelope: envelope('second', 'W2'), raw: undefined });
+      await file.replay(refuse);
+      expect((await rejectedLines()).map((r) => JSON.parse(r.line).envelope.id)).toEqual(['first', 'second']);
+    });
+
+    it('leaves the entry where it is if the rejected file cannot be written, so nothing is lost', async () => {
+      await file.append({ envelope: envelope('poison', 'W1'), raw: undefined });
+      await mkdir(rejectedPath());
+
+      await expect(file.replay(async () => { throw new PermanentStoreError('refused'); })).rejects.toThrow();
+
+      expect(JSON.parse((await readFile(path, 'utf8')).trim()).envelope.id).toBe('poison');
+    });
+
+    it('through the pipeline: an entry the store refuses goes out, counted, and the rest reach the log', async () => {
+      const refusing = {
+        insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+          if (e.id === 'poison') throw new PermanentStoreError('value too long');
+          return store.insertInbound(e, r);
+        },
+        ping: async () => {},
+      };
+      await file.append({ envelope: envelope('poison', 'W1'), raw: undefined });
+      await file.append({ envelope: envelope('fine', 'W2'), raw: undefined });
+      const inboundRejected = vi.fn();
+      const pipeline = new InboundPipeline({
+        store: refusing as MessageLogPort, failedLog: file, eventBus: new EventBus(), media: noopMediaService,
+        metrics: { ...noopMetrics, inboundRejected }, accounts: knownAccount, persistRetryDelaysMs: [],
+      });
+
+      expect(await pipeline.replayFailed()).toBe(1);
+
+      expect(inboundRejected).toHaveBeenCalledWith(1);
+      expect(existsSync(path)).toBe(false);
+      expect((await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 })).messages.map((m) => m.id)).toEqual(['fine']);
+    });
   });
 
   it('does not lose what arrives while it replays: appends go on during an outage', async () => {
@@ -234,7 +318,7 @@ describe('FailedInboundFile', () => {
       if (e.id === 'kept') throw new Error('still failing');
     });
 
-    expect(result).toEqual({ saved: 1, kept: 1 });
+    expect(result).toEqual({ saved: 1, kept: 1, rejected: 0 });
     const ids = (await readFile(path, 'utf8')).trim().split(/\r?\n/).map((line) => JSON.parse(line).envelope.id);
     expect(ids).toEqual(['kept', 'while-saved', 'while-kept']);
   });
@@ -272,6 +356,6 @@ describe('FailedInboundFile', () => {
   });
 
   it('replaying with no file is nothing to do', async () => {
-    expect(await file.replay(async () => { throw new Error('unexpected'); })).toEqual({ saved: 0, kept: 0 });
+    expect(await file.replay(async () => { throw new Error('unexpected'); })).toEqual({ saved: 0, kept: 0, rejected: 0 });
   });
 });

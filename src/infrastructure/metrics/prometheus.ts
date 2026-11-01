@@ -58,6 +58,12 @@ export const persistFailuresTotal = new Counter({
   registers: [registry],
 });
 
+export const inboundRejectedTotal = new Counter({
+  name: 'umg_inbound_rejected_total',
+  help: 'Entries of the failed log that will never be stored (refused by the store, unreadable, or a LID unresolved after 7 days): they went to data/failed-inbound.rejected.jsonl and need a person',
+  registers: [registry],
+});
+
 export const mediaSkippedTotal = new Counter({
   name: 'umg_media_skipped_total',
   help: 'Inbound media that was not stored',

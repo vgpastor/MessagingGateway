@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PermanentStoreError } from '../../../src/core/errors.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 
 const calls: string[] = [];
@@ -60,5 +61,20 @@ describe('FailedInboundFile durability', () => {
     });
 
     expect(calls).toEqual([`sync ${path}.tmp`, `rename ${path}.tmp`, `sync ${dirname(path)}`]);
+  });
+
+  it('has what it rejects on disk before taking it out of the log', async () => {
+    const path = join(dir, 'failed-inbound.jsonl');
+    const rejected = join(dir, 'failed-inbound.rejected.jsonl');
+    const file = new FailedInboundFile(path);
+    await file.append({ envelope: envelope('kept'), raw: undefined });
+    await file.append({ envelope: envelope('poison'), raw: undefined });
+    calls.length = 0;
+
+    await file.replay(async (entry) => {
+      throw entry.envelope.id === 'poison' ? new PermanentStoreError('refused') : new Error('not yet');
+    });
+
+    expect(calls).toEqual([`sync ${rejected}`, `sync ${dirname(path)}`, `sync ${path}.tmp`, `rename ${path}.tmp`, `sync ${dirname(path)}`]);
   });
 });
