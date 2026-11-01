@@ -2,8 +2,11 @@ import type {
   ClientConfig, Account, CreateAccountInput, UpdateAccountInput,
   SendMessageCommand, MessageResult, WebhookConfig, WebhookConfigInput,
   HealthStatus, GatewayError, GroupInfo, MessageQuery, MessageQueryResult,
-  MessageStats, UnifiedEnvelope, ConversationContext,
+  MessageStats, UnifiedEnvelope, ConversationContext, MessagesAfterResult,
+  MediaDownload,
 } from './types.js';
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class GatewayApiError extends Error {
   constructor(
@@ -16,9 +19,20 @@ export class GatewayApiError extends Error {
   }
 }
 
+/** Turns an error response into the error the client throws. */
+async function toApiError(response: Response): Promise<GatewayApiError> {
+  const error = await response.json().catch(() => ({
+    error: 'Unknown',
+    code: 'UNKNOWN',
+    message: `HTTP ${response.status}`,
+  })) as GatewayError;
+  return new GatewayApiError(response.status, error.code, error.message);
+}
+
 export class MessagingGatewayClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
+  private readonly timeoutMs: number;
   public readonly accounts: AccountsApi;
   public readonly webhooks: WebhooksApi;
   public readonly groups: GroupsApi;
@@ -26,6 +40,7 @@ export class MessagingGatewayClient {
 
   constructor(config: ClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.headers = { 'Content-Type': 'application/json' };
     if (config.apiKey) {
       this.headers['X-API-Key'] = config.apiKey;
@@ -75,41 +90,34 @@ export class MessagingGatewayClient {
   }
 
   async getText(path: string): Promise<string> {
-    const url = `${this.baseUrl}${path}`;
-    const response = await fetch(url, { method: 'GET', headers: this.headers });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        error: 'Unknown',
-        code: 'UNKNOWN',
-        message: `HTTP ${response.status}`,
-      })) as GatewayError;
-      throw new GatewayApiError(response.status, error.code, error.message);
-    }
+    const response = await this.getResponse(path);
     return response.text();
   }
 
+  /** GET that leaves the body to the caller. Throws on an error status, except the `expected` ones. */
+  async getResponse(path: string, expected: readonly number[] = []): Promise<Response> {
+    const response = await this.fetch('GET', path);
+    if (!response.ok && !expected.includes(response.status)) throw await toApiError(response);
+    return response;
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
+    const response = await this.fetch(method, path, body);
+    if (!response.ok) throw await toApiError(response);
+    return response.json() as Promise<T>;
+  }
+
+  /** The timeout covers the whole exchange, reading the body included. */
+  private fetch(method: string, path: string, body?: unknown): Promise<Response> {
     const options: RequestInit = {
       method,
       headers: this.headers,
+      signal: AbortSignal.timeout(this.timeoutMs),
     };
     if (body !== undefined) {
       options.body = JSON.stringify(body);
     }
-
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        error: 'Unknown',
-        code: 'UNKNOWN',
-        message: `HTTP ${response.status}`,
-      })) as GatewayError;
-      throw new GatewayApiError(response.status, error.code, error.message);
-    }
-
-    return response.json() as Promise<T>;
+    return fetch(`${this.baseUrl}${path}`, options);
   }
 }
 
@@ -221,8 +229,37 @@ class MessagesApi {
     return this.client.get<MessageQueryResult>(`/api/v1/messages${qs ? `?${qs}` : ''}`);
   }
 
+  /**
+   * Catch-up read of inbound messages by per-account sequence: everything for
+   * `accountId` with `accountSeq > afterAccountSeq`, oldest first. Use it after
+   * a reconnect or when a gap in `accountSeq` is detected; keep calling with
+   * `nextAfterAccountSeq` until it is `null`.
+   */
+  async after(accountId: string, afterAccountSeq: number, limit = 500): Promise<MessagesAfterResult> {
+    const params = new URLSearchParams({
+      accountId,
+      afterAccountSeq: String(afterAccountSeq),
+      limit: String(limit),
+    });
+    return this.client.get<MessagesAfterResult>(`/api/v1/messages?${params.toString()}`);
+  }
+
   async get(messageId: string): Promise<UnifiedEnvelope> {
     return this.client.get<UnifiedEnvelope>(`/api/v1/messages/${messageId}`);
+  }
+
+  /**
+   * Media of a stored message. Only `status: 'ready'` carries the file; `pending` means try again
+   * later, and `skipped` or `expired` that it will never be there. A message with no media throws (404).
+   */
+  async media(messageId: string): Promise<MediaDownload> {
+    const response = await this.client.getResponse(`/api/v1/media/${encodeURIComponent(messageId)}`, [410]);
+    if (response.status !== 200) return response.json() as Promise<MediaDownload>;
+    return {
+      status: 'ready',
+      data: await response.arrayBuffer(),
+      mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
+    };
   }
 
   async search(query: string, options?: { accountId?: string; limit?: number }): Promise<MessageQueryResult> {
@@ -241,11 +278,14 @@ class MessagesApi {
     return this.client.get<MessageStats>(`/api/v1/messages/analytics${qs ? `?${qs}` : ''}`);
   }
 
-  async export(options?: { accountId?: string; format?: 'csv' | 'json'; since?: string }): Promise<string | UnifiedEnvelope[]> {
+  /** Up to 1000 messages per call (the gateway's cap): use `offset` for the rest. */
+  async export(options?: { accountId?: string; format?: 'csv' | 'json'; since?: string; limit?: number; offset?: number }): Promise<string | UnifiedEnvelope[]> {
     const params = new URLSearchParams();
     if (options?.accountId) params.set('accountId', options.accountId);
     if (options?.format) params.set('format', options.format);
     if (options?.since) params.set('since', options.since);
+    if (options?.limit !== undefined) params.set('limit', String(options.limit));
+    if (options?.offset !== undefined) params.set('offset', String(options.offset));
     const qs = params.toString();
     const url = `/api/v1/messages/export${qs ? `?${qs}` : ''}`;
 

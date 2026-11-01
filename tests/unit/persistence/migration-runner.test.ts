@@ -17,8 +17,7 @@ describe('MigrationRunner', () => {
     adapter = {
       ensureMigrationTable: vi.fn(),
       getAppliedMigrations: vi.fn().mockResolvedValue([]),
-      executeSql: vi.fn(),
-      recordMigration: vi.fn(),
+      applyMigration: vi.fn(),
     };
   });
 
@@ -35,8 +34,11 @@ describe('MigrationRunner', () => {
 
     expect(result.applied).toEqual(['001_first', '002_second']);
     expect(result.skipped).toEqual([]);
-    expect(adapter.executeSql).toHaveBeenCalledTimes(2);
-    expect(adapter.recordMigration).toHaveBeenCalledTimes(2);
+    expect(adapter.applyMigration).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(adapter.applyMigration).mock.calls.map(([m]) => [m.name, m.sql])).toEqual([
+      ['001_first', 'CREATE TABLE t1 (id INT);'],
+      ['002_second', 'CREATE TABLE t2 (id INT);'],
+    ]);
   });
 
   it('should skip already-applied migrations', async () => {
@@ -50,7 +52,7 @@ describe('MigrationRunner', () => {
 
     expect(result.applied).toEqual(['002_second']);
     expect(result.skipped).toEqual(['001_first']);
-    expect(adapter.executeSql).toHaveBeenCalledTimes(1);
+    expect(adapter.applyMigration).toHaveBeenCalledTimes(1);
   });
 
   it('should do nothing when all migrations are applied', async () => {
@@ -63,7 +65,7 @@ describe('MigrationRunner', () => {
 
     expect(result.applied).toEqual([]);
     expect(result.skipped).toEqual(['001_first']);
-    expect(adapter.executeSql).not.toHaveBeenCalled();
+    expect(adapter.applyMigration).not.toHaveBeenCalled();
   });
 
   it('should handle empty scripts directory', async () => {
@@ -84,12 +86,14 @@ describe('MigrationRunner', () => {
   it('should propagate SQL execution errors', async () => {
     await writeFile(join(tmpDir, '001_bad.sql'), 'INVALID SQL;');
 
-    vi.mocked(adapter.executeSql).mockRejectedValue(new Error('syntax error'));
+    await writeFile(join(tmpDir, '002_next.sql'), 'CREATE TABLE t2 (id INT);');
+    vi.mocked(adapter.applyMigration).mockRejectedValue(new Error('syntax error'));
 
     const runner = new MigrationRunner({ scriptsDir: tmpDir, adapter, logger: silentLogger });
 
     await expect(runner.run()).rejects.toThrow('syntax error');
-    expect(adapter.recordMigration).not.toHaveBeenCalled();
+    // stops at the first failure: later migrations are not attempted
+    expect(adapter.applyMigration).toHaveBeenCalledTimes(1);
   });
 
   it('should ignore non-sql files', async () => {
@@ -101,7 +105,7 @@ describe('MigrationRunner', () => {
     const result = await runner.run();
 
     expect(result.applied).toEqual(['001_real']);
-    expect(adapter.executeSql).toHaveBeenCalledTimes(1);
+    expect(adapter.applyMigration).toHaveBeenCalledTimes(1);
   });
 
   it('should include checksum when recording migration', async () => {
@@ -110,8 +114,8 @@ describe('MigrationRunner', () => {
     const runner = new MigrationRunner({ scriptsDir: tmpDir, adapter, logger: silentLogger });
     await runner.run();
 
-    expect(adapter.recordMigration).toHaveBeenCalledWith('001_first', expect.any(String));
-    const checksum = vi.mocked(adapter.recordMigration).mock.calls[0][1];
+    expect(adapter.applyMigration).toHaveBeenCalledWith(expect.objectContaining({ name: '001_first', checksum: expect.any(String) }));
+    const checksum = vi.mocked(adapter.applyMigration).mock.calls[0]![0].checksum;
     expect(checksum).toHaveLength(16);
   });
 });

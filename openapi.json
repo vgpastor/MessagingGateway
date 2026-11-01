@@ -3,7 +3,7 @@
   "info": {
     "title": "Unified Messaging Gateway",
     "description": "Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "components": {
     "schemas": {}
@@ -14,7 +14,7 @@
         "tags": [
           "Health"
         ],
-        "description": "Health check endpoint",
+        "description": "Health check endpoint. Public, so it reports the general state only. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active` or has lost its connection. The detail per account is in GET /api/v1/accounts, with an API key.",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -27,8 +27,7 @@
                       "type": "string",
                       "enum": [
                         "ok",
-                        "degraded",
-                        "error"
+                        "degraded"
                       ]
                     },
                     "timestamp": {
@@ -114,6 +113,19 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "seq": {
+                      "type": "integer",
+                      "description": "Global, monotonically increasing sequence in the message log"
+                    },
+                    "accountSeq": {
+                      "type": "integer",
+                      "description": "Per-account contiguous sequence in the message log, starting at 1"
+                    },
+                    "sentAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the sender sent the message (provider timestamp), if known"
+                    },
                     "conversationId": {
                       "type": "string"
                     },
@@ -125,6 +137,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -139,6 +159,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -197,10 +225,7 @@
                         "platform": {
                           "type": "string"
                         }
-                      },
-                      "required": [
-                        "platform"
-                      ]
+                      }
                     },
                     "gateway": {
                       "type": "object",
@@ -233,20 +258,9 @@
                                 "type": "string"
                               }
                             }
-                          },
-                          "required": [
-                            "id",
-                            "alias",
-                            "owner",
-                            "tags"
-                          ]
+                          }
                         }
-                      },
-                      "required": [
-                        "receivedAt",
-                        "adapterId",
-                        "account"
-                      ]
+                      }
                     }
                   },
                   "required": [
@@ -459,6 +473,19 @@
                       "type": "string",
                       "format": "date-time"
                     },
+                    "seq": {
+                      "type": "integer",
+                      "description": "Global, monotonically increasing sequence in the message log"
+                    },
+                    "accountSeq": {
+                      "type": "integer",
+                      "description": "Per-account contiguous sequence in the message log, starting at 1"
+                    },
+                    "sentAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the sender sent the message (provider timestamp), if known"
+                    },
                     "conversationId": {
                       "type": "string"
                     },
@@ -470,6 +497,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -484,6 +519,14 @@
                         },
                         "displayName": {
                           "type": "string"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "E.164 phone number with leading + when known"
+                        },
+                        "lid": {
+                          "type": "string",
+                          "description": "WhatsApp LID JID when the channel exposes one"
                         }
                       },
                       "required": [
@@ -542,10 +585,7 @@
                         "platform": {
                           "type": "string"
                         }
-                      },
-                      "required": [
-                        "platform"
-                      ]
+                      }
                     },
                     "gateway": {
                       "type": "object",
@@ -578,20 +618,9 @@
                                 "type": "string"
                               }
                             }
-                          },
-                          "required": [
-                            "id",
-                            "alias",
-                            "owner",
-                            "tags"
-                          ]
+                          }
                         }
-                      },
-                      "required": [
-                        "receivedAt",
-                        "adapterId",
-                        "account"
-                      ]
+                      }
                     }
                   },
                   "required": [
@@ -957,6 +986,23 @@
                         "type": "object",
                         "additionalProperties": true
                       },
+                      "conversations": {
+                        "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "*"
+                            ]
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        ]
+                      },
                       "connection": {
                         "type": "object",
                         "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
@@ -1032,7 +1078,7 @@
                 "properties": {
                   "id": {
                     "type": "string",
-                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
                     "description": "Unique account identifier (e.g. \"wa-acme\")"
                   },
                   "alias": {
@@ -1081,6 +1127,23 @@
                   "providerConfig": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "conversations": {
+                    "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "*"
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ]
                   },
                   "metadata": {
                     "type": "object",
@@ -1172,6 +1235,23 @@
                     "identity": {
                       "type": "object",
                       "additionalProperties": true
+                    },
+                    "conversations": {
+                      "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "*"
+                          ]
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
                     },
                     "connection": {
                       "type": "object",
@@ -1365,6 +1445,23 @@
                       "type": "object",
                       "additionalProperties": true
                     },
+                    "conversations": {
+                      "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "*"
+                          ]
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
                     "connection": {
                       "type": "object",
                       "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
@@ -1461,6 +1558,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                   "alias": {
                     "type": "string",
@@ -1504,6 +1602,23 @@
                       "auth_expired",
                       "error",
                       "unchecked"
+                    ]
+                  },
+                  "conversations": {
+                    "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "*"
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
                     ]
                   },
                   "metadata": {
@@ -1596,6 +1711,23 @@
                       "type": "object",
                       "additionalProperties": true
                     },
+                    "conversations": {
+                      "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "*"
+                          ]
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
                     "connection": {
                       "type": "object",
                       "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
@@ -1654,7 +1786,57 @@
               }
             }
           },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -1720,6 +1902,31 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -1889,6 +2096,23 @@
                       "type": "object",
                       "additionalProperties": true
                     },
+                    "conversations": {
+                      "description": "Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.",
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "*"
+                          ]
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
                     "connection": {
                       "type": "object",
                       "description": "Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.",
@@ -1973,6 +2197,31 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -2105,6 +2354,31 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -2114,7 +2388,7 @@
         "tags": [
           "Accounts"
         ],
-        "description": "Disconnect a self-auth provider account and clear its session",
+        "description": "Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.",
         "parameters": [
           {
             "schema": {
@@ -2174,6 +2448,31 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -2269,6 +2568,31 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -3004,6 +3328,7 @@
                         "message.inbound",
                         "message.status",
                         "message.sent",
+                        "connection.update",
                         "*"
                       ]
                     },
@@ -3277,6 +3602,7 @@
                         "message.inbound",
                         "message.status",
                         "message.sent",
+                        "connection.update",
                         "*"
                       ]
                     },
@@ -3790,7 +4116,7 @@
         "tags": [
           "Messages"
         ],
-        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true.",
+        "description": "Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.",
         "parameters": [
           {
             "schema": {
@@ -3868,7 +4194,8 @@
             },
             "in": "query",
             "name": "limit",
-            "required": false
+            "required": false,
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {
@@ -3876,12 +4203,282 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "afterAccountSeq",
+            "required": false,
+            "description": "Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId."
           }
         ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "type": "string"
+                          },
+                          "channel": {
+                            "type": "string",
+                            "enum": [
+                              "whatsapp",
+                              "telegram",
+                              "email",
+                              "sms"
+                            ]
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "inbound",
+                              "outbound"
+                            ]
+                          },
+                          "timestamp": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "seq": {
+                            "type": "integer",
+                            "description": "Global, monotonically increasing sequence in the message log"
+                          },
+                          "accountSeq": {
+                            "type": "integer",
+                            "description": "Per-account contiguous sequence in the message log, starting at 1"
+                          },
+                          "sentAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When the sender sent the message (provider timestamp), if known"
+                          },
+                          "conversationId": {
+                            "type": "string"
+                          },
+                          "sender": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "phone": {
+                                "type": "string",
+                                "description": "E.164 phone number with leading + when known"
+                              },
+                              "lid": {
+                                "type": "string",
+                                "description": "WhatsApp LID JID when the channel exposes one"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          },
+                          "recipient": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "displayName": {
+                                "type": "string"
+                              },
+                              "phone": {
+                                "type": "string",
+                                "description": "E.164 phone number with leading + when known"
+                              },
+                              "lid": {
+                                "type": "string",
+                                "description": "WhatsApp LID JID when the channel exposes one"
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          },
+                          "content": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "text",
+                                  "image",
+                                  "audio",
+                                  "video",
+                                  "document",
+                                  "location",
+                                  "contact",
+                                  "sticker",
+                                  "reaction",
+                                  "poll",
+                                  "interactive_response",
+                                  "system",
+                                  "unknown"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          },
+                          "context": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "quotedMessageId": {
+                                "type": "string"
+                              },
+                              "isForwarded": {
+                                "type": "boolean"
+                              },
+                              "mentions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "channelDetails": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                              "platform": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "gateway": {
+                            "type": "object",
+                            "properties": {
+                              "receivedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "adapterId": {
+                                "type": "string"
+                              },
+                              "rawPayloadRef": {
+                                "type": "string"
+                              },
+                              "account": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "alias": {
+                                    "type": "string"
+                                  },
+                                  "owner": {
+                                    "type": "string"
+                                  },
+                                  "tags": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "accountId",
+                          "channel",
+                          "direction",
+                          "timestamp",
+                          "conversationId",
+                          "sender",
+                          "recipient",
+                          "content",
+                          "gateway"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Total matches (legacy filtering only; never present with afterAccountSeq)"
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "Page size applied (legacy filtering only)"
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "description": "Offset applied (legacy filtering only)"
+                    },
+                    "nextAfterAccountSeq": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "afterAccountSeq only: cursor for the next page, or null when there is nothing more"
+                    },
+                    "lastAccountSeq": {
+                      "type": "integer",
+                      "description": "afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start \"from now\""
+                    },
+                    "firstAccountSeq": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report"
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -3977,7 +4574,7 @@
             "in": "query",
             "name": "q",
             "required": true,
-            "description": "Search query (FTS5 syntax)"
+            "description": "Text to look for, taken literally: quotes and operators are plain text. SQLite looks for it as one phrase, Postgres for all its words."
           },
           {
             "schema": {
@@ -3993,7 +4590,8 @@
             },
             "in": "query",
             "name": "limit",
-            "required": false
+            "required": false,
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {
@@ -4001,7 +4599,8 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
           }
         ],
         "responses": {
@@ -4057,7 +4656,7 @@
         "tags": [
           "Messages"
         ],
-        "description": "Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.",
+        "description": "Export messages in CSV or JSON format, up to 1000 per request (default and maximum): use `offset` for the rest. Requires STORAGE_ENABLED=true.",
         "parameters": [
           {
             "schema": {
@@ -4105,7 +4704,7 @@
             "in": "query",
             "name": "limit",
             "required": false,
-            "description": "Max messages to export (default: 1000)"
+            "description": "Max messages to export (default and maximum: 1000). Not a number: the default"
           },
           {
             "schema": {
@@ -4113,7 +4712,8 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
           }
         ],
         "responses": {
@@ -4137,7 +4737,7 @@
             "in": "query",
             "name": "limit",
             "required": false,
-            "description": "Max messages to return (default: 50)"
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {
@@ -4193,6 +4793,112 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/v1/media/{id}": {
+      "get": {
+        "tags": [
+          "Messages"
+        ],
+        "description": "Download the media of a stored message (the `media.url` of its envelope). 200 streams the file; 202 while it is still being downloaded; 410 when it was skipped or has expired.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, with the Content-Type of the stored media",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message"
+                  ]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "skipped",
+                        "expired"
+                      ]
+                    },
+                    "skipReason": {
+                      "type": "string",
+                      "enum": [
+                        "too_large",
+                        "download_failed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                }
+              }
+            }
           }
         }
       }

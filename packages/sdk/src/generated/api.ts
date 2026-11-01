@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Unified Messaging Gateway
  * Single point of contact for all messaging integrations. Abstracts WhatsApp, Telegram, Email, and SMS providers behind a unified API.
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 import { customFetch } from '../fetch-mutator.js';
 export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealth200Status];
@@ -12,7 +12,6 @@ export type GetHealth200Status = typeof GetHealth200Status[keyof typeof GetHealt
 export const GetHealth200Status = {
   ok: 'ok',
   degraded: 'degraded',
-  error: 'error',
 } as const;
 
 export type GetHealth200 = {
@@ -45,11 +44,19 @@ export const PostWebhooksWhatsappAccountIdInbound200Direction = {
 export type PostWebhooksWhatsappAccountIdInbound200Sender = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200Recipient = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200ContentType = typeof PostWebhooksWhatsappAccountIdInbound200ContentType[keyof typeof PostWebhooksWhatsappAccountIdInbound200ContentType];
@@ -84,22 +91,22 @@ export type PostWebhooksWhatsappAccountIdInbound200Context = {
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
+  account?: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200 = {
@@ -108,6 +115,12 @@ export type PostWebhooksWhatsappAccountIdInbound200 = {
   channel: PostWebhooksWhatsappAccountIdInbound200Channel;
   direction: PostWebhooksWhatsappAccountIdInbound200Direction;
   timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
   conversationId: string;
   sender: PostWebhooksWhatsappAccountIdInbound200Sender;
   recipient: PostWebhooksWhatsappAccountIdInbound200Recipient;
@@ -166,11 +179,19 @@ export const PostWebhooksTelegramAccountIdUpdate200Direction = {
 export type PostWebhooksTelegramAccountIdUpdate200Sender = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200Recipient = {
   id: string;
   displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200ContentType = typeof PostWebhooksTelegramAccountIdUpdate200ContentType[keyof typeof PostWebhooksTelegramAccountIdUpdate200ContentType];
@@ -205,22 +226,22 @@ export type PostWebhooksTelegramAccountIdUpdate200Context = {
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
+  account?: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200 = {
@@ -229,6 +250,12 @@ export type PostWebhooksTelegramAccountIdUpdate200 = {
   channel: PostWebhooksTelegramAccountIdUpdate200Channel;
   direction: PostWebhooksTelegramAccountIdUpdate200Direction;
   timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
   conversationId: string;
   sender: PostWebhooksTelegramAccountIdUpdate200Sender;
   recipient: PostWebhooksTelegramAccountIdUpdate200Recipient;
@@ -358,6 +385,8 @@ export type GetApiV1Accounts200Item = {
   provider: string;
   status: GetApiV1Accounts200ItemStatus;
   identity?: GetApiV1Accounts200ItemIdentity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: GetApiV1Accounts200ItemConnection;
   metadata?: GetApiV1Accounts200ItemMetadata;
@@ -420,7 +449,7 @@ export type PostApiV1AccountsBodyMetadata = {
 export type PostApiV1AccountsBody = {
   /**
      * Unique account identifier (e.g. "wa-acme")
-     * @minLength 1
+     * @pattern ^[A-Za-z0-9][A-Za-z0-9._-]*$
      */
   id: string;
   /**
@@ -443,6 +472,8 @@ export type PostApiV1AccountsBody = {
      */
   credentials?: string;
   providerConfig?: PostApiV1AccountsBodyProviderConfig;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   metadata: PostApiV1AccountsBodyMetadata;
 };
 
@@ -503,6 +534,8 @@ export type PostApiV1Accounts201 = {
   provider: string;
   status: PostApiV1Accounts201Status;
   identity?: PostApiV1Accounts201Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PostApiV1Accounts201Connection;
   metadata?: PostApiV1Accounts201Metadata;
@@ -583,6 +616,8 @@ export type GetApiV1AccountsId200 = {
   provider: string;
   status: GetApiV1AccountsId200Status;
   identity?: GetApiV1AccountsId200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: GetApiV1AccountsId200Connection;
   metadata?: GetApiV1AccountsId200Metadata;
@@ -656,6 +691,8 @@ export type PutApiV1AccountsIdBody = {
   credentials?: string;
   providerConfig?: PutApiV1AccountsIdBodyProviderConfig;
   status?: PutApiV1AccountsIdBodyStatus;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   metadata?: PutApiV1AccountsIdBodyMetadata;
 };
 
@@ -716,12 +753,26 @@ export type PutApiV1AccountsId200 = {
   provider: string;
   status: PutApiV1AccountsId200Status;
   identity?: PutApiV1AccountsId200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PutApiV1AccountsId200Connection;
   metadata?: PutApiV1AccountsId200Metadata;
 };
 
+export type PutApiV1AccountsId400 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
 export type PutApiV1AccountsId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PutApiV1AccountsId500 = {
   error: string;
   code?: string;
   message: string;
@@ -733,6 +784,12 @@ export type DeleteApiV1AccountsId200 = {
 };
 
 export type DeleteApiV1AccountsId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type DeleteApiV1AccountsId500 = {
   error: string;
   code?: string;
   message: string;
@@ -820,6 +877,8 @@ export type PostApiV1AccountsIdConnect200 = {
   provider: string;
   status: PostApiV1AccountsIdConnect200Status;
   identity?: PostApiV1AccountsIdConnect200Identity;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all. */
+  conversations?: '*' | string[];
   /** Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers. */
   connection?: PostApiV1AccountsIdConnect200Connection;
   metadata?: PostApiV1AccountsIdConnect200Metadata;
@@ -832,6 +891,12 @@ export type PostApiV1AccountsIdConnect400 = {
 };
 
 export type PostApiV1AccountsIdConnect404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdConnect409 = {
   error: string;
   code?: string;
   message: string;
@@ -860,6 +925,12 @@ export type PostApiV1AccountsIdPair404 = {
   message: string;
 };
 
+export type PostApiV1AccountsIdPair409 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
 export type PostApiV1AccountsIdDisconnect200 = {
   accountId: string;
   status: string;
@@ -872,6 +943,12 @@ export type PostApiV1AccountsIdDisconnect400 = {
 };
 
 export type PostApiV1AccountsIdDisconnect404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdDisconnect500 = {
   error: string;
   code?: string;
   message: string;
@@ -890,6 +967,12 @@ export type PostApiV1AccountsIdReset400 = {
 };
 
 export type PostApiV1AccountsIdReset404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type PostApiV1AccountsIdReset409 = {
   error: string;
   code?: string;
   message: string;
@@ -1098,6 +1181,7 @@ export const PostApiV1AccountsIdWebhooksBodyEventsItem = {
   messageinbound: 'message.inbound',
   messagestatus: 'message.status',
   messagesent: 'message.sent',
+  connectionupdate: 'connection.update',
   '*': '*',
 } as const;
 
@@ -1159,6 +1243,7 @@ export const PutApiV1WebhooksWebhookIdBodyEventsItem = {
   messageinbound: 'message.inbound',
   messagestatus: 'message.status',
   messagesent: 'message.sent',
+  connectionupdate: 'connection.update',
   '*': '*',
 } as const;
 
@@ -1278,8 +1363,20 @@ contentType?: string;
 direction?: GetApiV1MessagesDirection;
 since?: string;
 until?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
+/**
+ * Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.
+ * @minimum 0
+ * @maximum 9007199254740991
+ */
+afterAccountSeq?: number;
 };
 
 export type GetApiV1MessagesDirection = typeof GetApiV1MessagesDirection[keyof typeof GetApiV1MessagesDirection];
@@ -1289,6 +1386,135 @@ export const GetApiV1MessagesDirection = {
   inbound: 'inbound',
   outbound: 'outbound',
 } as const;
+
+export type GetApiV1Messages200MessagesItemChannel = typeof GetApiV1Messages200MessagesItemChannel[keyof typeof GetApiV1Messages200MessagesItemChannel];
+
+
+export const GetApiV1Messages200MessagesItemChannel = {
+  whatsapp: 'whatsapp',
+  telegram: 'telegram',
+  email: 'email',
+  sms: 'sms',
+} as const;
+
+export type GetApiV1Messages200MessagesItemDirection = typeof GetApiV1Messages200MessagesItemDirection[keyof typeof GetApiV1Messages200MessagesItemDirection];
+
+
+export const GetApiV1Messages200MessagesItemDirection = {
+  inbound: 'inbound',
+  outbound: 'outbound',
+} as const;
+
+export type GetApiV1Messages200MessagesItemSender = {
+  id: string;
+  displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
+};
+
+export type GetApiV1Messages200MessagesItemRecipient = {
+  id: string;
+  displayName?: string;
+  /** E.164 phone number with leading + when known */
+  phone?: string;
+  /** WhatsApp LID JID when the channel exposes one */
+  lid?: string;
+};
+
+export type GetApiV1Messages200MessagesItemContentType = typeof GetApiV1Messages200MessagesItemContentType[keyof typeof GetApiV1Messages200MessagesItemContentType];
+
+
+export const GetApiV1Messages200MessagesItemContentType = {
+  text: 'text',
+  image: 'image',
+  audio: 'audio',
+  video: 'video',
+  document: 'document',
+  location: 'location',
+  contact: 'contact',
+  sticker: 'sticker',
+  reaction: 'reaction',
+  poll: 'poll',
+  interactive_response: 'interactive_response',
+  system: 'system',
+  unknown: 'unknown',
+} as const;
+
+export type GetApiV1Messages200MessagesItemContent = {
+  type: GetApiV1Messages200MessagesItemContentType;
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemContext = {
+  quotedMessageId?: string;
+  isForwarded?: boolean;
+  mentions?: string[];
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemChannelDetails = {
+  platform?: string;
+  [key: string]: unknown;
+ };
+
+export type GetApiV1Messages200MessagesItemGatewayAccount = {
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
+};
+
+export type GetApiV1Messages200MessagesItemGateway = {
+  receivedAt?: string;
+  adapterId?: string;
+  rawPayloadRef?: string;
+  account?: GetApiV1Messages200MessagesItemGatewayAccount;
+};
+
+export type GetApiV1Messages200MessagesItem = {
+  id: string;
+  accountId: string;
+  channel: GetApiV1Messages200MessagesItemChannel;
+  direction: GetApiV1Messages200MessagesItemDirection;
+  timestamp: string;
+  /** Global, monotonically increasing sequence in the message log */
+  seq?: number;
+  /** Per-account contiguous sequence in the message log, starting at 1 */
+  accountSeq?: number;
+  /** When the sender sent the message (provider timestamp), if known */
+  sentAt?: string;
+  conversationId: string;
+  sender: GetApiV1Messages200MessagesItemSender;
+  recipient: GetApiV1Messages200MessagesItemRecipient;
+  content: GetApiV1Messages200MessagesItemContent;
+  context?: GetApiV1Messages200MessagesItemContext;
+  channelDetails?: GetApiV1Messages200MessagesItemChannelDetails;
+  gateway: GetApiV1Messages200MessagesItemGateway;
+};
+
+export type GetApiV1Messages200 = {
+  messages: GetApiV1Messages200MessagesItem[];
+  /** Total matches (legacy filtering only; never present with afterAccountSeq) */
+  total?: number;
+  /** Page size applied (legacy filtering only) */
+  limit?: number;
+  /** Offset applied (legacy filtering only) */
+  offset?: number;
+  /** afterAccountSeq only: cursor for the next page, or null when there is nothing more */
+  nextAfterAccountSeq?: number | null;
+  /** afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start "from now" */
+  lastAccountSeq?: number;
+  /** afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report */
+  firstAccountSeq?: number | null;
+};
+
+export type GetApiV1Messages400 = {
+  error: string;
+  code?: string;
+  message: string;
+};
 
 export type GetApiV1MessagesId404 = {
   error: string;
@@ -1303,11 +1529,17 @@ since?: string;
 
 export type GetApiV1MessagesSearchParams = {
 /**
- * Search query (FTS5 syntax)
+ * Text to look for, taken literally: quotes and operators are plain text. SQLite looks for it as one phrase, Postgres for all its words.
  */
 q: string;
 accountId?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1323,9 +1555,12 @@ since?: string;
 until?: string;
 format?: GetApiV1MessagesExportFormat;
 /**
- * Max messages to export (default: 1000)
+ * Max messages to export (default and maximum: 1000). Not a number: the default
  */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1339,7 +1574,7 @@ export const GetApiV1MessagesExportFormat = {
 
 export type GetApiV1ConversationsConversationIdContextParams = {
 /**
- * Max messages to return (default: 50)
+ * Page size (default: 50, max: 500). Not a number: the default
  */
 limit?: string;
 /**
@@ -1368,6 +1603,44 @@ export const GetApiV1ConversationsConversationIdContextFormat = {
   raw: 'raw',
 } as const;
 
+export type GetApiV1MediaId202Status = typeof GetApiV1MediaId202Status[keyof typeof GetApiV1MediaId202Status];
+
+
+export const GetApiV1MediaId202Status = {
+  pending: 'pending',
+} as const;
+
+export type GetApiV1MediaId202 = {
+  status: GetApiV1MediaId202Status;
+};
+
+export type GetApiV1MediaId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type GetApiV1MediaId410Status = typeof GetApiV1MediaId410Status[keyof typeof GetApiV1MediaId410Status];
+
+
+export const GetApiV1MediaId410Status = {
+  skipped: 'skipped',
+  expired: 'expired',
+} as const;
+
+export type GetApiV1MediaId410SkipReason = typeof GetApiV1MediaId410SkipReason[keyof typeof GetApiV1MediaId410SkipReason];
+
+
+export const GetApiV1MediaId410SkipReason = {
+  too_large: 'too_large',
+  download_failed: 'download_failed',
+} as const;
+
+export type GetApiV1MediaId410 = {
+  status: GetApiV1MediaId410Status;
+  skipReason?: GetApiV1MediaId410SkipReason;
+};
+
 export type getHealthResponse200 = {
   data: GetHealth200
   status: 200
@@ -1389,7 +1662,7 @@ export const getGetHealthUrl = () => {
 }
 
 /**
- * Health check endpoint
+ * Health check endpoint. Public, so it reports the general state only. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active` or has lost its connection. The detail per account is in GET /api/v1/accounts, with an API key.
  */
 export const getHealth = async ( options?: Parameters<typeof customFetch>[1]): Promise<getHealthResponse> => {
 
@@ -1864,15 +2137,25 @@ export type putApiV1AccountsIdResponse200 = {
   status: 200
 }
 
+export type putApiV1AccountsIdResponse400 = {
+  data: PutApiV1AccountsId400
+  status: 400
+}
+
 export type putApiV1AccountsIdResponse404 = {
   data: PutApiV1AccountsId404
   status: 404
 }
 
+export type putApiV1AccountsIdResponse500 = {
+  data: PutApiV1AccountsId500
+  status: 500
+}
+
 export type putApiV1AccountsIdResponseSuccess = (putApiV1AccountsIdResponse200) & {
   headers: Headers;
 };
-export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse404) & {
+export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse400 | putApiV1AccountsIdResponse404 | putApiV1AccountsIdResponse500) & {
   headers: Headers;
 };
 
@@ -1919,10 +2202,15 @@ export type deleteApiV1AccountsIdResponse404 = {
   status: 404
 }
 
+export type deleteApiV1AccountsIdResponse500 = {
+  data: DeleteApiV1AccountsId500
+  status: 500
+}
+
 export type deleteApiV1AccountsIdResponseSuccess = (deleteApiV1AccountsIdResponse200) & {
   headers: Headers;
 };
-export type deleteApiV1AccountsIdResponseError = (deleteApiV1AccountsIdResponse404) & {
+export type deleteApiV1AccountsIdResponseError = (deleteApiV1AccountsIdResponse404 | deleteApiV1AccountsIdResponse500) & {
   headers: Headers;
 };
 
@@ -2010,10 +2298,15 @@ export type postApiV1AccountsIdConnectResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdConnectResponse409 = {
+  data: PostApiV1AccountsIdConnect409
+  status: 409
+}
+
 export type postApiV1AccountsIdConnectResponseSuccess = (postApiV1AccountsIdConnectResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdConnectResponseError = (postApiV1AccountsIdConnectResponse400 | postApiV1AccountsIdConnectResponse404) & {
+export type postApiV1AccountsIdConnectResponseError = (postApiV1AccountsIdConnectResponse400 | postApiV1AccountsIdConnectResponse404 | postApiV1AccountsIdConnectResponse409) & {
   headers: Headers;
 };
 
@@ -2058,10 +2351,15 @@ export type postApiV1AccountsIdPairResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdPairResponse409 = {
+  data: PostApiV1AccountsIdPair409
+  status: 409
+}
+
 export type postApiV1AccountsIdPairResponseSuccess = (postApiV1AccountsIdPairResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdPairResponseError = (postApiV1AccountsIdPairResponse400 | postApiV1AccountsIdPairResponse404) & {
+export type postApiV1AccountsIdPairResponseError = (postApiV1AccountsIdPairResponse400 | postApiV1AccountsIdPairResponse404 | postApiV1AccountsIdPairResponse409) & {
   headers: Headers;
 };
 
@@ -2113,10 +2411,15 @@ export type postApiV1AccountsIdDisconnectResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdDisconnectResponse500 = {
+  data: PostApiV1AccountsIdDisconnect500
+  status: 500
+}
+
 export type postApiV1AccountsIdDisconnectResponseSuccess = (postApiV1AccountsIdDisconnectResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdDisconnectResponseError = (postApiV1AccountsIdDisconnectResponse400 | postApiV1AccountsIdDisconnectResponse404) & {
+export type postApiV1AccountsIdDisconnectResponseError = (postApiV1AccountsIdDisconnectResponse400 | postApiV1AccountsIdDisconnectResponse404 | postApiV1AccountsIdDisconnectResponse500) & {
   headers: Headers;
 };
 
@@ -2131,7 +2434,7 @@ export const getPostApiV1AccountsIdDisconnectUrl = (id: string,) => {
 }
 
 /**
- * Disconnect a self-auth provider account and clear its session
+ * Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.
  */
 export const postApiV1AccountsIdDisconnect = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<postApiV1AccountsIdDisconnectResponse> => {
 
@@ -2161,6 +2464,11 @@ export type postApiV1AccountsIdResetResponse404 = {
   status: 404
 }
 
+export type postApiV1AccountsIdResetResponse409 = {
+  data: PostApiV1AccountsIdReset409
+  status: 409
+}
+
 export type postApiV1AccountsIdResetResponse500 = {
   data: PostApiV1AccountsIdReset500
   status: 500
@@ -2169,7 +2477,7 @@ export type postApiV1AccountsIdResetResponse500 = {
 export type postApiV1AccountsIdResetResponseSuccess = (postApiV1AccountsIdResetResponse200) & {
   headers: Headers;
 };
-export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404 | postApiV1AccountsIdResetResponse500) & {
+export type postApiV1AccountsIdResetResponseError = (postApiV1AccountsIdResetResponse400 | postApiV1AccountsIdResetResponse404 | postApiV1AccountsIdResetResponse409 | postApiV1AccountsIdResetResponse500) & {
   headers: Headers;
 };
 
@@ -2739,16 +3047,23 @@ export const getApiV1AccountsIdGroupsGroupId = async (id: string,
 
 
 export type getApiV1MessagesResponse200 = {
-  data: void
+  data: GetApiV1Messages200
   status: 200
+}
+
+export type getApiV1MessagesResponse400 = {
+  data: GetApiV1Messages400
+  status: 400
 }
 
 export type getApiV1MessagesResponseSuccess = (getApiV1MessagesResponse200) & {
   headers: Headers;
 };
-;
+export type getApiV1MessagesResponseError = (getApiV1MessagesResponse400) & {
+  headers: Headers;
+};
 
-export type getApiV1MessagesResponse = (getApiV1MessagesResponseSuccess)
+export type getApiV1MessagesResponse = (getApiV1MessagesResponseSuccess | getApiV1MessagesResponseError)
 
 export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
   const normalizedParams = new URLSearchParams();
@@ -2766,7 +3081,7 @@ export const getGetApiV1MessagesUrl = (params?: GetApiV1MessagesParams,) => {
 }
 
 /**
- * Query stored messages with filters. Requires STORAGE_ENABLED=true.
+ * Query stored messages with filters. Requires STORAGE_ENABLED=true. With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering `{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.
  */
 export const getApiV1Messages = async (params?: GetApiV1MessagesParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesResponse> => {
 
@@ -2974,7 +3289,7 @@ export const getGetApiV1MessagesExportUrl = (params?: GetApiV1MessagesExportPara
 }
 
 /**
- * Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.
+ * Export messages in CSV or JSON format, up to 1000 per request (default and maximum): use `offset` for the rest. Requires STORAGE_ENABLED=true.
  */
 export const getApiV1MessagesExport = async (params?: GetApiV1MessagesExportParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesExportResponse> => {
 
@@ -3024,6 +3339,59 @@ export const getApiV1ConversationsConversationIdContext = async (conversationId:
     params?: GetApiV1ConversationsConversationIdContextParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1ConversationsConversationIdContextResponse> => {
 
   return customFetch<getApiV1ConversationsConversationIdContextResponse>(getGetApiV1ConversationsConversationIdContextUrl(conversationId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+export type getApiV1MediaIdResponse200 = {
+  data: Blob
+  status: 200
+}
+
+export type getApiV1MediaIdResponse202 = {
+  data: GetApiV1MediaId202
+  status: 202
+}
+
+export type getApiV1MediaIdResponse404 = {
+  data: GetApiV1MediaId404
+  status: 404
+}
+
+export type getApiV1MediaIdResponse410 = {
+  data: GetApiV1MediaId410
+  status: 410
+}
+
+export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse200 | getApiV1MediaIdResponse202) & {
+  headers: Headers;
+};
+export type getApiV1MediaIdResponseError = (getApiV1MediaIdResponse404 | getApiV1MediaIdResponse410) & {
+  headers: Headers;
+};
+
+export type getApiV1MediaIdResponse = (getApiV1MediaIdResponseSuccess | getApiV1MediaIdResponseError)
+
+export const getGetApiV1MediaIdUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/media/${id}`
+}
+
+/**
+ * Download the media of a stored message (the `media.url` of its envelope). 200 streams the file; 202 while it is still being downloaded; 410 when it was skipped or has expired.
+ */
+export const getApiV1MediaId = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MediaIdResponse> => {
+
+  return customFetch<getApiV1MediaIdResponse>(getGetApiV1MediaIdUrl(id),
   {
     ...options,
     method: 'GET'

@@ -12,3 +12,8 @@ coverage/
 .idea/
 .claude/
 .tmp-webhooks.json
+
+# Local environment and server-specific deployment files
+.env
+docker-compose.srv07.yml
+tmp/

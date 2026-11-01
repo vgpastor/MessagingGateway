@@ -3,6 +3,8 @@ export const contactRefSchema = {
   properties: {
     id: { type: 'string' as const },
     displayName: { type: 'string' as const },
+    phone: { type: 'string' as const, description: 'E.164 phone number with leading + when known' },
+    lid: { type: 'string' as const, description: 'WhatsApp LID JID when the channel exposes one' },
   },
   required: ['id'] as const,
 };
@@ -23,13 +25,17 @@ export const messageContentSchema = {
   required: ['type'] as const,
 };
 
+/**
+ * `channelDetails` and `gateway` are stored as JSON, so a row keeps whatever shape the version that
+ * wrote it had. Serializing refuses a missing `required` field with a 500, and a page that answers 500
+ * stops its consumer for good at that row: nothing inside them is required.
+ */
 export const channelDetailsSchema = {
   type: 'object' as const,
   additionalProperties: true,
   properties: {
     platform: { type: 'string' as const },
   },
-  required: ['platform'] as const,
 };
 
 export const messageContextSchema = {
@@ -56,10 +62,8 @@ export const gatewayMetadataSchema = {
         owner: { type: 'string' as const },
         tags: { type: 'array' as const, items: { type: 'string' as const } },
       },
-      required: ['id', 'alias', 'owner', 'tags'] as const,
     },
   },
-  required: ['receivedAt', 'adapterId', 'account'] as const,
 };
 
 export const unifiedEnvelopeSchema = {
@@ -70,6 +74,9 @@ export const unifiedEnvelopeSchema = {
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     direction: { type: 'string' as const, enum: ['inbound', 'outbound'] },
     timestamp: { type: 'string' as const, format: 'date-time' },
+    seq: { type: 'integer' as const, description: 'Global, monotonically increasing sequence in the message log' },
+    accountSeq: { type: 'integer' as const, description: 'Per-account contiguous sequence in the message log, starting at 1' },
+    sentAt: { type: 'string' as const, format: 'date-time', description: 'When the sender sent the message (provider timestamp), if known' },
     conversationId: { type: 'string' as const },
     sender: contactRefSchema,
     recipient: contactRefSchema,
@@ -78,6 +85,7 @@ export const unifiedEnvelopeSchema = {
     channelDetails: channelDetailsSchema,
     gateway: gatewayMetadataSchema,
   },
+  // All of them come from NOT NULL columns, so every stored row has them.
   required: [
     'id', 'accountId', 'channel', 'direction', 'timestamp',
     'conversationId', 'sender', 'recipient', 'content',
@@ -164,6 +172,14 @@ export const messageResultSchema = {
   required: ['messageId', 'status', 'timestamp'] as const,
 };
 
+const conversationsSchema = {
+  description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
+  anyOf: [
+    { type: 'string' as const, enum: ['*'] },
+    { type: 'array' as const, items: { type: 'string' as const } },
+  ],
+};
+
 export const accountResponseSchema = {
   type: 'object' as const,
   properties: {
@@ -173,6 +189,7 @@ export const accountResponseSchema = {
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
+    conversations: conversationsSchema,
     connection: {
       type: 'object' as const,
       description: 'Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.',
@@ -209,7 +226,7 @@ export const errorResponseSchema = {
 export const createAccountBodySchema = {
   type: 'object' as const,
   properties: {
-    id: { type: 'string' as const, minLength: 1, description: 'Unique account identifier (e.g. "wa-acme")' },
+    id: { type: 'string' as const, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$', description: 'Unique account identifier (e.g. "wa-acme")' },
     alias: { type: 'string' as const, minLength: 1, description: 'Human-readable name' },
     channel: { type: 'string' as const, enum: ['whatsapp', 'telegram', 'email', 'sms'] },
     provider: {
@@ -220,6 +237,7 @@ export const createAccountBodySchema = {
     credentialsRef: { type: 'string' as const, minLength: 1, description: 'Reference to credentials in env vars (optional if credentials is provided)' },
     credentials: { type: 'string' as const, minLength: 1, description: 'Inline credential string (e.g. "user:apiKey@host:port"). Stored in YAML, used when env vars are not available.' },
     providerConfig: { type: 'object' as const, additionalProperties: true },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {
@@ -243,6 +261,7 @@ export const createAccountBodySchema = {
 
 export const updateAccountBodySchema = {
   type: 'object' as const,
+  additionalProperties: false,
   properties: {
     alias: { type: 'string' as const, minLength: 1 },
     provider: {
@@ -254,6 +273,7 @@ export const updateAccountBodySchema = {
     credentials: { type: 'string' as const, minLength: 1 },
     providerConfig: { type: 'object' as const, additionalProperties: true },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
+    conversations: conversationsSchema,
     metadata: {
       type: 'object' as const,
       properties: {

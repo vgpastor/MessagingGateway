@@ -1,4 +1,4 @@
-import type { MigrationAdapter } from '../migration.port.js';
+import type { MigrationAdapter, MigrationScript } from '../migration.port.js';
 
 type PgPool = import('pg').Pool;
 
@@ -24,14 +24,19 @@ export class PostgresMigrationAdapter implements MigrationAdapter {
     return res.rows.map((r) => r.name);
   }
 
-  async executeSql(sql: string): Promise<void> {
-    await this.pool.query(sql);
-  }
-
-  async recordMigration(name: string, checksum: string): Promise<void> {
-    await this.pool.query(
-      'INSERT INTO _migrations (name, checksum) VALUES ($1, $2)',
-      [name, checksum],
-    );
+  /** Script and record in one explicit transaction on one dedicated connection. */
+  async applyMigration({ name, checksum, sql }: MigrationScript): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query('INSERT INTO _migrations (name, checksum) VALUES ($1, $2)', [name, checksum]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }

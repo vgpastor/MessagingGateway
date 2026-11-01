@@ -2,12 +2,71 @@ import type { FastifyInstance } from 'fastify';
 import type { FullMessageStorePort } from '../../core/persistence/message-store.port.js';
 import type { ConversationContextService } from '../../core/persistence/conversation-context.service.js';
 import type { ConversationContextOptions } from '../../core/persistence/conversation-context.service.js';
-import { errorResponseSchema } from './schemas.js';
+import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT, clampPageLimit } from '../../core/persistence/message-store.utils.js';
+import { errorResponseSchema, unifiedEnvelopeSchema } from './schemas.js';
 
 /** Default limit for paginated queries */
 const DEFAULT_QUERY_LIMIT = 50;
 /** Default limit for export endpoints (higher to allow bulk downloads) */
-const DEFAULT_EXPORT_LIMIT = 1000;
+const DEFAULT_EXPORT_LIMIT = MAX_EXPORT_LIMIT;
+
+const PAGE_LIMIT_DESCRIPTION = `Page size (default: ${DEFAULT_QUERY_LIMIT}, max: ${MAX_PAGE_LIMIT}). Not a number: the default`;
+const OFFSET_DESCRIPTION = 'Rows to skip (default: 0). Not a non-negative number: the default';
+
+/** Page size of a query string: the default when it is not a number, otherwise clamped to [1, max]. */
+function parseLimit(raw: string | undefined, fallback: number, max: number = MAX_PAGE_LIMIT): number {
+  const limit = parseInt(raw ?? '', 10);
+  return Number.isNaN(limit) ? fallback : clampPageLimit(limit, max);
+}
+
+/** Offset of a query string: undefined (the store's default) unless it is a non-negative integer the database can take. */
+function parseOffset(raw: string | undefined): number | undefined {
+  const offset = parseInt(raw ?? '', 10);
+  return Number.isSafeInteger(offset) && offset >= 0 ? offset : undefined;
+}
+
+/** A number or a phone: it starts like a formula, but a spreadsheet can only read it as what it is. */
+const PLAIN_NUMBER = /^[+-]?[0-9][0-9 ]*$/;
+
+/**
+ * One CSV cell. A spreadsheet runs a cell that starts with one of these as a formula, and the text comes
+ * from whoever wrote to the account: the leading `'` makes it show as text.
+ */
+function csvCell(value: unknown): string {
+  const text = String(value ?? '');
+  const safe = /^[=+\-@\t\r]/.test(text) && !PLAIN_NUMBER.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Response of `GET /api/v1/messages`. Two shapes share one schema:
+ * - legacy filtering (no `afterAccountSeq`): `messages`, `total`, `limit`, `offset`
+ * - keyset paging (`afterAccountSeq`): `messages`, `nextAfterAccountSeq`, `lastAccountSeq`, `firstAccountSeq`
+ */
+const messagesResponseSchema = {
+  type: 'object' as const,
+  properties: {
+    messages: { type: 'array' as const, items: unifiedEnvelopeSchema },
+    total: { type: 'integer' as const, description: 'Total matches (legacy filtering only; never present with afterAccountSeq)' },
+    limit: { type: 'integer' as const, description: 'Page size applied (legacy filtering only)' },
+    offset: { type: 'integer' as const, description: 'Offset applied (legacy filtering only)' },
+    nextAfterAccountSeq: {
+      type: 'integer' as const,
+      nullable: true,
+      description: 'afterAccountSeq only: cursor for the next page, or null when there is nothing more',
+    },
+    lastAccountSeq: {
+      type: 'integer' as const,
+      description: 'afterAccountSeq only: highest accountSeq handed out for the account (0 if none). Consumers use it to start "from now"',
+    },
+    firstAccountSeq: {
+      type: 'integer' as const,
+      nullable: true,
+      description: 'afterAccountSeq only: lowest accountSeq still stored for the account (null if none). A cursor below it means retention removed the messages in between, so that jump is not a loss to report',
+    },
+  },
+  required: ['messages'] as const,
+};
 
 interface MessagesControllerDeps {
   messageStore: FullMessageStorePort;
@@ -32,10 +91,15 @@ export async function messagesController(
       until?: string;
       limit?: string;
       offset?: string;
+      afterAccountSeq?: number;
     };
   }>('/api/v1/messages', {
     schema: {
-      description: 'Query stored messages with filters. Requires STORAGE_ENABLED=true.',
+      description:
+        'Query stored messages with filters. Requires STORAGE_ENABLED=true. ' +
+        'With `afterAccountSeq` (requires `accountId`) it pages the inbound log of the account by keyset instead: ' +
+        'messages with accountSeq greater than the cursor, ascending, up to `limit` (max 500), answering ' +
+        '`{ messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq }` and ignoring the other filters.',
       tags: ['Messages'],
       querystring: {
         type: 'object' as const,
@@ -48,13 +112,38 @@ export async function messagesController(
           direction: { type: 'string' as const, enum: ['inbound', 'outbound'] },
           since: { type: 'string' as const, format: 'date-time' },
           until: { type: 'string' as const, format: 'date-time' },
-          limit: { type: 'string' as const },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
+          afterAccountSeq: {
+            type: 'integer' as const,
+            minimum: 0,
+            maximum: Number.MAX_SAFE_INTEGER,
+            description: 'Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.',
+          },
         },
       },
+      response: { 200: messagesResponseSchema, 400: errorResponseSchema },
     },
-  }, async (request) => {
+  }, async (request, reply) => {
     const q = request.query;
+
+    if (q.afterAccountSeq !== undefined) {
+      if (!q.accountId) {
+        return reply.status(400).send({
+          error: 'Bad Request', code: 'MISSING_ACCOUNT_ID', message: 'Query parameter "accountId" is required with "afterAccountSeq"',
+        });
+      }
+      const page = await deps.messageStore.queryAfter({
+        accountId: q.accountId,
+        afterAccountSeq: q.afterAccountSeq,
+        limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
+      });
+      // Read after the page so lastAccountSeq is never behind a message in it.
+      const lastAccountSeq = await deps.messageStore.maxAccountSeq(q.accountId);
+      const firstAccountSeq = await deps.messageStore.minAccountSeq(q.accountId);
+      return { messages: page.messages, nextAfterAccountSeq: page.nextAfterAccountSeq, lastAccountSeq, firstAccountSeq };
+    }
+
     return deps.messageStore.query({
       accountId: q.accountId,
       channel: q.channel,
@@ -64,8 +153,8 @@ export async function messagesController(
       direction: q.direction as 'inbound' | 'outbound' | undefined,
       since: q.since ? new Date(q.since) : undefined,
       until: q.until ? new Date(q.until) : undefined,
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
+      offset: parseOffset(q.offset),
     });
   });
 
@@ -120,10 +209,13 @@ export async function messagesController(
       querystring: {
         type: 'object' as const,
         properties: {
-          q: { type: 'string' as const, description: 'Search query (FTS5 syntax)' },
+          q: {
+            type: 'string' as const,
+            description: 'Text to look for, taken literally: quotes and operators are plain text. SQLite looks for it as one phrase, Postgres for all its words.',
+          },
           accountId: { type: 'string' as const },
-          limit: { type: 'string' as const },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
         },
         required: ['q'] as const,
       },
@@ -135,8 +227,8 @@ export async function messagesController(
     }
     return deps.messageStore.search(q.q, {
       accountId: q.accountId,
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
+      offset: parseOffset(q.offset),
     });
   });
 
@@ -181,7 +273,7 @@ export async function messagesController(
     };
   }>('/api/v1/messages/export', {
     schema: {
-      description: `Export messages in CSV or JSON format. Default limit: ${DEFAULT_EXPORT_LIMIT}. Requires STORAGE_ENABLED=true.`,
+      description: `Export messages in CSV or JSON format, up to ${MAX_EXPORT_LIMIT} per request (default and maximum): use \`offset\` for the rest. Requires STORAGE_ENABLED=true.`,
       tags: ['Messages'],
       querystring: {
         type: 'object' as const,
@@ -190,8 +282,8 @@ export async function messagesController(
           since: { type: 'string' as const, format: 'date-time' },
           until: { type: 'string' as const, format: 'date-time' },
           format: { type: 'string' as const, enum: ['csv', 'json'], default: 'json' },
-          limit: { type: 'string' as const, description: `Max messages to export (default: ${DEFAULT_EXPORT_LIMIT})` },
-          offset: { type: 'string' as const },
+          limit: { type: 'string' as const, description: `Max messages to export (default and maximum: ${MAX_EXPORT_LIMIT}). Not a number: the default` },
+          offset: { type: 'string' as const, description: OFFSET_DESCRIPTION },
         },
       },
     },
@@ -201,8 +293,8 @@ export async function messagesController(
       accountId: q.accountId,
       since: q.since ? new Date(q.since) : undefined,
       until: q.until ? new Date(q.until) : undefined,
-      limit: q.limit ? parseInt(q.limit, 10) : DEFAULT_EXPORT_LIMIT,
-      offset: q.offset ? parseInt(q.offset, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_EXPORT_LIMIT, MAX_EXPORT_LIMIT),
+      offset: parseOffset(q.offset),
     });
 
     if (q.format === 'csv') {
@@ -218,7 +310,7 @@ export async function messagesController(
           m.conversationId,
           m.content.type,
           preview,
-        ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',');
+        ].map(csvCell).join(',');
       });
       const csv = [headers.join(','), ...csvRows].join('\n');
 
@@ -247,7 +339,7 @@ export async function messagesController(
       querystring: {
         type: 'object' as const,
         properties: {
-          limit: { type: 'string' as const, description: `Max messages to return (default: ${DEFAULT_QUERY_LIMIT})` },
+          limit: { type: 'string' as const, description: PAGE_LIMIT_DESCRIPTION },
           since: { type: 'string' as const, format: 'date-time', description: 'Only messages after this UTC timestamp' },
           accountId: { type: 'string' as const, description: 'Filter by account' },
           format: { type: 'string' as const, enum: ['openai', 'raw'], description: 'Output format (default: openai)' },
@@ -259,7 +351,7 @@ export async function messagesController(
     const { conversationId } = request.params;
     const q = request.query;
     const opts: ConversationContextOptions = {
-      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+      limit: parseLimit(q.limit, DEFAULT_QUERY_LIMIT),
       since: q.since ? new Date(q.since) : undefined,
       accountId: q.accountId,
       format: (q.format as 'openai' | 'raw') ?? 'openai',

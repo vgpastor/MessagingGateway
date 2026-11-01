@@ -1,13 +1,15 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
-import type { ChannelAccount, AccountStatus } from '../../core/accounts/channel-account.js';
+import { hasRequiredCredentials, MISSING_CREDENTIALS_MESSAGE, type ChannelAccount, type AccountStatus } from '../../core/accounts/channel-account.js';
 import type { ChannelType, ProviderType } from '../../core/messaging/channel.types.js';
 import type { AccountIdentity } from '../../core/accounts/account-identity.js';
 import type { CredentialValidatorPort } from '../../core/accounts/credential-validator.port.js';
 import type { HealthCheckSchedulerPort } from '../../core/accounts/health-check-scheduler.port.js';
 import type { ProviderLookupPort } from '../../core/providers/provider-lookup.port.js';
-import type { PairingCodeCapable } from '../../core/accounts/connection-manager.port.js';
+import type { PairingCodeCapable, ConnectionManagerPort } from '../../core/accounts/connection-manager.port.js';
 import { buildDefaultIdentity } from '../../core/accounts/account-identity.factory.js';
+import { applyHealthResult } from '../../core/accounts/apply-health-result.js';
+import { AccountAlreadyExistsError } from '../../core/errors.js';
 import {
   accountResponseSchema,
   errorResponseSchema,
@@ -26,6 +28,7 @@ export interface ValidatedAccountData {
   credentialsRef?: string;
   credentials?: string;
   providerConfig: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata: {
     owner: string;
     environment: 'production' | 'staging';
@@ -35,10 +38,23 @@ export interface ValidatedAccountData {
   };
 }
 
-/** Result of validating a create-account request body */
-export interface AccountValidationResult {
+/** Validated shape of an update: only what the request changes. */
+export interface ValidatedAccountUpdate {
+  alias?: string;
+  provider?: string;
+  status?: string;
+  identity?: Record<string, unknown>;
+  credentialsRef?: string;
+  credentials?: string;
+  providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
+  metadata?: Partial<ValidatedAccountData['metadata']>;
+}
+
+/** Result of validating an account request body */
+export interface ValidationResult<T> {
   success: boolean;
-  data?: ValidatedAccountData;
+  data?: T;
   error?: string;
 }
 
@@ -47,8 +63,48 @@ export interface AccountsControllerDeps {
   credentialValidator: CredentialValidatorPort;
   healthCheckScheduler?: HealthCheckSchedulerPort;
   providerRegistry: ProviderLookupPort;
+  /**
+   * Subscribe an account to its provider's inbound events. Must be idempotent
+   * (the same account is wired at boot, on creation and on every connect).
+   * Without it, accounts created at runtime would receive nothing until restart.
+   */
+  wireAccount?: (account: ChannelAccount) => Promise<void>;
   /** Validate create-account request body (injected to avoid schema library coupling) */
-  validateAccountBody: (body: unknown) => AccountValidationResult;
+  validateAccountBody: (body: unknown) => ValidationResult<ValidatedAccountData>;
+  /** Validate update-account request body: what passes can be written and loaded back at the next start. */
+  validateAccountUpdate: (body: unknown) => ValidationResult<ValidatedAccountUpdate>;
+}
+
+/**
+ * Replaces the body with what the validator returns, or answers 400. It runs before Fastify's schema step
+ * because that step coerces: `"todo"` or `5` would arrive here as the valid lists `["todo"]` and `["5"]`.
+ */
+function validatedBody<T>(validate: (body: unknown) => ValidationResult<T>) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = validate(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'INVALID_PAYLOAD',
+        message: parsed.error ?? 'Invalid account payload',
+      });
+    }
+    request.body = parsed.data;
+  };
+}
+
+/** Enough to tell two numbers apart in a log, not enough to contact anyone. */
+function maskPhone(phoneNumber: string): string {
+  return `***${phoneNumber.slice(-4)}`;
+}
+
+/** A suspended account must not connect: only reactivating it does, through PUT. */
+function accountSuspended(accountId: string) {
+  return {
+    error: 'Conflict',
+    code: 'ACCOUNT_SUSPENDED',
+    message: `Account '${accountId}' is suspended. Reactivate it with PUT /api/v1/accounts/${accountId} first.`,
+  };
 }
 
 function getConnectionInfo(account: ChannelAccount, registry: ProviderLookupPort) {
@@ -68,6 +124,7 @@ function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderLook
     provider: account.provider,
     status: account.status,
     identity: account.identity,
+    conversations: account.conversations,
     connection: connectionInfo.managed
       ? { managed: true, status: connectionInfo.status, qr: connectionInfo.qr }
       : undefined,
@@ -84,6 +141,32 @@ export async function accountsController(
   fastify: FastifyInstance,
   deps: AccountsControllerDeps,
 ): Promise<void> {
+
+  /** Wire inbound events for an account; a failure is logged and never blocks the request. */
+  async function wire(account: ChannelAccount): Promise<void> {
+    try {
+      await deps.wireAccount?.(account);
+    } catch (err) {
+      fastify.log.error(`Failed to wire events for ${account.id}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * The ONLY way this controller opens a connection: wire first (idempotent), then
+   * connect. Handlers are forgotten on disconnect, so any connect that skipped the
+   * wiring would pair fine and then receive nothing. Wiring comes first so no
+   * early event is lost.
+   */
+  async function connectWired(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await wire(account);
+    await manager.connect(account.id, account.providerConfig);
+  }
+
+  /** Unlink the device and delete what is left of the session, so the next connect pairs from scratch. */
+  async function logOut(account: ChannelAccount, manager: ConnectionManagerPort): Promise<void> {
+    await manager.disconnect(account.id);
+    await manager.clearSession?.(account.id, account.providerConfig);
+  }
 
   const idParamsSchema = {
     type: 'object' as const,
@@ -146,14 +229,6 @@ export async function accountsController(
       });
     }
 
-    // Auto-reconnect managed providers that are disconnected
-    const manager = deps.providerRegistry.getConnectionManager(account.provider);
-    if (manager && !manager.hasConnection(account.id)) {
-      manager.connect(account.id, account.providerConfig).catch((err) => {
-        fastify.log.warn(`Auto-reconnect failed for ${account.id}: ${(err as Error).message}`);
-      });
-    }
-
     return sanitizeAccount(account, deps.providerRegistry);
   });
 
@@ -191,18 +266,11 @@ export async function accountsController(
     const result = await deps.credentialValidator.validate(account);
 
     // Auto-update identity and status if discovered from provider
-    if (result.discoveredIdentity || result.status !== account.status) {
-      await deps.accountRepository.update(account.id, {
-        status: result.status,
-        ...(result.discoveredIdentity
-          ? { identity: { ...account.identity, ...result.discoveredIdentity } as AccountIdentity }
-          : {}),
-      });
-    }
+    const status = await applyHealthResult(deps.accountRepository, account.id, result);
 
     return {
       accountId: account.id,
-      status: result.status,
+      status: status ?? result.status,
       credentialsConfigured: result.credentialsConfigured,
       detail: result.detail,
       lastChecked: new Date().toISOString(),
@@ -211,6 +279,7 @@ export async function accountsController(
 
   // POST /api/v1/accounts — create a new account
   fastify.post('/api/v1/accounts', {
+    preValidation: validatedBody(deps.validateAccountBody),
     schema: {
       description: 'Create a new messaging account',
       tags: ['Accounts'],
@@ -223,18 +292,7 @@ export async function accountsController(
       },
     },
   }, async (request, reply) => {
-    const body = request.body as Record<string, unknown>;
-
-    const parsed = deps.validateAccountBody(body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: 'Bad Request',
-        code: 'INVALID_PAYLOAD',
-        message: parsed.error ?? 'Invalid account payload',
-      });
-    }
-
-    const data = parsed.data!;
+    const data = request.body as ValidatedAccountData;
     const channel = data.channel as ChannelType;
 
     const account: ChannelAccount = {
@@ -249,6 +307,7 @@ export async function accountsController(
       credentialsRef: data.credentialsRef ?? '',
       credentials: data.credentials,
       providerConfig: data.providerConfig,
+      conversations: data.conversations,
       metadata: {
         owner: data.metadata.owner,
         environment: data.metadata.environment,
@@ -262,6 +321,8 @@ export async function accountsController(
       const saved = await deps.accountRepository.save(account);
       fastify.log.info(`Account created: ${saved.id}`);
 
+      await wire(saved);
+
       // Fire-and-forget health check if credentials are available
       if (saved.credentials || saved.credentialsRef) {
         deps.healthCheckScheduler?.checkAccount(saved.id).catch((err) => {
@@ -272,10 +333,10 @@ export async function accountsController(
       return reply.status(201).send(sanitizeAccount(saved, deps.providerRegistry));
     } catch (err) {
       const message = (err as Error).message;
-      if (message.includes('already exists')) {
+      if (err instanceof AccountAlreadyExistsError) {
         return reply.status(409).send({
           error: 'Conflict',
-          code: 'ACCOUNT_ALREADY_EXISTS',
+          code: err.code,
           message,
         });
       }
@@ -289,6 +350,7 @@ export async function accountsController(
 
   // PUT /api/v1/accounts/:id — update an existing account
   fastify.put<{ Params: { id: string } }>('/api/v1/accounts/:id', {
+    preValidation: validatedBody(deps.validateAccountUpdate),
     schema: {
       description: 'Update an existing messaging account',
       tags: ['Accounts'],
@@ -296,7 +358,9 @@ export async function accountsController(
       body: updateAccountBodySchema,
       response: {
         200: accountResponseSchema,
+        400: errorResponseSchema,
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -312,13 +376,27 @@ export async function accountsController(
       });
     }
 
-    // If identity is provided, ensure channel discriminator is set
-    if (body.identity) {
-      const channel = (body as Record<string, unknown>)['channel'] ?? existing.channel;
-      (body.identity as unknown as Record<string, unknown>)['channel'] = channel;
+    const credentialsOwner = {
+      provider: body.provider ?? existing.provider,
+      credentialsRef: body.credentialsRef ?? existing.credentialsRef,
+      credentials: body.credentials ?? existing.credentials,
+    };
+    if (!hasRequiredCredentials(credentialsOwner)) {
+      return reply.status(400).send({ error: 'Bad Request', code: 'INVALID_PAYLOAD', message: MISSING_CREDENTIALS_MESSAGE });
     }
 
-    const updated = await deps.accountRepository.update(id, body);
+    // If identity is provided, ensure channel discriminator is set
+    if (body.identity) {
+      (body.identity as unknown as Record<string, unknown>)['channel'] = existing.channel;
+    }
+
+    const wasSuspended = existing.status === 'suspended';
+    let updated: ChannelAccount | undefined;
+    try {
+      updated = await deps.accountRepository.update(id, body);
+    } catch (err) {
+      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
+    }
     fastify.log.info(`Account updated: ${id}`);
 
     // Auto health check when credentials change
@@ -331,6 +409,20 @@ export async function accountsController(
     if (!updated) {
       return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found after update' });
     }
+
+    const manager = deps.providerRegistry.getConnectionManager(updated.provider);
+    const isSuspended = updated.status === 'suspended';
+    if (manager && !wasSuspended && isSuspended) {
+      // An open socket would keep receiving. Closed without a logout: reactivating must not need a new QR.
+      manager.closeConnection(id);
+    }
+    // A suspended account was left out of the boot wiring and connection, and nothing else will open them.
+    if (manager && wasSuspended && !isSuspended) {
+      connectWired(updated, manager).catch((err) => {
+        fastify.log.warn(`Connecting reactivated account ${id} failed: ${(err as Error).message}`);
+      });
+    }
+
     return sanitizeAccount(updated, deps.providerRegistry);
   });
 
@@ -350,13 +442,14 @@ export async function accountsController(
           required: ['deleted', 'accountId'],
         },
         404: errorResponseSchema,
+        500: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
     const { id } = request.params;
-    const deleted = await deps.accountRepository.remove(id);
+    const account = await deps.accountRepository.findById(id);
 
-    if (!deleted) {
+    if (!account) {
       return reply.status(404).send({
         error: 'Not Found',
         code: 'ACCOUNT_NOT_FOUND',
@@ -364,6 +457,31 @@ export async function accountsController(
       });
     }
 
+    // First: an account that stays must keep its socket and its session.
+    let removed: boolean;
+    try {
+      removed = await deps.accountRepository.remove(id);
+    } catch (err) {
+      return reply.status(500).send({ error: 'Internal Server Error', code: 'SAVE_FAILED', message: (err as Error).message });
+    }
+    if (!removed) {
+      return reply.status(404).send({ error: 'Not Found', code: 'ACCOUNT_NOT_FOUND', message: `Account '${id}' not found` });
+    }
+
+    // Otherwise its socket would keep receiving and reconnecting with no account behind it, and an account created
+    // later with this id would inherit the session, so the one goes even if the other fails. Neither undoes the deletion.
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
+    try {
+      await manager?.disconnect(id);
+    } catch (err) {
+      fastify.log.error(`Closing deleted account ${id} failed: ${(err as Error).message}`);
+    }
+    try {
+      await manager?.clearSession?.(id, account.providerConfig);
+    } catch (err) {
+      fastify.log.error(`Deleting the session of deleted account ${id} failed: ${(err as Error).message}`);
+    }
+    manager?.forgetAccount?.(id);
     fastify.log.info(`Account deleted: ${id}`);
     return { deleted: true, accountId: id };
   });
@@ -382,6 +500,7 @@ export async function accountsController(
         200: accountResponseSchema,
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -403,7 +522,11 @@ export async function accountsController(
       });
     }
 
-    await manager.connect(account.id, account.providerConfig);
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
+    }
+
+    await connectWired(account, manager);
 
     return sanitizeAccount(account, deps.providerRegistry);
   });
@@ -436,6 +559,7 @@ export async function accountsController(
         },
         400: errorResponseSchema,
         404: errorResponseSchema,
+        409: errorResponseSchema,
       },
     },
   }, async (request, reply) => {
@@ -455,6 +579,10 @@ export async function accountsController(
         code: 'NOT_SELF_AUTH',
         message: `Provider '${account.provider}' does not support pairing codes.`,
       });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
     }
 
     const phoneNumber = request.body?.phoneNumber
@@ -478,14 +606,14 @@ export async function accountsController(
 
     // Ensure connection is started
     if (!manager.hasConnection(account.id)) {
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     }
 
     try {
       const pairingCode = await (manager as unknown as PairingCodeCapable).requestPairingCode(account.id, phoneNumber);
 
       fastify.log.info(
-        { accountId: account.id, phoneNumber },
+        { accountId: account.id, phoneNumber: maskPhone(phoneNumber) },
         'Pairing code requested',
       );
 
@@ -499,57 +627,12 @@ export async function accountsController(
     }
   });
 
-  // POST /api/v1/accounts/:id/disconnect — disconnect and clear session
+  // POST /api/v1/accounts/:id/disconnect — log out and delete the session
   fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/disconnect', {
     schema: {
-      description: 'Disconnect a self-auth provider account and clear its session',
-      tags: ['Accounts'],
-      params: idParamsSchema,
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            accountId: { type: 'string' },
-            status: { type: 'string' },
-          },
-          required: ['accountId', 'status'],
-        },
-        400: errorResponseSchema,
-        404: errorResponseSchema,
-      },
-    },
-  }, async (request, reply) => {
-    const account = await deps.accountRepository.findById(request.params.id);
-    if (!account) {
-      return reply.status(404).send({
-        error: 'Not Found',
-        code: 'ACCOUNT_NOT_FOUND',
-        message: `Account '${request.params.id}' not found`,
-      });
-    }
-
-    const manager = deps.providerRegistry.getConnectionManager(account.provider);
-    if (!manager) {
-      return reply.status(400).send({
-        error: 'Bad Request',
-        code: 'NOT_SELF_AUTH',
-        message: `Provider '${account.provider}' does not support managed connections.`,
-      });
-    }
-
-    await manager.disconnect(account.id);
-    fastify.log.info({ accountId: account.id }, 'Account disconnected');
-
-    return { accountId: account.id, status: 'disconnected' };
-  });
-
-  // POST /api/v1/accounts/:id/reset — clear the stored session and reconnect (fresh QR)
-  fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/reset', {
-    schema: {
       description:
-        'Clear the stored session/credentials and restart the connection so a fresh QR is generated. ' +
-        'Use when the stored auth is expired and the account is stuck reconnecting without emitting a QR. ' +
-        'After calling this, poll GET /api/v1/accounts/:id to retrieve the new QR code.',
+        'Log out a self-auth provider account: unlinks the device and deletes its stored session, so the next ' +
+        'connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it.',
       tags: ['Accounts'],
       params: idParamsSchema,
       response: {
@@ -558,7 +641,6 @@ export async function accountsController(
           properties: {
             accountId: { type: 'string' },
             status: { type: 'string' },
-            message: { type: 'string' },
           },
           required: ['accountId', 'status'],
         },
@@ -586,6 +668,69 @@ export async function accountsController(
       });
     }
 
+    try {
+      await logOut(account, manager);
+    } catch (error) {
+      fastify.log.error({ accountId: account.id, err: error }, 'Account logout failed');
+      return reply.status(500).send({
+        error: 'Internal Server Error',
+        code: 'DISCONNECT_FAILED',
+        message: error instanceof Error ? error.message : 'Failed to delete the session',
+      });
+    }
+    fastify.log.info({ accountId: account.id }, 'Account disconnected');
+
+    return { accountId: account.id, status: 'disconnected' };
+  });
+
+  // POST /api/v1/accounts/:id/reset — clear the stored session and reconnect (fresh QR)
+  fastify.post<{ Params: { id: string } }>('/api/v1/accounts/:id/reset', {
+    schema: {
+      description:
+        'Clear the stored session/credentials and restart the connection so a fresh QR is generated. ' +
+        'Use when the stored auth is expired and the account is stuck reconnecting without emitting a QR. ' +
+        'After calling this, poll GET /api/v1/accounts/:id to retrieve the new QR code.',
+      tags: ['Accounts'],
+      params: idParamsSchema,
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            accountId: { type: 'string' },
+            status: { type: 'string' },
+            message: { type: 'string' },
+          },
+          required: ['accountId', 'status'],
+        },
+        400: errorResponseSchema,
+        404: errorResponseSchema,
+        409: errorResponseSchema,
+        500: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const account = await deps.accountRepository.findById(request.params.id);
+    if (!account) {
+      return reply.status(404).send({
+        error: 'Not Found',
+        code: 'ACCOUNT_NOT_FOUND',
+        message: `Account '${request.params.id}' not found`,
+      });
+    }
+
+    const manager = deps.providerRegistry.getConnectionManager(account.provider);
+    if (!manager) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        code: 'NOT_SELF_AUTH',
+        message: `Provider '${account.provider}' does not support managed connections.`,
+      });
+    }
+
+    if (account.status === 'suspended') {
+      return reply.status(409).send(accountSuspended(account.id));
+    }
+
     const clearSession = manager.clearSession?.bind(manager);
     if (!clearSession) {
       return reply.status(400).send({
@@ -597,7 +742,7 @@ export async function accountsController(
 
     try {
       await clearSession(account.id, account.providerConfig);
-      await manager.connect(account.id, account.providerConfig);
+      await connectWired(account, manager);
     } catch (error) {
       fastify.log.error({ accountId: account.id, err: error }, 'Account session reset failed');
       return reply.status(500).send({

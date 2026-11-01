@@ -2,10 +2,10 @@
 
 [![CI](https://github.com/vgpastor/MessagingGateway/actions/workflows/ci.yml/badge.svg)](https://github.com/vgpastor/MessagingGateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?logo=docker)](https://ghcr.io/vgpastor/messaginggateway)
 [![npm](https://img.shields.io/npm/v/@messaging-gateway/sdk?logo=npm)](https://www.npmjs.com/package/@messaging-gateway/sdk)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js)](https://nodejs.org/)
 
 A single API to send and receive messages across **WhatsApp**, **Telegram**, **Email**, and **SMS**. Connect multiple accounts, receive events in real-time via WebSocket, and forward everything to your automation tools.
 
@@ -33,16 +33,21 @@ docker run -d --name messaging-gateway \
 ```bash
 git clone https://github.com/vgpastor/MessagingGateway.git
 cd MessagingGateway
+
+# 1. Configure: set API_KEY in .env, the gateway does not start without it
+cp .env.example .env
+mkdir -p data
 cp accounts.yaml.example data/accounts.yaml
 docker compose up -d
 
 # 2. Connect WhatsApp (scan QR)
-curl -X POST http://localhost:3123/api/v1/accounts/my-whatsapp/connect
-# Check QR: curl http://localhost:3123/api/v1/accounts/my-whatsapp
+curl -X POST -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts/my-whatsapp/connect
+# Check QR: curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts/my-whatsapp
 
 # 3. Send a message
 curl -X POST http://localhost:3123/api/v1/messages/send \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
   -d '{"from":"my-whatsapp","to":"+34600000001","content":{"type":"text","body":"Hello!"}}'
 ```
 
@@ -68,19 +73,27 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Internal server port |
+| `NODE_ENV` | `development` | `production` in the Docker image. Outside `production`, `/docs` and `/openapi.json` are served and CORS allows any origin |
+| `LOG_LEVEL` | `info` | Log level |
 | `HOST_PORT` | `3123` | Docker host port mapping |
-| `API_KEY` | _(none)_ | API key for auth. Empty = dev mode (no auth) |
+| `API_KEY` | _(none)_ | API key for auth. Required: there is no mode without auth. The gateway refuses to start without it, except with `NODE_ENV=development`, which uses a fixed development key that works nowhere else |
+| `READ_API_KEY` | _(none)_ | Optional read-only key: the stored-message reads, `GET /api/v1/media/:id` and the `/ws/events` stream (never QR codes, never send). Everything else answers `403` |
 | `WEBHOOK_CALLBACK_URL` | _(none)_ | Global webhook URL for forwarding events |
 | `WEBHOOK_CALLBACK_SECRET` | _(none)_ | HMAC secret for webhook signatures |
+| `ALERT_WEBHOOK_URL` | _(none)_ | Receives a `connection.update` when an account goes down: `status: auth_expired` as soon as it loses its session (e.g. WhatsApp unlinked the device), `status: disconnected` after 15 minutes without connection. Retried until it answers 2xx and repeated every 6 hours while the account stays down. A deliberate disconnect or a suspended account raises nothing. Payload has a Slack-compatible `text` field |
 | `ACCOUNTS_CONFIG_PATH` | `data/accounts.yaml` | Path to accounts config file |
 | `HEALTH_CHECK_INTERVAL_MS` | `300000` | Health check interval (ms) |
-| `CORS_ORIGIN` | `*` in dev | Allowed CORS origin in production |
+| `CORS_ORIGIN` | any in dev, none in production | Allowed CORS origin |
 | `SWAGGER_ENABLED` | `false` | Enable Swagger UI in production |
 | `STORAGE_ENABLED` | `false` | Enable message persistence |
 | `STORAGE_DRIVER` | `sqlite` | Storage backend: `sqlite` or `postgres` |
 | `DATABASE_PATH` | `data/messages.db` | SQLite database file path |
 | `DATABASE_URL` | _(none)_ | PostgreSQL connection URL (required when driver=postgres) |
-| `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` |
+| `MEDIA_DIR` | `/app/data/media` | Where inbound media files are stored (keep it inside the data volume) |
+| `MEDIA_MAX_BYTES` | `16777216` | Largest inbound media downloaded (bytes); bigger ones are skipped |
+| `MEDIA_RETENTION_DAYS` | `30` | Days media files are kept; `0` keeps each one as long as its message. Never longer than `MESSAGE_RETENTION_DAYS` when that is set. Checked at startup and every 24 h |
+| `MESSAGE_RETENTION_DAYS` | `0` | Days messages are kept in the log. Opt-in: `0` (default) never deletes messages; set e.g. `180` to delete older ones. Checked at startup and every 24 h |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics at `/metrics` (requires the admin `API_KEY`) |
 
 Create a `.env.local` file to override defaults:
 
@@ -108,11 +121,13 @@ accounts:
       tags: [whatsapp, main]
 ```
 
+`conversations` (also accepted by `POST /api/v1/accounts` and `PUT /api/v1/accounts/:id`) limits which inbound conversations an account keeps: `'*'`, the default, keeps them all; a list of chat/group JIDs drops every other conversation before it is stored.
+
 ## API Reference
 
 ### Authentication
 
-When `API_KEY` is set, all `/api/v1/*` endpoints require authentication:
+All `/api/v1/*` endpoints require authentication:
 
 ```bash
 # Via header
@@ -122,17 +137,19 @@ curl -H "X-API-Key: your-key" http://localhost:3123/api/v1/accounts
 curl -H "Authorization: Bearer your-key" http://localhost:3123/api/v1/accounts
 ```
 
+Two keys exist: `API_KEY` (admin, can do everything) and the optional `READ_API_KEY`, which can only open the WebSocket event stream and `GET` these routes: `/api/v1/messages`, `/api/v1/messages/:id`, `/api/v1/messages/stats`, `/search`, `/analytics` and `/export` under it, and `/api/v1/media/:id`. Any other route answers `403 Forbidden` for the read key, including `/metrics`, the accounts endpoints (they expose the QR), `/api/v1/messages/:id/status`, `/api/v1/conversations/:id/context` and every write.
+
 ### Endpoints
 
-The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); when `SWAGGER_ENABLED=true` it is also served interactively at `GET /docs`. The tables below summarise it.
+The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./openapi.json)); with `SWAGGER_ENABLED=true` or `NODE_ENV` other than `production` it is also served interactively at `GET /docs`. The tables below summarise it.
 
-**System** (no auth)
+**System** (`/health` is public; `/metrics` needs the admin key; `/openapi.json` is public but only exists with `SWAGGER_ENABLED=true` or `NODE_ENV` other than `production`)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Health check (returns status, version, uptime) |
-| `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/openapi.json` | OpenAPI 3 specification |
+| `GET` | `/health` | Health check: always HTTP 200, with `status`, `timestamp`, `version` and `uptime`. `status` is `ok`, or `degraded` when any account that is not deliberately `suspended` is not `active` or has lost its connection. It is public, so it names no account: the detail is in `GET /api/v1/accounts` |
+| `GET` | `/metrics` | Prometheus metrics (admin API key required) |
+| `GET` | `/openapi.json` | OpenAPI 3 specification (see above) |
 
 **Accounts** (auth required)
 
@@ -141,11 +158,11 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `GET` | `/api/v1/accounts` | List all accounts |
 | `GET` | `/api/v1/accounts/:id` | Get account (includes QR code while connecting) |
 | `POST` | `/api/v1/accounts` | Create account |
-| `PUT` | `/api/v1/accounts/:id` | Update account |
+| `PUT` | `/api/v1/accounts/:id` | Update account. `status: suspended` closes its connection and keeps the session on disk; reactivating connects it again with no new QR. While suspended, connect, pair and reset answer `409 ACCOUNT_SUSPENDED` |
 | `DELETE` | `/api/v1/accounts/:id` | Delete account |
 | `POST` | `/api/v1/accounts/:id/connect` | Initiate connection (generates QR) — self-auth providers |
 | `POST` | `/api/v1/accounts/:id/pair` | Request a pairing code instead of a QR — self-auth providers |
-| `POST` | `/api/v1/accounts/:id/disconnect` | Disconnect the socket (keeps stored credentials) |
+| `POST` | `/api/v1/accounts/:id/disconnect` | Log out: unlinks the device from WhatsApp and deletes the stored session, so the next connect pairs again. Waits up to 5 s for the logout. To stop an account and keep its session, suspend it |
 | `POST` | `/api/v1/accounts/:id/reset` | Clear the stored session and reconnect for a fresh QR — use when auth is expired and the account is stuck reconnecting without emitting a QR |
 | `GET` | `/api/v1/accounts/:id/health` | Per-account connection health |
 
@@ -165,6 +182,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `POST` | `/api/v1/messages/:id/read` | Mark a message as read |
 | `GET` | `/api/v1/messages` | Query stored messages with filters † |
 | `GET` | `/api/v1/messages/:id` | Get a stored message by ID † |
+| `GET` | `/api/v1/media/:id` | Download a message's media (`media.url`): 200 file, 202 still downloading, 410 skipped/expired † |
 | `GET` | `/api/v1/messages/search?q=` | Full-text search across messages † |
 | `GET` | `/api/v1/messages/stats` | Message count with filters † |
 | `GET` | `/api/v1/messages/analytics` | Aggregated statistics (by channel, direction, hourly) † |
@@ -172,6 +190,8 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 | `GET` | `/api/v1/conversations/:id/context` | AI-ready conversation history † |
 
 † Requires message persistence (`STORAGE_ENABLED=true`); otherwise these routes are not registered.
+
+The reads take `limit`: 50 by default and 500 at most, or 1000 (both default and maximum) on the export, which pages with `offset`. A `limit` or `offset` that is not a number gets the default.
 
 **Webhook configuration** (auth required) — forward events to your systems
 
@@ -199,7 +219,7 @@ The full, always-current contract lives in the OpenAPI spec ([`openapi.json`](./
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `WS` | `/ws/events` | Token (query param) | Real-time event stream |
+| `WS` | `/ws/events` | API key (header or subprotocol) | Real-time event stream |
 
 ### Send a Message
 
@@ -222,12 +242,16 @@ curl -X POST http://localhost:3123/api/v1/messages/send \
 ### WebSocket
 
 ```javascript
-const ws = new WebSocket('ws://localhost:3123/ws/events?token=your-key&accounts=my-whatsapp');
+// Browsers cannot set headers: pass the key as a subprotocol. The server echoes it back.
+// A browser throws a SyntaxError if the key has `/` or `=`, as standard base64 does: use hex or base64url.
+// Other clients can send `Authorization: Bearer <key>` or `X-API-Key: <key>` instead.
+// (`?token=<key>` still works but is deprecated: URLs end up in logs.)
+const ws = new WebSocket('ws://localhost:3123/ws/events?accounts=my-whatsapp', ['umg.your-key']);
 
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
   console.log(msg.event, msg.data);
-  // event: "message.inbound" | "connection.update" | "message.sent"
+  // event: "message.inbound" | "connection.update" | "message.sent" | "message.send.failed"
 };
 
 // Send a message via WebSocket
@@ -237,6 +261,8 @@ ws.send(JSON.stringify({
 }));
 ```
 
+The server pings every client every 30 s and terminates the ones that do not answer (or whose send fails), so a half-open connection is dropped instead of silently missing events: reconnect and catch up. With the read-only key, `send` is refused and `connection.update` events carry `qr: null`.
+
 ### Inbound Message Format (Unified Envelope)
 
 Every inbound message, regardless of platform, arrives in this standardized format:
@@ -244,6 +270,7 @@ Every inbound message, regardless of platform, arrives in this standardized form
 ```json
 {
   "id": "msg_abc123",
+  "accountSeq": 42,
   "accountId": "my-whatsapp",
   "channel": "whatsapp",
   "direction": "inbound",
@@ -322,6 +349,20 @@ curl -H "X-API-Key: your-key" \
 curl -H "X-API-Key: your-key" \
   "http://localhost:3123/api/v1/messages/export?format=csv" -o messages.csv
 ```
+
+#### Consume the log without losing messages
+
+Every stored inbound message has an `accountSeq`, contiguous per account. Keep the last one you processed and, when you start, reconnect or see a gap, read what follows it:
+
+```bash
+curl -H "X-API-Key: your-key" \
+  "http://localhost:3123/api/v1/messages?accountId=my-whatsapp&afterAccountSeq=41&limit=500"
+# { "messages": [...], "nextAfterAccountSeq": 541, "lastAccountSeq": 900, "firstAccountSeq": 1 }
+```
+
+Repeat with `nextAfterAccountSeq` until it is `null`. `lastAccountSeq` is where to start to get only what comes from now on. If your cursor is below `firstAccountSeq`, retention removed the messages in between: that jump is not a loss.
+
+**Deduplicate by `id`.** A message the gateway could not store is still delivered live, without `accountSeq`, and is stored as soon as the database is back, or at the next start: it then comes again, with the same `id`, when you catch up. The same message can reach you twice, so an `accountSeq` alone does not tell you whether you have already seen it.
 
 #### AI-ready conversation context
 
@@ -415,9 +456,12 @@ See [packages/sdk/README.md](packages/sdk/README.md) for full documentation.
 ```bash
 npm install
 npm run build      # TypeScript -> dist/
-npm test           # Run all tests (vitest, 241+ tests)
+npm test           # Run all tests (vitest)
 npm run lint       # Type check (tsc --noEmit)
+cd packages/sdk && npm install && npm test   # The SDK has its own dependencies and tests
 ```
+
+The PostgreSQL tests only run with `TEST_DATABASE_URL` set (e.g. `postgres://postgres@127.0.0.1:5432/mg_test`); each one creates its own schema.
 
 ## Releases
 

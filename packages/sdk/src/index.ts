@@ -73,6 +73,8 @@ export type {
 export type {
   MessageQuery,
   MessageQueryResult,
+  MessagesAfterResult,
+  MediaDownload,
   MessageStats,
   ConversationContext,
   ConversationContextOptions,

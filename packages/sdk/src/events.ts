@@ -1,5 +1,6 @@
-import WebSocket from 'ws';
 import { EventEmitter } from 'node:events';
+import { computeBackoffMs, DEFAULT_BACKOFF_BASE_MS, DEFAULT_BACKOFF_MAX_MS } from './backoff.js';
+import { openSocket, DEFAULT_HANDSHAKE_TIMEOUT_MS, type GatewaySocket } from './socket.js';
 import type {
   EventsConfig, SendMessageCommand, UnifiedEnvelope,
   MessageSentData, ConnectionUpdateData, MessageSendFailedData,
@@ -17,11 +18,29 @@ type EventMap = {
   'subscribed': [accounts: string[]];
   'unsubscribed': [accounts: string[]];
   'pong': [];
+  /** A reconnect was scheduled: `attempt` is 1-based, `delayMs` the jittered wait. */
+  'reconnecting': [attempt: number, delayMs: number];
   'raw': [event: WsEventType, data: unknown];
 };
 
+interface ServerMessage { event: string; timestamp?: string; data?: unknown; accounts?: string[]; replyTo?: string }
+
+/** The server closes with this when it refuses the API key: retrying with the same key cannot help. */
+const UNAUTHORIZED_CLOSE_CODE = 4401;
+
+/** No server ping and no message for this long means the connection is dead (the server pings every 30 s). */
+const HEARTBEAT_TIMEOUT_MS = 75_000;
+
 /**
  * WebSocket event client for real-time gateway events.
+ *
+ * Authenticates with the API key in an `Authorization` header (Node) or the
+ * `umg.<key>` subprotocol (browser) — never in the URL. Reconnects with
+ * exponential backoff and full jitter, and drops connections that go silent
+ * for 75 s, but not after a `4401`: the key was refused, so it emits `error` and stays down until the next
+ * `connect()`. After a reconnect, use `client.messages.after(...)` with the last
+ * seen `accountSeq` to catch up on anything missed, and deduplicate by `id`: a
+ * message may arrive both ways.
  *
  * @example
  * ```typescript
@@ -39,57 +58,77 @@ type EventMap = {
  * ```
  */
 export class MessagingGatewayEvents {
-  private ws: WebSocket | null = null;
-  private readonly config: Required<EventsConfig>;
+  private ws: GatewaySocket | null = null;
+  private readonly config: Required<Omit<EventsConfig, 'reconnectIntervalMs' | 'accounts'>>;
+  /** The filter the server holds for this client (empty: every account), so a reconnect asks for it again. */
+  private subscriptions: string[];
   private readonly emitter = new EventEmitter();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
   private intentionalClose = false;
-  private pendingSends: Array<{ resolve: (id: string) => void; reject: (err: Error) => void; id: string }> = [];
 
   constructor(config: EventsConfig) {
     this.config = {
       baseUrl: config.baseUrl.replace(/\/$/, ''),
       apiKey: config.apiKey ?? '',
-      accounts: config.accounts ?? [],
       autoReconnect: config.autoReconnect ?? true,
-      reconnectIntervalMs: config.reconnectIntervalMs ?? 5000,
+      reconnectBaseMs: config.reconnectBaseMs ?? config.reconnectIntervalMs ?? DEFAULT_BACKOFF_BASE_MS,
+      reconnectMaxMs: config.reconnectMaxMs ?? DEFAULT_BACKOFF_MAX_MS,
+      handshakeTimeoutMs: config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
+      random: config.random ?? Math.random,
     };
+    this.subscriptions = [...(config.accounts ?? [])];
   }
 
   /** Connect to the WebSocket server */
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.ws) return; // already open or connecting
 
     this.intentionalClose = false;
-    const wsUrl = this.buildWsUrl();
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.on('open', () => {
-      // 'connected' event comes from the server, not from the open event
-    });
-
-    this.ws.on('message', (raw: Buffer | string) => {
-      try {
-        const msg = JSON.parse(raw.toString());
+    const socket: GatewaySocket = openSocket(this.buildWsUrl(), this.config.apiKey, {
+      onOpen: () => {
+        // 'connected' event comes from the server, not from the open event
+        if (this.ws === socket) this.armWatchdog();
+      },
+      onMessage: (data) => {
+        if (this.ws === socket) this.armWatchdog();
+        let msg: ServerMessage;
+        try {
+          msg = JSON.parse(data);
+        } catch {
+          return; // Ignore malformed messages
+        }
         this.handleServerMessage(msg);
-      } catch {
-        // Ignore malformed messages
-      }
-    });
-
-    this.ws.on('close', (code, reason) => {
-      this.ws = null;
-      this.emitter.emit('disconnected', code, reason.toString());
-      this.rejectPendingSends('WebSocket disconnected');
-
-      if (this.config.autoReconnect && !this.intentionalClose) {
-        this.scheduleReconnect();
-      }
-    });
-
-    this.ws.on('error', (err) => {
-      this.emitter.emit('error', err);
-    });
+      },
+      onPing: () => {
+        if (this.ws === socket) this.armWatchdog();
+      },
+      onClose: (code, reason) => {
+        const wasCurrent = this.ws === socket;
+        if (wasCurrent) {
+          this.ws = null;
+          this.clearWatchdog();
+        }
+        const refused = code === UNAUTHORIZED_CLOSE_CODE;
+        // Schedule the reconnect before notifying anyone: nothing a listener does may prevent it
+        if (wasCurrent && this.config.autoReconnect && !this.intentionalClose && !refused) {
+          this.scheduleReconnect();
+        }
+        if (wasCurrent && refused) this.reportRefusedKey(reason);
+        this.emit('disconnected', code, reason);
+      },
+      onError: (err) => {
+        // Errors from a socket we already dropped (e.g. an aborted handshake) are noise,
+        // and an EventEmitter 'error' nobody listens to would throw
+        if (this.ws === socket && this.emitter.listenerCount('error') > 0) {
+          this.emit('error', err);
+        }
+      },
+    }, undefined, this.config.handshakeTimeoutMs);
+    this.ws = socket;
+    // Also bound the connecting phase: an upgrade that never completes must not wedge the client
+    this.armWatchdog();
   }
 
   /** Disconnect from the WebSocket server */
@@ -99,21 +138,29 @@ export class MessagingGatewayEvents {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
-      this.ws.close(1000, 'Client disconnect');
-      this.ws = null;
-    }
-    this.rejectPendingSends('Client disconnected');
+    this.clearWatchdog();
+    const socket = this.ws;
+    this.ws = null;
+    socket?.close(1000, 'Client disconnect');
   }
 
-  /** Subscribe to events from specific accounts */
+  /**
+   * Listen to these accounts only, replacing the current filter; an empty list means every account.
+   * Survives reconnects. Throws when not connected, and then nothing changes.
+   */
   subscribe(accounts: string[]): void {
     this.sendAction({ action: 'subscribe', accounts });
+    this.subscriptions = [...accounts];
   }
 
-  /** Unsubscribe from account events */
+  /**
+   * Remove accounts from the filter. Removing the last one leaves no filter, which means every
+   * account, and with no filter this does nothing. Survives reconnects. Throws when not connected,
+   * and then nothing changes.
+   */
   unsubscribe(accounts: string[]): void {
     this.sendAction({ action: 'unsubscribe', accounts });
+    this.subscriptions = this.subscriptions.filter((account) => !accounts.includes(account));
   }
 
   /** Send a message via WebSocket (returns correlation ID) */
@@ -130,7 +177,7 @@ export class MessagingGatewayEvents {
 
   /** Whether the WebSocket is connected */
   get isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN;
+    return this.ws?.isOpen ?? false;
   }
 
   // ── Event listener methods ──────────────────────────────────
@@ -152,55 +199,57 @@ export class MessagingGatewayEvents {
 
   // ── Internal ────────────────────────────────────────────────
 
-  private handleServerMessage(msg: { event: string; timestamp?: string; data?: unknown; accounts?: string[]; replyTo?: string }): void {
+  private handleServerMessage(msg: ServerMessage): void {
     const event = msg.event as WsEventType;
 
     // Emit raw for advanced consumers
-    this.emitter.emit('raw', event, msg.data);
+    this.emit('raw', event, msg.data);
 
     switch (event) {
       case 'connected':
-        this.emitter.emit('connected');
+        // The server accepted us: the connection is healthy, so backoff starts over
+        this.reconnectAttempt = 0;
+        this.emit('connected');
         break;
       case 'message.inbound':
-        this.emitter.emit('message.inbound', msg.data as UnifiedEnvelope);
+        this.emit('message.inbound', msg.data as UnifiedEnvelope);
         break;
       case 'message.sent':
-        this.emitter.emit('message.sent', msg.data as MessageSentData);
+        this.emit('message.sent', msg.data as MessageSentData);
         break;
       case 'message.send.failed':
-        this.emitter.emit('message.send.failed', msg.data as MessageSendFailedData);
+        this.emit('message.send.failed', msg.data as MessageSendFailedData);
         break;
       case 'connection.update':
-        this.emitter.emit('connection.update', msg.data as ConnectionUpdateData);
+        this.emit('connection.update', msg.data as ConnectionUpdateData);
         break;
       case 'subscribed':
-        this.emitter.emit('subscribed', msg.accounts ?? []);
+        this.emit('subscribed', msg.accounts ?? []);
         break;
       case 'unsubscribed':
-        this.emitter.emit('unsubscribed', msg.accounts ?? []);
+        this.emit('unsubscribed', msg.accounts ?? []);
         break;
       case 'pong':
-        this.emitter.emit('pong');
+        this.emit('pong');
         break;
     }
   }
 
   private sendAction(action: Record<string, unknown>): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
+    if (!this.ws?.isOpen) {
       throw new Error('WebSocket is not connected');
     }
     this.ws.send(JSON.stringify(action));
   }
 
+  /** The API key is deliberately not part of the URL; see `openSocket`. */
   private buildWsUrl(): string {
     const base = this.config.baseUrl
       .replace(/^http:/, 'ws:')
       .replace(/^https:/, 'wss:');
 
     const params = new URLSearchParams();
-    if (this.config.apiKey) params.set('token', this.config.apiKey);
-    if (this.config.accounts.length) params.set('accounts', this.config.accounts.join(','));
+    if (this.subscriptions.length) params.set('accounts', this.subscriptions.join(','));
 
     const qs = params.toString();
     return `${base}/ws/events${qs ? `?${qs}` : ''}`;
@@ -208,16 +257,69 @@ export class MessagingGatewayEvents {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return;
+    const delayMs = computeBackoffMs(this.reconnectAttempt, {
+      baseMs: this.config.reconnectBaseMs,
+      maxMs: this.config.reconnectMaxMs,
+      random: this.config.random,
+    });
+    this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.config.reconnectIntervalMs);
+    }, delayMs);
+    this.emit('reconnecting', this.reconnectAttempt, delayMs);
   }
 
-  private rejectPendingSends(reason: string): void {
-    for (const pending of this.pendingSends) {
-      pending.reject(new Error(reason));
+  /**
+   * Emits to every listener in isolation: one that throws neither aborts the socket
+   * handlers nor starves the remaining listeners. The exception is reported through
+   * the `error` event instead of being swallowed.
+   */
+  private emit<K extends keyof EventMap>(event: K, ...args: EventMap[K]): void {
+    for (const listener of this.emitter.rawListeners(event)) {
+      try {
+        (listener as (...a: unknown[]) => void)(...args);
+      } catch (err) {
+        this.reportListenerError(event, err);
+      }
     }
-    this.pendingSends = [];
+  }
+
+  /** The client stops here for good, so it must not go unnoticed: with nobody listening for `error`, the console hears it. */
+  private reportRefusedKey(reason: string): void {
+    const error = new Error(`The gateway refused the API key, so the client will not reconnect: ${reason}`);
+    if (this.emitter.listenerCount('error') > 0) {
+      this.emit('error', error);
+      return;
+    }
+    console.error(`[messaging-gateway-sdk] ${error.message}`);
+  }
+
+  private reportListenerError(event: keyof EventMap, err: unknown): void {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (event !== 'error' && this.emitter.listenerCount('error') > 0) {
+      this.emit('error', error);
+      return;
+    }
+    // A throwing 'error' listener, or nobody listening: do not crash the socket loop, do not hide it
+    console.error(`[messaging-gateway-sdk] unhandled error in '${event}' listener:`, error);
+  }
+
+  /** (Re)starts the dead-connection timer; any server activity proves the link is alive. */
+  private armWatchdog(): void {
+    if (!this.ws?.supportsPing) return;
+    this.clearWatchdog();
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null;
+      // terminate() makes the socket's close handler run, which schedules the reconnect
+      this.ws?.terminate();
+    }, HEARTBEAT_TIMEOUT_MS);
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
   }
 }

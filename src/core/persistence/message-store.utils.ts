@@ -57,17 +57,27 @@ export function extractPreview(envelope: UnifiedEnvelope): string | null {
   }
 }
 
-// ── Row mapping ─────────────────────────────────────────────────
+// ── Message log helpers ─────────────────────────────────────────
 
-/** Parse a JSON column that may already be an object (PostgreSQL JSONB) or a string (SQLite TEXT) */
-export function parseJsonColumn<T = unknown>(value: string | Record<string, unknown> | null | undefined): T | undefined {
-  if (value == null) return undefined;
-  if (typeof value === 'string') return JSON.parse(value) as T;
-  return value as T;
+/** Hard cap for one page of messages */
+export const MAX_PAGE_LIMIT = 500;
+
+/** Hard cap for one export, the one read allowed past a page: `query` serves it, so `query` caps at this */
+export const MAX_EXPORT_LIMIT = 1000;
+
+/** Clamp a requested page size to [1, max] */
+export function clampPageLimit(limit: number, max: number = MAX_PAGE_LIMIT): number {
+  if (!Number.isFinite(limit)) return max;
+  return Math.min(Math.max(Math.trunc(limit), 1), max);
 }
 
-/** Parse a required JSON column (never undefined) */
-export function parseJsonColumnRequired<T = unknown>(value: string | Record<string, unknown>): T {
-  if (typeof value === 'string') return JSON.parse(value) as T;
-  return value as T;
+/** WhatsApp message id carried by the envelope, or null when absent/empty (null never dedupes) */
+export function waMessageIdOf(envelope: UnifiedEnvelope): string | null {
+  const id = envelope.channelDetails?.messageId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+/** Cutoff instant (ISO UTC) for "older than N days" retention */
+export function cutoffUTC(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
 }

@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
@@ -160,18 +161,8 @@ let store: SqliteMessageStore;
 
 const AUTH_HEADERS = { 'x-api-key': 'test-api-key' };
 
-beforeAll(async () => {
-  // Create in-memory SQLite store
-  store = new SqliteMessageStore(':memory:');
-  await store.init();
-  await store.runMigrations();
-
-  // Seed test data
-  for (const envelope of testEnvelopes) {
-    await store.save(envelope);
-  }
-
-  // Build server with the message store wired in
+/** Builds a server around `messageStore` (accounts and providers come from the test fixtures) */
+async function buildApp(messageStore: SqliteMessageStore): Promise<FastifyInstance> {
   const accounts = loadAccountsFromYaml(
     resolve(process.cwd(), 'tests/fixtures/accounts.yaml'),
   );
@@ -183,25 +174,87 @@ beforeAll(async () => {
   const webhookConfigRepo = new InMemoryWebhookConfigRepo();
   const webhookForwarder = new WebhookForwarder(webhookConfigRepo, undefined, undefined);
 
-  app = await createServer({
+  const server = await createServer({
     accountRepository,
     webhookConfigRepo,
     providerRegistry,
     messageRouter,
     credentialValidator,
     webhookForwarder,
-    messageStore: store,
+    messageStore,
     apiKey: 'test-api-key',
     port: 0,
     logLevel: 'silent',
   });
 
-  await app.ready();
+  await server.ready();
+  return server;
+}
+
+async function createStore(): Promise<SqliteMessageStore> {
+  const created = new SqliteMessageStore(':memory:');
+  await created.init();
+  await created.runMigrations();
+  return created;
+}
+
+beforeAll(async () => {
+  store = await createStore();
+
+  // Seed test data
+  for (const envelope of testEnvelopes) {
+    await store.save(envelope);
+  }
+
+  app = await buildApp(store);
 });
 
 afterAll(async () => {
   await app.close();
   await store.close();
+});
+
+// ── Page size and offset from the query string ───────────────
+
+describe('limit and offset of the read routes', () => {
+  const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH_HEADERS });
+
+  it.each([
+    ['/api/v1/messages?limit=abc', 200, 50],
+    ['/api/v1/messages?limit=999999', 200, 500],
+    ['/api/v1/messages?limit=0', 200, 1],
+    ['/api/v1/messages?limit=-5', 200, 1],
+    ['/api/v1/messages/search?q=order&limit=abc', 200, 50],
+    ['/api/v1/messages/search?q=order&limit=999999', 200, 500],
+    ['/api/v1/messages/export?limit=abc', 200, 1000],
+    ['/api/v1/messages/export?limit=999999', 200, 1000],
+    ['/api/v1/messages/export?limit=-5', 200, 1],
+  ])('GET %s answers %i with limit %i', async (url, status, limit) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.json().limit).toBe(limit);
+  });
+
+  it.each([
+    '/api/v1/messages?offset=abc',
+    '/api/v1/messages?offset=-1',
+    '/api/v1/messages?offset=99999999999999999999999',
+    '/api/v1/messages/search?q=order&offset=abc',
+    '/api/v1/messages/export?offset=-1',
+  ])('GET %s falls back to offset 0', async (url) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().offset).toBe(0);
+  });
+
+  it.each(['abc', '-5', '999999'])('the conversation context takes limit=%s without failing', async (limit) => {
+    const res = await get(`/api/v1/conversations/34600000001@s.whatsapp.net/context?limit=${limit}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().messages.length).toBeGreaterThan(0);
+  });
 });
 
 // ── GET /api/v1/messages ─────────────────────────────────────
@@ -304,6 +357,81 @@ describe('GET /api/v1/messages/:id', () => {
 
     const body = res.json();
     expect(body.code).toBe('MESSAGE_NOT_FOUND');
+  });
+});
+
+// ── Text that is data, not syntax ────────────────────────────
+
+describe('text from a message or a query is only text', () => {
+  let localStore: SqliteMessageStore;
+  let localApp: FastifyInstance;
+
+  function textMessage(id: string, displayName: string, body: string): UnifiedEnvelope {
+    return {
+      ...testEnvelopes[0]!,
+      id,
+      accountId: 'wa-text',
+      sender: { id: 'x@s.whatsapp.net', displayName },
+      content: { type: 'text', body },
+    };
+  }
+
+  beforeAll(async () => {
+    localStore = await createStore();
+    await localStore.save(textMessage('m-plain', 'Ana', 'the a-b plan'));
+    await localStore.save(textMessage('m-and', 'Luis', 'this AND that'));
+    await localStore.save(textMessage('m-eq', '=HYPERLINK("http://evil","x")', '=1+1'));
+    await localStore.save(textMessage('m-plus', '+34600000001', '+cmd|calc'));
+    await localStore.save(textMessage('m-spaced', '+34 600 000 002', '-42'));
+    await localStore.save(textMessage('m-phone-then-formula', '+34600000003+cmd|calc', '-3 4 x'));
+    await localStore.save(textMessage('m-minus', 'Eva', '-2+3'));
+    await localStore.save(textMessage('m-at', 'Eva', '@SUM(A1)'));
+    await localStore.save(textMessage('m-tab', 'Eva', '\t=1+1'));
+    await localStore.save(textMessage('m-cr', 'Eva', '\r=1+1'));
+    localApp = await buildApp(localStore);
+  });
+
+  afterAll(async () => {
+    await localApp.close();
+    await localStore.close();
+  });
+
+  async function search(q: string) {
+    return localApp.inject({ method: 'GET', url: `/api/v1/messages/search?accountId=wa-text&q=${encodeURIComponent(q)}`, headers: AUTH_HEADERS });
+  }
+
+  it.each(['a-b', '"x', 'AND', 'NEAR(', 'a*', 'body:x', '---', '"', 'a\0b'])('search takes %j as literal text, never answering 500', async (q) => {
+    expect((await search(q)).statusCode).toBe(200);
+  });
+
+  it('search looks for the words as they came', async () => {
+    expect((await search('a-b')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-plain']);
+    expect((await search('AND')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-and']);
+    expect((await search('this AND that')).json().messages.map((m: { id: string }) => m.id)).toEqual(['m-and']);
+  });
+
+  it('the description of search promises no query syntax', async () => {
+    const spec = (await localApp.inject({ method: 'GET', url: '/openapi.json' })).json();
+    const q = spec.paths['/api/v1/messages/search'].get.parameters.find((p: { name: string }) => p.name === 'q');
+
+    expect(q.description).not.toContain('FTS5');
+  });
+
+  it('the CSV export neutralizes the cells a spreadsheet would run as a formula', async () => {
+    const res = await localApp.inject({ method: 'GET', url: '/api/v1/messages/export?format=csv&accountId=wa-text', headers: AUTH_HEADERS });
+    const csv = res.body;
+
+    expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
+    for (const preview of ['=1+1', '+cmd|calc', '-2+3', '@SUM(A1)', '\t=1+1', '\r=1+1', '+34600000003+cmd|calc', '-3 4 x']) {
+      expect(csv).toContain(`"'${preview}"`);
+    }
+    // A number or a phone is no formula, and the quote would get in the way of whoever reads the export.
+    for (const plain of ['+34600000001', '+34 600 000 002', '-42']) {
+      expect(csv).toContain(`"${plain}"`);
+      expect(csv).not.toContain(`"'${plain}"`);
+    }
+    expect(csv).toContain('"the a-b plan"');
+    expect(csv).toContain('"Ana"');
   });
 });
 
@@ -482,5 +610,149 @@ describe('GET /api/v1/messages/stats', () => {
 
     const body = res.json();
     expect(body.total).toBe(5);
+  });
+});
+
+// ── GET /api/v1/messages?afterAccountSeq= ────────────────────
+
+describe('GET /api/v1/messages?afterAccountSeq=', () => {
+  let seqApp: FastifyInstance;
+  let seqStore: SqliteMessageStore;
+
+  const inbound = (n: number): UnifiedEnvelope => ({
+    ...testEnvelopes[0]!,
+    id: `msg-seq-${n}`,
+    accountId: 'wa-seq',
+    timestamp: new Date(`2026-04-05T11:0${n}:00Z`),
+    sentAt: new Date(`2026-04-05T11:0${n}:00Z`),
+    sender: { id: '34600000001@s.whatsapp.net', displayName: 'Alice', phone: '+34600111222', lid: '144980999962625@lid' },
+    content: { type: 'text', body: `inbound ${n}` },
+    channelDetails: { platform: 'whatsapp', messageId: `WA-${n}` },
+    gateway: { ...testEnvelopes[0]!.gateway, account: { ...testEnvelopes[0]!.gateway.account, id: 'wa-seq' } },
+  });
+
+  beforeAll(async () => {
+    seqStore = await createStore();
+    for (const n of [1, 2, 3]) await seqStore.insertInbound(inbound(n));
+    // An outbound row saved the regular way has no accountSeq and must never appear in the paging
+    await seqStore.save({ ...inbound(4), id: 'msg-seq-out', direction: 'outbound', channelDetails: { platform: 'whatsapp' } });
+    // Another account must not leak in
+    await seqStore.insertInbound({ ...inbound(1), id: 'msg-other-1', accountId: 'wa-other', channelDetails: { platform: 'whatsapp', messageId: 'O1' } });
+    seqApp = await buildApp(seqStore);
+  });
+
+  afterAll(async () => {
+    await seqApp.close();
+    await seqStore.close();
+  });
+
+  const get = (query: string) => seqApp.inject({ method: 'GET', url: `/api/v1/messages?${query}`, headers: AUTH_HEADERS });
+
+  it('afterAccountSeq requires accountId', async () => {
+    const res = await get('afterAccountSeq=0');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe('MISSING_ACCOUNT_ID');
+  });
+
+  it('takes the highest safe integer as a cursor, and nothing above it', async () => {
+    expect((await get(`accountId=wa-seq&afterAccountSeq=${Number.MAX_SAFE_INTEGER}`)).statusCode).toBe(200);
+    expect((await get('accountId=wa-seq&afterAccountSeq=9007199254740992')).statusCode).toBe(400);
+  });
+
+  it.each(['-1', 'abc', '1.5'])('rejects afterAccountSeq=%s with 400', async (value) => {
+    const res = await get(`accountId=wa-seq&afterAccountSeq=${value}`);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('afterAccountSeq returns ascending page and next cursor', async () => {
+    const res = await get('accountId=wa-seq&afterAccountSeq=1&limit=1');
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].accountSeq).toBe(2);
+    expect(body.nextAfterAccountSeq).toBe(2);
+    expect(body.lastAccountSeq).toBe(3);
+  });
+
+  it('answers exactly { messages, nextAfterAccountSeq, lastAccountSeq, firstAccountSeq } without total', async () => {
+    const res = await get('accountId=wa-seq&afterAccountSeq=0&limit=10');
+
+    expect(Object.keys(res.json()).sort()).toEqual(['firstAccountSeq', 'lastAccountSeq', 'messages', 'nextAfterAccountSeq']);
+  });
+
+  it('pages through everything in ascending order and ends with a null cursor', async () => {
+    const first = (await get('accountId=wa-seq&afterAccountSeq=0&limit=2')).json();
+    expect(first.messages.map((m: UnifiedEnvelope) => m.accountSeq)).toEqual([1, 2]);
+    expect(first.nextAfterAccountSeq).toBe(2);
+
+    const second = (await get(`accountId=wa-seq&afterAccountSeq=${first.nextAfterAccountSeq}&limit=2`)).json();
+    expect(second.messages.map((m: UnifiedEnvelope) => m.accountSeq)).toEqual([3]);
+    expect(second.nextAfterAccountSeq).toBeNull();
+  });
+
+  it('never returns rows without accountSeq (outbound saved via save) nor other accounts', async () => {
+    const body = (await get('accountId=wa-seq&afterAccountSeq=0&limit=100')).json();
+
+    expect(body.messages.map((m: UnifiedEnvelope) => m.id)).toEqual(['msg-seq-1', 'msg-seq-2', 'msg-seq-3']);
+  });
+
+  it('keeps accountSeq, seq, sentAt and the sender in the serialized envelopes', async () => {
+    const [first] = (await get('accountId=wa-seq&afterAccountSeq=0&limit=1')).json().messages;
+
+    expect(first.accountSeq).toBe(1);
+    expect(first.seq).toEqual(expect.any(Number));
+    expect(first.sentAt).toBe('2026-04-05T11:01:00.000Z');
+    expect(first.timestamp).toBe('2026-04-05T11:01:00.000Z');
+    expect(first.sender).toEqual({ id: '34600000001@s.whatsapp.net', displayName: 'Alice', phone: '+34600111222', lid: '144980999962625@lid' });
+    expect(first.content).toMatchObject({ type: 'text', body: 'inbound 1' });
+  });
+
+  it('past the end returns an empty page that still reports lastAccountSeq', async () => {
+    const body = (await get('accountId=wa-seq&afterAccountSeq=3')).json();
+
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 3, firstAccountSeq: 1 });
+  });
+
+  it('an account with no messages reports lastAccountSeq 0 and no firstAccountSeq', async () => {
+    const body = (await get('accountId=nobody&afterAccountSeq=0')).json();
+
+    expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0, firstAccountSeq: null });
+  });
+
+  it.each([
+    ['without the gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys"}', '{"platform":"whatsapp"}'],
+    ['with a partial gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys","account":{"id":"wa-old"}}', '{"platform":"whatsapp"}'],
+    ['with an empty gateway', '{}', '{"platform":"whatsapp"}'],
+    ['without the channel platform', '{"adapterId":"baileys"}', '{"messageId":"W"}'],
+  ])('a row written by an older version %s does not block the page', async (_name, gateway, channelDetails) => {
+    const id = `msg-old-${randomUUID()}`;
+    const accountId = `wa-old-${randomUUID()}`;
+    await seqStore.insertInbound({ ...inbound(1), id, accountId, channelDetails: { platform: 'whatsapp' } });
+    (seqStore as unknown as { db: import('better-sqlite3').Database }).db
+      .prepare('UPDATE messages SET gateway_json = ?, channel_details_json = ? WHERE id = ?')
+      .run(gateway, channelDetails, id);
+
+    const keyset = await get(`accountId=${accountId}&afterAccountSeq=0`);
+    const legacy = await get(`accountId=${accountId}`);
+
+    expect(keyset.statusCode).toBe(200);
+    expect(keyset.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
+  });
+
+  it('legacy query without afterAccountSeq unchanged', async () => {
+    const res = await get('accountId=wa-seq');
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(body.total).toBe(4);
+    expect(body.messages).toHaveLength(4);
+    expect(body.limit).toBeDefined();
+    expect(body.offset).toBeDefined();
+    expect(body).not.toHaveProperty('nextAfterAccountSeq');
+    expect(body).not.toHaveProperty('lastAccountSeq');
+    expect(body).not.toHaveProperty('firstAccountSeq');
   });
 });

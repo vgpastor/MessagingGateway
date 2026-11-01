@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
+import { destinationHost } from '../webhooks/webhook-forwarder.js';
 import { errorResponseSchema } from './schemas.js';
 
 interface WebhookConfigDeps {
@@ -50,7 +51,7 @@ const webhookConfigInputSchema = {
     secret: { type: 'string' as const, description: 'HMAC-SHA256 secret for signature verification' },
     events: {
       type: 'array' as const,
-      items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', '*'] },
+      items: { type: 'string' as const, enum: ['message.inbound', 'message.status', 'message.sent', 'connection.update', '*'] },
       description: 'Event types to forward. Defaults to ["*"]',
     },
     filters: filtersSchema,
@@ -117,7 +118,7 @@ export async function webhookConfigController(
     }
 
     const config = await deps.webhookConfigRepo.add(id, request.body);
-    fastify.log.info({ accountId: id, webhookId: config.id, url: config.url }, 'Webhook added');
+    fastify.log.info({ accountId: id, webhookId: config.id, host: destinationHost(config.url) }, 'Webhook added');
     return reply.status(201).send(config);
   });
 
@@ -142,7 +143,7 @@ export async function webhookConfigController(
     if (!updated) {
       return reply.status(404).send({ error: 'Not Found', code: 'WEBHOOK_NOT_FOUND', message: `Webhook '${webhookId}' not found` });
     }
-    fastify.log.info({ webhookId, url: updated.url }, 'Webhook updated');
+    fastify.log.info({ webhookId, host: destinationHost(updated.url) }, 'Webhook updated');
     return updated;
   });
 

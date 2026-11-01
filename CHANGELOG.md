@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.6.0] - 2026-11-01
+
+### Added
+
+- **Registro de mensajes con `accountSeq`**: cada mensaje entrante guardado lleva un número contiguo por cuenta, con deduplicación por id de WhatsApp. `GET /api/v1/messages?accountId=&afterAccountSeq=` lee lo que sigue a un cursor y devuelve `nextAfterAccountSeq`, `lastAccountSeq` y `firstAccountSeq`, para ponerse al día sin perder mensajes. Los sobres añaden `seq`, `accountSeq`, `sentAt` y, en el remitente, `phone` y `lid`.
+- **Medios en disco**: la entrada se descarga a `MEDIA_DIR` con tamaño máximo (`MEDIA_MAX_BYTES`) y reintentos, y se sirve con `GET /api/v1/media/:id` (200, 202 mientras se descarga, 410 si se omitió o caducó).
+- **Retención**: `MEDIA_RETENTION_DAYS` (30 por defecto) y `MESSAGE_RETENTION_DAYS` (opcional: con 0, el valor por defecto, nunca se borra un mensaje).
+- **`READ_API_KEY`**: clave de solo lectura para los mensajes, los medios y el flujo de eventos por WebSocket.
+- **`conversations`** en cada cuenta (`accounts.yaml` y `POST /api/v1/accounts`): limita qué conversaciones entrantes se guardan.
+- **Métricas Prometheus** en `/metrics`, solo con la clave de administración. `umg_inbound_filtered_total{reason}` cuenta lo que deja fuera el filtro de conversaciones.
+- **Alertas de cuenta caída** en `ALERT_WEBHOOK_URL`: `auth_expired` al momento y `disconnected` tras 15 minutos, reintentadas hasta un 2xx y repetidas cada 6 horas. Los webhooks de las cuentas pueden suscribirse a `connection.update`.
+- **WebSocket**: autenticación por cabecera o subprotocolo (`umg.<clave>`) y ping cada 30 s, que corta a quien no responde.
+- **SDK**: `messages.after()`, `messages.media()`, `timeoutMs` en el cliente REST, reconexión con espera creciente y vigilancia del latido. El paquete se puede cargar con `require()` desde CommonJS. Tras un `4401` no reconecta, y si nadie escucha `error` lo escribe con `console.error`.
+
+### Changed
+
+- **Rompe, al actualizar el SDK de 0.3.x a 0.4.0:**
+  - Los campos de `gateway` y `channelDetails.platform` pasan a ser opcionales, en los tipos manuales y en los generados: un mensaje guardado conserva la forma de la versión que lo escribió. Hay que contemplar `undefined`.
+  - Las funciones generadas devuelven `{ data, status, headers }`, como ya decían sus tipos, y no el cuerpo a secas. Un cuerpo binario llega como `Blob`, no como texto corrupto.
+  - `HealthStatus.status` deja de incluir `error`, y `qr` puede ser `null` con la clave de lectura.
+  - Las peticiones REST caducan a los 30 s por defecto (`timeoutMs`).
+  - `engines` pasa a `>=20.19 <21 || >=22.12`, lo que necesita `require(esm)`.
+  - La autenticación del WebSocket exige un gateway de esta versión: uno anterior rechaza el handshake con `4401`.
+- **Rompe, en el gateway:**
+  - La media entrante ya no viaja en base64 dentro del sobre: se descarga con `media.url` cuando `media.status` es `ready`.
+  - `/metrics` exige la clave de administración.
+  - `?token=` en el WebSocket queda obsoleto, porque las URL acaban en los logs. Sigue funcionando.
+  - `PUT /api/v1/accounts/:id` responde 400 ante campos desconocidos, en vez de ignorarlos.
+  - `connect`, `pair` y `reset` responden 409 en una cuenta suspendida.
+  - `disconnect` borra la sesión, y responde 500 `DISCONNECT_FAILED` si no puede.
+  - `search` en SQLite busca la frase literal: ya no admite la sintaxis de FTS5.
+  - El CSV de `GET /api/v1/messages/export` entrecomilla todos los campos, y antepone `'` a lo que una hoja de cálculo ejecutaría como fórmula. Un número o un teléfono se queda como está.
+  - Los eventos sin cuenta quedan fuera del alcance de los clientes de WebSocket filtrados por cuenta y de los de solo lectura.
+  - El id de una cuenta debe cumplir `^[A-Za-z0-9][A-Za-z0-9._-]*$`, también en `accounts.yaml`: uno que no lo cumpla impide arrancar.
+  - `accounts.yaml` se escribe con modo 0600. Quien lo lea con otro usuario deja de poder hacerlo.
+  - `docker-compose.prod.example.yml` publica el puerto solo en `127.0.0.1`: hay que poner delante un proxy inverso.
+- **`/health` informa de verdad**, pero solo del estado general: `degraded` si una cuenta no suspendida no está `active` o ha perdido la conexión. Es público, así que no nombra cuentas; el detalle está en `GET /api/v1/accounts`.
+- **`GET /api/v1/accounts/:id` solo lee**: ya no abre conexiones.
+- **El primer arranque aplica las migraciones `postgres/002_message_log` y `sqlite/003_message_log`**, que reescriben la tabla de mensajes y pueden tardar. Se aplican sin límite de tiempo: `docker-compose.prod.example.yml` da 30 minutos antes de marcar el contenedor como `unhealthy`.
+
+### Fixed
+
+- **Suspender una cuenta cierra su socket**, sin `logout` y conservando la sesión en disco, y reactivarla reconecta sin QR nuevo. Antes una cuenta ya conectada seguía recibiendo mensajes. Ninguna señal de conexión ni comprobación de salud saca a una cuenta de `suspended`.
+- **Una conexión caída ya no se confunde con una sesión perdida**, y la reconexión usa espera creciente con jitter, sin tope de intentos; solo se detiene con una sesión perdida, una desconexión deliberada o un reset.
+- **Una cuenta creada en caliente recibe sus eventos sin reiniciar**, reactivar una cuenta suspendida la conecta, y borrar una cuenta cierra su socket y su sesión.
+- **Ningún mensaje se pierde si el almacén lo rechaza**: se entrega en directo, sin `accountSeq`, y se guarda en cuanto vuelve la base de datos o, si no, en el siguiente arranque, de modo que puede llegar dos veces: hay que deduplicar por `id`. Con la base de datos caída los mensajes van directos a `data/failed-inbound.jsonl`, sin esperar, y cada 30 s se comprueba con una escritura real, en la tabla `store_health`, si ha vuelto: una base que solo responde a lecturas sigue contando como caída. Hasta que el archivo está guardado, lo nuevo se pone detrás, así que `accountSeq` sigue el orden de llegada por cuenta. Los webhooks ya no frenan la cola de entrada y caducan a los 10 s.
+- **Lo que no se podrá guardar nunca sale de ese archivo** y pasa a `data/failed-inbound.rejected.jsonl`, que no se reprocesa: lo que el almacén rechaza de forma explícita, una línea ilegible y un `@lid` sin resolver tras 7 días con su cuenta activa y conectada. Cada línea lleva el motivo y la original bajo `line`. Lo cuenta `umg_inbound_rejected_total` y deja un log de error: hay que mirarlo a mano.
+- **Lo que no se puede guardar por ahora se queda en el archivo**: un `@lid` sin resolver, y una entrada que falla mientras la escritura de prueba funciona, con log de error. Lo que su cuenta tenga detrás se queda detrás de ella, para no desordenarse, sin frenar a las demás cuentas ni el cierre de la recuperación. Mientras quede algo, se reprocesa cada 5 minutos, así que una cuenta que conecta tarde (QR) recupera su `@lid` y su cola sin reiniciar. **Lo retenido recibe un `accountSeq` posterior al de los mensajes en vivo que llegaron después**: en esa cuenta el número deja de seguir el orden de llegada. Una entrada que falle siempre no sale sola de ahí, y retiene lo que su cuenta acumule detrás en cortes futuros, hasta que alguien la quite a mano.
+- **Postgres**: cada consulta tiene un límite de 30 s, para que un insert colgado no retenga la cola de la cuenta; una transacción abierta e inactiva termina a los 60 s, para que una partición de red no retenga el contador de la cuenta; y un insert fallido descarta su conexión. La retención dispone de 15 minutos por consulta.
+- **Filas de versiones anteriores**: ya no bloquean la lectura del registro, y el historial en base64 queda fuera de las lecturas. Toda lectura limita el tamaño de la página.
+- **Apagado**: termina limpio en 10 s y sin `logout`, de modo que el siguiente arranque retoma las sesiones. Un error no controlado también pasa por él, y sale con un código distinto de 0.
+- **Un fallo al guardar credenciales o un handler que lanza** ya no terminan el proceso.
+- **Un cambio de cuenta que no llega a `accounts.yaml`** responde 500 `SAVE_FAILED` y no se aplica: lo que hay en memoria es lo que cargaría el siguiente arranque. Antes `POST` y `PUT` devolvían 2xx y el cambio se perdía al reiniciar. `DELETE` hace lo mismo, y solo si pudo guardar cierra el socket y borra la sesión. Lo que el gateway observa de una cuenta (conexión, comprobación de salud) se aplica en memoria igualmente, con un log de error.
+- **Un contador de cuenta por detrás de sus mensajes** ya no hace fallar todas sus inserciones: se pone al día con el máximo real y deja un log de error.
+- **OpenAPI y SDK**: `POST /api/v1/accounts` declara `conversations`, el SDK deja de prometer `accounts` en `/health` y `sdk-build` corre por fin las pruebas del SDK en CI.
+
+### Security
+
+- Los logs ya no llevan claves ni tokens en las URL, y de un webhook solo registran el host.
+
 ## [0.5.1] - 2026-09-05
 
 ### Fixed

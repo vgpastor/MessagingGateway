@@ -3,6 +3,8 @@ import type { MessagingPort } from '../../../core/messaging/messaging.port.js';
 import type { OutboundMessage } from '../../../core/messaging/outbound-message.js';
 import type { MediaContent, MessageResult, MessageStatus } from '../../../core/messaging/message-result.js';
 import { ProviderError } from '../../../core/errors.js';
+import { getLogger } from '../../../core/logger/logger.port.js';
+import { toStorableRaw } from './baileys-storable-raw.js';
 import type { BaileysSocketManager } from './baileys-socket.manager.js';
 
 export class BaileysAdapter implements MessagingPort {
@@ -41,12 +43,24 @@ export class BaileysAdapter implements MessagingPort {
         timestamp: new Date(),
         providerMessageId: messageId,
         remoteJid: response?.key?.remoteJid ? jidNormalizedUser(response.key.remoteJid) : undefined,
+        providerRaw: this.storableResponse(response),
       };
     } catch (error) {
       throw new ProviderError(
         'baileys',
         error instanceof Error ? error.message : 'Send failed',
       );
+    }
+  }
+
+  /** For Baileys' `getMessage`, when a recipient asks to retry. The message is already sent: failing here must not undo that. */
+  private storableResponse(response: unknown): unknown {
+    if (!response) return undefined;
+    try {
+      return toStorableRaw(response);
+    } catch (err) {
+      getLogger().warn('Failed to serialize the sent message', { provider: 'baileys', accountId: this.accountId, error: err instanceof Error ? err.message : String(err) });
+      return undefined;
     }
   }
 

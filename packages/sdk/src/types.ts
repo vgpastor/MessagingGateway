@@ -37,7 +37,24 @@ export interface InteractiveResponseContent { type: 'interactive_response'; resp
 export interface SystemContent { type: 'system'; eventType: string; body?: string; affectedUsers?: string[] }
 export interface UnknownContent { type: 'unknown'; body?: string }
 
-export interface MediaInfo { id?: string; url?: string; mimeType: string; size?: number; base64?: string; filename?: string }
+export interface MediaInfo {
+  /** Provider media reference ID */
+  id?: string;
+  /** Gateway download URL; usable once `status` is `ready` */
+  url?: string;
+  mimeType: string;
+  size?: number;
+  /**
+   * Base64 content. Only meaningful on outbound send requests: inbound media is
+   * stored by the gateway and delivered via `url`, never inline.
+   */
+  base64?: string;
+  filename?: string;
+  /** Inbound download lifecycle: `pending` until stored, `ready` when `url` is usable */
+  status?: 'pending' | 'ready' | 'skipped' | 'expired';
+  /** Why an inbound media was not stored (`status: 'skipped'`) */
+  skipReason?: 'too_large' | 'download_failed';
+}
 
 // ── Message Context ─────────────────────────────────────────────
 
@@ -51,8 +68,9 @@ export interface MessageContext {
   isViewOnce?: boolean;
 }
 
+/** Stored as JSON: a message read from the log keeps the shape of the version that wrote it. */
 export interface ChannelDetails {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
 }
 
@@ -61,6 +79,10 @@ export interface ChannelDetails {
 export interface ContactRef {
   id: string;
   displayName?: string;
+  /** Resolved phone number, `+` followed by digits */
+  phone?: string;
+  /** WhatsApp LID (privacy-preserving id) when known */
+  lid?: string;
 }
 
 // ── Unified Envelope ────────────────────────────────────────────
@@ -71,6 +93,12 @@ export interface UnifiedEnvelope {
   channel: ChannelType;
   direction: 'inbound' | 'outbound';
   timestamp: string;
+  /** Global message-log sequence (set once the gateway has persisted the message) */
+  seq?: number;
+  /** Per-account contiguous sequence of inbound messages; gaps mean missed events (see `messages.after`) */
+  accountSeq?: number;
+  /** When the sender sent the message (ISO 8601), as opposed to `timestamp` / `gateway.receivedAt` */
+  sentAt?: string;
   conversationId: string;
   sender: ContactRef;
   recipient: ContactRef;
@@ -80,15 +108,16 @@ export interface UnifiedEnvelope {
   gateway: GatewayMetadata;
 }
 
+/** Stored as JSON: a message read from the log keeps the shape of the version that wrote it. */
 export interface GatewayMetadata {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: {
-    id: string;
-    alias: string;
-    owner: string;
-    tags: string[];
+  account?: {
+    id?: string;
+    alias?: string;
+    owner?: string;
+    tags?: string[];
   };
 }
 
@@ -137,6 +166,8 @@ export interface Account {
   provider: ProviderType;
   status: AccountStatus;
   identity: Record<string, unknown>;
+  /** Inbound conversations (chat/group JIDs) this account keeps. `'*'` or absent keeps them all. */
+  conversations?: '*' | string[];
   connection?: {
     managed: boolean;
     status?: 'disconnected' | 'connecting' | 'connected';
@@ -160,6 +191,7 @@ export interface CreateAccountInput {
   identity?: Record<string, unknown>;
   credentialsRef?: string;
   providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata: { owner: string; environment: string; tags?: string[] };
 }
 
@@ -168,12 +200,13 @@ export interface UpdateAccountInput {
   status?: AccountStatus;
   identity?: Record<string, unknown>;
   providerConfig?: Record<string, unknown>;
+  conversations?: '*' | string[];
   metadata?: Partial<AccountMetadata>;
 }
 
 // ── Webhook Config ──────────────────────────────────────────────
 
-export type WebhookEventType = 'message.inbound' | 'message.status' | 'message.sent' | '*';
+export type WebhookEventType = 'message.inbound' | 'message.status' | 'message.sent' | 'connection.update' | '*';
 
 /** A filter value: single primitive or array of primitives (OR match) */
 export type FilterValue = string | number | boolean | Array<string | number | boolean>;
@@ -211,7 +244,11 @@ export interface WebhookConfigInput {
 // ── Health ───────────────────────────────────────────────────────
 
 export interface HealthStatus {
-  status: 'ok' | 'degraded' | 'error';
+  /**
+   * `degraded`: an account that is not deliberately suspended is not `active` or has lost its connection.
+   * The detail per account is in `accounts.list()`: this route is public and names none.
+   */
+  status: 'ok' | 'degraded';
   timestamp: string;
   version: string;
   uptime: number;
@@ -241,8 +278,9 @@ export interface WsEvent<T = unknown> {
 
 export interface ConnectionUpdateData {
   accountId: string;
-  status: 'disconnected' | 'connecting' | 'connected';
-  qr?: string;
+  status: 'disconnected' | 'connecting' | 'connected' | 'auth_expired';
+  /** `null` for a read-only key: it never gets the QR */
+  qr?: string | null;
 }
 
 export interface MessageSentData {
@@ -296,6 +334,26 @@ export interface MessageQueryResult {
   offset: number;
 }
 
+/** Result of `messages.after()`: a page of inbound messages after an `accountSeq` cursor. */
+export interface MessagesAfterResult {
+  messages: UnifiedEnvelope[];
+  /** Cursor for the next page, or `null` when the caller has caught up */
+  nextAfterAccountSeq: number | null;
+  /** Highest `accountSeq` handed out for the account (0 if none): where to start "from now" */
+  lastAccountSeq: number;
+  /**
+   * Lowest `accountSeq` still stored for the account (`null` if none). A cursor below it means
+   * retention removed the messages in between, so that jump is not a loss to report.
+   */
+  firstAccountSeq: number | null;
+}
+
+/** Result of `messages.media()`. Only `ready` carries the file. */
+export type MediaDownload =
+  | { status: 'ready'; data: ArrayBuffer; mimeType: string }
+  | { status: 'pending' }
+  | { status: 'skipped' | 'expired'; skipReason?: MediaInfo['skipReason'] };
+
 export interface MessageStats {
   totalMessages: number;
   byChannel: Record<string, number>;
@@ -348,11 +406,23 @@ export interface ConversationMessage {
 
 export interface ClientConfig {
   baseUrl: string;
+  /** The admin `API_KEY`, or the `READ_API_KEY` to only read messages and media */
   apiKey?: string;
+  /** Max time (ms) for one request, reading the body included. Default 30000. */
+  timeoutMs?: number;
 }
 
-export interface EventsConfig extends ClientConfig {
+export interface EventsConfig extends Omit<ClientConfig, 'timeoutMs'> {
   accounts?: string[];
   autoReconnect?: boolean;
+  /** Reconnect backoff base (ms); the delay ceiling doubles per attempt. Default 1000. */
+  reconnectBaseMs?: number;
+  /** Reconnect backoff cap (ms). Default 60000. */
+  reconnectMaxMs?: number;
+  /** Max time (ms) for the WebSocket upgrade to complete before the attempt is abandoned and retried. Default 15000. */
+  handshakeTimeoutMs?: number;
+  /** @deprecated Reconnects now use exponential backoff with jitter. Treated as `reconnectBaseMs` when that is unset. */
   reconnectIntervalMs?: number;
+  /** Uniform [0, 1) random source for backoff jitter. Mainly for deterministic tests. */
+  random?: () => number;
 }

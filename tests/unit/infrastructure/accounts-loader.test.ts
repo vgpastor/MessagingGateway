@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../../src/infrastructure/config/accounts.loader.js';
+import { accountSchema } from '../../../src/infrastructure/config/accounts.schema.js';
+
+describe('account id', () => {
+  const withId = (id: string) => ({ id, alias: 'a', channel: 'whatsapp', provider: 'baileys', metadata: { owner: 'o' } });
+
+  it.each(['wa-vgpastor', 'wa-rocstatus', 'wa-patroltech', 'my-whatsapp', 'A1_b-2', '7', 'wa.acme', 'a.b-c_d', 'a..b'])('takes %s', (id) => {
+    expect(accountSchema.safeParse(withId(id)).success).toBe(true);
+  });
+
+  // It names a folder: '..' would put the credentials in data/.
+  it.each(['..', '.', '...', 'a/b', 'a\\b', '../x', '..\\x', 'a/../b', 'a:b', '.hidden', '-x', '_x', 'a b', 'a\n', 'a\0b', ''])('refuses %j', (id) => {
+    expect(accountSchema.safeParse(withId(id)).success).toBe(false);
+  });
+});
 
 describe('loadAccountsFromYaml', () => {
   const yamlPath = resolve(process.cwd(), 'tests/fixtures/accounts.yaml');
@@ -102,5 +118,35 @@ describe('loadAccountsFromYaml', () => {
   it('should return empty array when file does not exist', () => {
     const accounts = loadAccountsFromYaml('/nonexistent/path/accounts.yaml');
     expect(accounts).toEqual([]);
+  });
+
+  describe('conversations allowlist', () => {
+    const accountYaml = (extra: string) => `accounts:
+  - id: wa-1
+    alias: WA
+    channel: whatsapp
+    provider: baileys
+    ${extra}
+    metadata:
+      owner: org
+`;
+    const load = (yaml: string) => {
+      const file = join(mkdtempSync(join(tmpdir(), 'accounts-')), 'accounts.yaml');
+      writeFileSync(file, yaml);
+      return loadAccountsFromYaml(file)[0];
+    };
+
+    it('defaults to every conversation', () => {
+      expect(load(accountYaml('')).conversations).toBe('*');
+    });
+
+    it('accepts an explicit list of conversation ids', () => {
+      expect(load(accountYaml('conversations: ["g1@g.us", "34600111222@s.whatsapp.net"]')).conversations)
+        .toEqual(['g1@g.us', '34600111222@s.whatsapp.net']);
+    });
+
+    it('rejects any other string than "*"', () => {
+      expect(() => load(accountYaml('conversations: all'))).toThrow();
+    });
   });
 });

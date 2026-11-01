@@ -44,6 +44,7 @@ function mapToChannelAccount(
     credentialsRef: raw.credentialsRef ?? '',
     credentials: raw.credentials,
     providerConfig: raw.providerConfig,
+    conversations: raw.conversations,
     metadata: {
       owner: raw.metadata.owner,
       environment: raw.metadata.environment,

@@ -1,15 +1,30 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
+import { AccountAlreadyExistsError } from '../../core/errors.js';
 import { getLogger } from '../../core/logger/logger.port.js';
 import type { ChannelType } from '../../core/messaging/channel.types.js';
 import type { ChannelAccount } from '../../core/accounts/channel-account.js';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
 import { matchesRoutingCriteria } from '../../core/routing/routing-rules.js';
+import { syncDirectory } from '../fs/sync-directory.js';
+
+function withChanges(account: ChannelAccount, partial: Partial<Omit<ChannelAccount, 'id'>>): ChannelAccount {
+  return {
+    ...account,
+    ...partial,
+    id: account.id,
+    metadata: partial.metadata
+      ? { ...account.metadata, ...partial.metadata }
+      : account.metadata,
+  };
+}
 
 export class InMemoryAccountRepository implements ChannelAccountRepository {
   private accounts: ChannelAccount[];
   private readonly persistPath?: string;
+  /** The write in progress: the next one starts when it ends, so two can never interleave in the file. */
+  private lastWrite: Promise<void> = Promise.resolve();
 
   constructor(accounts: ChannelAccount[], persistPath?: string) {
     this.accounts = accounts;
@@ -48,52 +63,75 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
     );
   }
 
-  async save(account: ChannelAccount): Promise<ChannelAccount> {
-    const existing = this.accounts.findIndex((a) => a.id === account.id);
-    if (existing !== -1) {
-      throw new Error(`Account '${account.id}' already exists`);
-    }
-    this.accounts.push(account);
-    this.persist();
-    return account;
+  save(account: ChannelAccount): Promise<ChannelAccount> {
+    return this.commit((accounts) => {
+      if (accounts.some((a) => a.id === account.id)) {
+        throw new AccountAlreadyExistsError(account.id);
+      }
+      return { accounts: [...accounts, account], result: account };
+    });
   }
 
-  async update(id: string, partial: Partial<Omit<ChannelAccount, 'id'>>): Promise<ChannelAccount | undefined> {
-    const index = this.accounts.findIndex((a) => a.id === id);
-    if (index === -1) {
-      return undefined;
-    }
+  update(id: string, partial: Partial<Omit<ChannelAccount, 'id'>>): Promise<ChannelAccount | undefined> {
+    return this.commit((accounts) => {
+      const current = accounts.find((a) => a.id === id);
+      if (!current) return { accounts, result: undefined };
 
-    const current = this.accounts[index]!;
-    const updated: ChannelAccount = {
-      ...current,
-      ...partial,
-      id: current.id,
-      metadata: partial.metadata
-        ? { ...current.metadata, ...partial.metadata }
-        : current.metadata,
-    };
-
-    this.accounts[index] = updated;
-    this.persist();
-    return updated;
+      const updated = withChanges(current, partial);
+      return { accounts: accounts.map((a) => (a === current ? updated : a)), result: updated };
+    });
   }
 
-  async remove(id: string): Promise<boolean> {
-    const index = this.accounts.findIndex((a) => a.id === id);
-    if (index === -1) {
-      return false;
-    }
-    this.accounts.splice(index, 1);
-    this.persist();
-    return true;
+  observe(id: string, change: (account: ChannelAccount) => Partial<Omit<ChannelAccount, 'id'>> | undefined): Promise<ChannelAccount | undefined> {
+    return this.inTurn(async () => {
+      const current = this.accounts.find((a) => a.id === id);
+      const partial = current && change(current);
+      if (!current || !partial) return current;
+
+      const updated = withChanges(current, partial);
+      this.accounts = this.accounts.map((a) => (a === current ? updated : a));
+      if (this.persistPath) {
+        await this.writeAtomically(this.persistPath, this.toYaml(this.accounts)).catch((err: unknown) => {
+          getLogger().error('Failed to persist what was observed of an account: it stands in memory until the next write', {
+            accountId: id, path: this.persistPath, error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return updated;
+    });
   }
 
-  private persist(): void {
-    if (!this.persistPath) return;
+  remove(id: string): Promise<boolean> {
+    return this.commit((accounts) => {
+      const remaining = accounts.filter((a) => a.id !== id);
+      return remaining.length === accounts.length ? { accounts, result: false } : { accounts: remaining, result: true };
+    });
+  }
 
+  /**
+   * Applies a change once it is on disk, so what is in memory is what the next start would load: a write that fails
+   * rejects and changes nothing. Changes wait for the one in progress and start from its outcome, one at a time.
+   */
+  private commit<T>(change: (accounts: ChannelAccount[]) => { accounts: ChannelAccount[]; result: T }): Promise<T> {
+    return this.inTurn(async () => {
+      const { accounts, result } = change(this.accounts);
+      if (accounts !== this.accounts) {
+        if (this.persistPath) await this.writeAtomically(this.persistPath, this.toYaml(accounts));
+        this.accounts = accounts;
+      }
+      return result;
+    });
+  }
+
+  private inTurn<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.lastWrite.then(operation);
+    this.lastWrite = run.then(() => {}, () => {});
+    return run;
+  }
+
+  private toYaml(accounts: ChannelAccount[]): string {
     const data = {
-      accounts: this.accounts.map((a) => ({
+      accounts: accounts.map((a) => ({
         id: a.id,
         alias: a.alias,
         channel: a.channel,
@@ -105,6 +143,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
         ...(Object.keys(a.providerConfig).length > 0
           ? { providerConfig: a.providerConfig }
           : {}),
+        ...(a.conversations && a.conversations !== '*' ? { conversations: a.conversations } : {}),
         metadata: {
           owner: a.metadata.owner,
           environment: a.metadata.environment,
@@ -115,12 +154,30 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
       })),
     };
 
-    const path = this.persistPath;
-    mkdir(dirname(path), { recursive: true })
-      .then(() => writeFile(path, stringifyYaml(data), 'utf-8'))
-      .catch((err) => {
-        getLogger().warn('Failed to persist accounts', { path, error: (err as Error).message });
-      });
+    return stringifyYaml(data);
+  }
+
+  /**
+   * A file cut halfway would stop the next start, so the old one stays until the new one is complete and on
+   * disk, and the directory is flushed so the new one stays after a power cut. It holds credentials: only the owner can read it.
+   */
+  private async writeAtomically(path: string, content: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    try {
+      const file = await open(tmp, 'w', 0o600);
+      try {
+        await file.writeFile(content, 'utf-8');
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(tmp, path);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+    await syncDirectory(dirname(path));
   }
 
   private serializeIdentity(account: ChannelAccount): Record<string, unknown> {

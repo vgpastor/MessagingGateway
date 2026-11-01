@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { MigrationAdapter } from './migration.port.js';
+import type { MigrationAdapter, MigrationScript } from './migration.port.js';
 
 interface MigrationLogger {
   info(msg: string, ctx?: Record<string, unknown>): void;
@@ -52,8 +52,7 @@ export class MigrationRunner {
 
     for (const script of pending) {
       try {
-        await this.adapter.executeSql(script.sql);
-        await this.adapter.recordMigration(script.name, script.checksum);
+        await this.adapter.applyMigration(script);
         appliedNow.push(script.name);
         this.logger.info('Migration applied', { name: script.name });
       } catch (err) {
@@ -68,7 +67,7 @@ export class MigrationRunner {
     return { applied: appliedNow, skipped };
   }
 
-  private async loadScripts(): Promise<Array<{ name: string; sql: string; checksum: string }>> {
+  private async loadScripts(): Promise<MigrationScript[]> {
     let files: string[];
     try {
       files = await readdir(this.scriptsDir);
@@ -78,7 +77,7 @@ export class MigrationRunner {
 
     const sqlFiles = files.filter((f) => f.endsWith('.sql')).sort();
 
-    const scripts: Array<{ name: string; sql: string; checksum: string }> = [];
+    const scripts: MigrationScript[] = [];
     for (const file of sqlFiles) {
       const sql = await readFile(join(this.scriptsDir, file), 'utf8');
       const checksum = createHash('sha256').update(sql).digest('hex').substring(0, 16);

@@ -15,6 +15,11 @@ export interface MessageResult {
   error?: string;
   /** Remote JID returned by the provider (e.g. Baileys). Used to align outbound conversationId with inbound. */
   remoteJid?: string;
+  /**
+   * The sent message in the provider's own storable form, for the providers that may be asked to
+   * send it again. Goes to the message log; the router keeps it from reaching callers.
+   */
+  providerRaw?: unknown;
 }
 
 export interface MessageStatus {

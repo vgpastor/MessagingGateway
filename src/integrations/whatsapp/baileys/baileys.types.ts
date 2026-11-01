@@ -5,7 +5,7 @@ export interface BaileysProviderConfig {
   connectTimeoutMs?: number;
   qrTimeoutMs?: number;
   retryOnDisconnect?: boolean;
-  maxRetries?: number;
+  /** Announce the account as online on connect. Off by default: it suppresses phone notifications and looks bot-like. */
   markOnlineOnConnect?: boolean;
 }
 
@@ -32,7 +32,6 @@ export function parseBaileysConfig(raw: Record<string, unknown>): BaileysProvide
     connectTimeoutMs: (raw['connectTimeoutMs'] as number | undefined) ?? 60_000,
     qrTimeoutMs: (raw['qrTimeoutMs'] as number | undefined) ?? 60_000,
     retryOnDisconnect: (raw['retryOnDisconnect'] as boolean | undefined) ?? true,
-    maxRetries: (raw['maxRetries'] as number | undefined) ?? 5,
-    markOnlineOnConnect: (raw['markOnlineOnConnect'] as boolean | undefined) ?? true,
+    markOnlineOnConnect: (raw['markOnlineOnConnect'] as boolean | undefined) ?? false,
   };
 }

@@ -1,5 +1,5 @@
 import type { ChannelAccountRepository } from '../core/accounts/channel-account.repository.js';
-import type { AccountIdentity } from '../core/accounts/account-identity.js';
+import { applyHealthResult } from '../core/accounts/apply-health-result.js';
 import type { CredentialValidator } from './credential-validator.js';
 import { getLogger } from '../core/logger/logger.port.js';
 
@@ -40,14 +40,7 @@ export class HealthCheckScheduler {
     const account = await this.accountRepository.findById(accountId);
     if (!account) return;
 
-    const result = await this.credentialValidator.validate(account);
-
-    await this.accountRepository.update(account.id, {
-      status: result.status,
-      ...(result.discoveredIdentity
-        ? { identity: { ...account.identity, ...result.discoveredIdentity } as AccountIdentity }
-        : {}),
-    });
+    await applyHealthResult(this.accountRepository, account.id, await this.credentialValidator.validate(account));
   }
 
   private async runAll(): Promise<void> {
@@ -58,13 +51,7 @@ export class HealthCheckScheduler {
       const accounts = await this.accountRepository.findAll();
       const results = await Promise.allSettled(
         accounts.map(async (account) => {
-          const result = await this.credentialValidator.validate(account);
-          await this.accountRepository.update(account.id, {
-            status: result.status,
-            ...(result.discoveredIdentity
-              ? { identity: { ...account.identity, ...result.discoveredIdentity } as AccountIdentity }
-              : {}),
-          });
+          await applyHealthResult(this.accountRepository, account.id, await this.credentialValidator.validate(account));
         }),
       );
 

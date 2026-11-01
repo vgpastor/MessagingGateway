@@ -5,6 +5,7 @@ export type WebhookEventType =
   | 'message.inbound'
   | 'message.status'
   | 'message.sent'
+  | 'connection.update'
   | '*';
 
 export interface WebhookConfig {
