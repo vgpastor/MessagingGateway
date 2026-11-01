@@ -44,7 +44,8 @@ const rateLimitSchema = z.object({
 });
 
 const accountSchema = z.object({
-  id: z.string().min(1),
+  // It names a folder on disk: with '..' the credentials would land in data/.
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'Only letters, digits, "-" and "_", starting with a letter or digit'),
   alias: z.string().min(1),
   channel: z.enum(channelTypes),
   provider: z.enum(providerTypes),

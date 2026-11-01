@@ -3,6 +3,20 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../../src/infrastructure/config/accounts.loader.js';
+import { accountSchema } from '../../../src/infrastructure/config/accounts.schema.js';
+
+describe('account id', () => {
+  const withId = (id: string) => ({ id, alias: 'a', channel: 'whatsapp', provider: 'baileys', metadata: { owner: 'o' } });
+
+  it.each(['wa-vgpastor', 'wa-rocstatus', 'wa-patroltech', 'my-whatsapp', 'A1_b-2', '7'])('takes %s', (id) => {
+    expect(accountSchema.safeParse(withId(id)).success).toBe(true);
+  });
+
+  // It names a folder: '..' would put the credentials in data/.
+  it.each(['..', '.', 'a/b', 'a\\b', '../x', '.hidden', '-x', '_x', 'a b', 'a.b', 'a\n', ''])('refuses %j', (id) => {
+    expect(accountSchema.safeParse(withId(id)).success).toBe(false);
+  });
+});
 
 describe('loadAccountsFromYaml', () => {
   const yamlPath = resolve(process.cwd(), 'tests/fixtures/accounts.yaml');
