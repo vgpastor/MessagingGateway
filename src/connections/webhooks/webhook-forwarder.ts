@@ -13,6 +13,9 @@ export const WEBHOOK_TIMEOUT_MS = 10_000;
 /** Events waiting per destination. A consumer that loses some catches up with `GET /api/v1/messages?afterAccountSeq=`. */
 export const WEBHOOK_QUEUE_CAPACITY = 1000;
 
+/** How much of a failed answer reaches the log: it is whatever the destination chose to send. */
+export const WEBHOOK_ERROR_TEXT_LIMIT = 500;
+
 interface QueuedDelivery {
   url: string;
   accountId: string;
@@ -77,13 +80,13 @@ export class WebhookForwarder {
     });
 
     if (matching.length > 0) {
-      for (const c of matching) this.send(c.url, c.secret, accountId, payload, eventType, channel);
+      for (const c of matching) this.sendGuarded(c.url, c.secret, accountId, payload, eventType, channel);
       return;
     }
 
     // Global fallback (only if no account-specific webhooks matched)
     if (this.globalCallbackUrl) {
-      this.send(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
+      this.sendGuarded(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
     }
   }
 
@@ -108,7 +111,35 @@ export class WebhookForwarder {
     eventType: WebhookEventType,
   ): Promise<boolean> {
     return new Promise((resolve) => {
-      this.enqueue({ ...this.buildDelivery(url, secret, accountId, data, eventType), onSettled: resolve });
+      try {
+        this.enqueue({ ...this.buildDelivery(url, secret, accountId, data, eventType), onSettled: resolve });
+      } catch (err) {
+        this.recordUnserializable(url, accountId, eventType, err);
+        resolve(false);
+      }
+    });
+  }
+
+  /** A payload that cannot be serialized costs its own delivery, not the other destinations. */
+  private sendGuarded(
+    url: string,
+    secret: string | undefined,
+    accountId: string,
+    data: unknown,
+    eventType: WebhookEventType,
+    channel?: string,
+  ): void {
+    try {
+      this.send(url, secret, accountId, data, eventType, channel);
+    } catch (err) {
+      this.recordUnserializable(url, accountId, eventType, err);
+    }
+  }
+
+  private recordUnserializable(url: string, accountId: string, eventType: WebhookEventType, err: unknown): void {
+    this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
+    getLogger().error('Webhook payload could not be serialized', {
+      accountId, eventType, host: destinationHost(url), error: err instanceof Error ? err.message : String(err),
     });
   }
 
@@ -189,12 +220,18 @@ export class WebhookForwarder {
       const durationInSeconds = (performance.now() - start) / 1000;
       this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, status: String(response.status) });
 
-      if (!response.ok) {
-        this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
-        const text = await response.text().catch(() => '');
-        getLogger().error('Webhook forwarding failed', { accountId, host: destinationHost(url), httpStatus: response.status, response: text });
+      if (response.ok) {
+        // Nobody reads it, and an unread body keeps its connection out of the pool. It was delivered either way.
+        await response.body?.cancel().catch(() => {});
+        return true;
       }
-      return response.ok;
+
+      this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
+      const text = await response.text().catch(() => '');
+      getLogger().error('Webhook forwarding failed', {
+        accountId, host: destinationHost(url), httpStatus: response.status, response: text.slice(0, WEBHOOK_ERROR_TEXT_LIMIT),
+      });
+      return false;
     } catch (err) {
       const durationInSeconds = (performance.now() - start) / 1000;
       this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, status: 'error' });

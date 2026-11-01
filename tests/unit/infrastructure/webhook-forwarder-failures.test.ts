@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { WebhookForwarder, WEBHOOK_QUEUE_CAPACITY } from '../../../src/connections/webhooks/webhook-forwarder.js';
+import { WebhookForwarder, WEBHOOK_ERROR_TEXT_LIMIT, WEBHOOK_QUEUE_CAPACITY } from '../../../src/connections/webhooks/webhook-forwarder.js';
 import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import type { WebhookConfig } from '../../../src/core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../../src/core/webhooks/webhook-config.repository.js';
@@ -269,5 +269,98 @@ describe('WebhookForwarder event filters', () => {
     await forwarder.forwardRaw('wa-acme', { status: 'auth_expired' }, 'connection.update');
     await forwarder.drain();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WebhookForwarder responses and payloads', () => {
+  const originalLogger = getLogger();
+
+  afterEach(() => {
+    setGlobalLogger(originalLogger);
+    vi.unstubAllGlobals();
+  });
+
+  function capturingErrors() {
+    const error = vi.fn();
+    const fake = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), child: () => fake };
+    setGlobalLogger(fake as unknown as Logger);
+    return error;
+  }
+
+  it('releases the body of a 2xx answer nobody reads, so the connection goes back to the pool', async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 200 })));
+    const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined);
+
+    await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('still counts as delivered when the body of a 2xx answer cannot be released', async () => {
+    const stream = new ReadableStream({ cancel: () => { throw new Error('reset'); } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
+    const metrics = metricsSpy();
+    const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined, metrics);
+
+    await expect(forwarder.sendConfirmed('https://hook.example.com', undefined, 'wa-acme', {}, 'message.inbound')).resolves.toBe(true);
+
+    expect(metrics.incCounter).not.toHaveBeenCalled();
+  });
+
+  it('truncates the error text of a failed answer in the log', async () => {
+    const error = capturingErrors();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('x'.repeat(WEBHOOK_ERROR_TEXT_LIMIT + 50), { status: 500 })));
+    const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined);
+
+    await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
+
+    expect(error).toHaveBeenCalledWith('Webhook forwarding failed', expect.objectContaining({ httpStatus: 500 }));
+    const [, context] = error.mock.calls[0] as [string, { response: string }];
+    expect(context.response).toHaveLength(WEBHOOK_ERROR_TEXT_LIMIT);
+  });
+
+  it('a payload that cannot be serialized for one destination does not leave the others without it', async () => {
+    const error = capturingErrors();
+    const fetchMock = vi.fn().mockResolvedValue(new Response('ok'));
+    vi.stubGlobal('fetch', fetchMock);
+    const metrics = metricsSpy();
+    const repo = makeRepo(hook);
+    vi.mocked(repo.findByAccountId).mockResolvedValue([hook, { ...hook, id: 'wh_2', url: 'https://other.example.com' }]);
+    const forwarder = new WebhookForwarder(repo, undefined, undefined, metrics);
+    let serialized = 0;
+    const payload = {
+      toJSON() {
+        serialized += 1;
+        if (serialized === 1) throw new Error('circular');
+        return { ok: true };
+      },
+    };
+
+    await expect(forwarder.forwardRaw('wa-acme', payload, 'message.status')).resolves.toBeUndefined();
+    await forwarder.drain();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://other.example.com');
+    expect(metrics.incCounter).toHaveBeenCalledWith('umg_webhook_failures_total', { account: 'wa-acme' });
+    expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ host: 'hook.example.com', error: 'circular' }));
+  });
+
+  it('a payload that cannot be serialized for the global callback does not reject either', async () => {
+    capturingErrors();
+    const repo = makeRepo(hook);
+    vi.mocked(repo.findByAccountId).mockResolvedValue([]);
+    const forwarder = new WebhookForwarder(repo, 'https://global.example.com', undefined);
+
+    await expect(forwarder.forwardRaw('wa-acme', { big: 1n }, 'message.status')).resolves.toBeUndefined();
+  });
+
+  it('sendConfirmed resolves to false for a payload that cannot be serialized: it never rejects', async () => {
+    capturingErrors();
+    const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined);
+
+    await expect(forwarder.sendConfirmed('https://hook.example.com', undefined, 'wa-acme', { big: 1n }, 'connection.update')).resolves.toBe(false);
   });
 });
