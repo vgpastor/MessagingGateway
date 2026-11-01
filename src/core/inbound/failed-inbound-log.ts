@@ -13,6 +13,7 @@ export interface FailedInboundLog {
   /**
    * Hands every entry to `save`, in the order they were appended. An entry `save` accepts
    * leaves the log; one it rejects stays for the next time, and so does one that cannot be read.
+   * Replays run one at a time, and {@link append} may run during one: what it adds waits for the next.
    */
   replay(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }>;
 }

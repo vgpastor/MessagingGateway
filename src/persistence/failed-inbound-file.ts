@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FailedInboundEntry, FailedInboundLog } from '../core/inbound/failed-inbound-log.js';
 import { getLogger } from '../core/logger/logger.port.js';
@@ -17,55 +17,108 @@ function parseEntry(line: string): FailedInboundEntry {
   };
 }
 
+/** Windows cannot flush a directory (EPERM), and NTFS journals the rename anyway. */
+const CANNOT_SYNC_A_DIRECTORY = new Set(['EPERM', 'EISDIR', 'EINVAL']);
+
 /** {@link FailedInboundLog} on a JSON Lines file: one entry per line, flushed to disk before `append` resolves. */
 export class FailedInboundFile implements FailedInboundLog {
+  /** Tail of the operations on the file. Saving an entry is not one of them: an append never waits for a replay's saves. */
+  private fileTurn: Promise<unknown> = Promise.resolve();
+  /** Tail of the replays. */
+  private replayTurn: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly path: string) {}
 
-  async append(entry: FailedInboundEntry): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const file = await open(this.path, 'a');
-    try {
-      await file.appendFile(`${JSON.stringify(entry)}\n`);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
+  append(entry: FailedInboundEntry): Promise<void> {
+    const line = `${JSON.stringify(entry)}\n`;
+    return this.onFile(async () => {
+      await mkdir(dirname(this.path), { recursive: true });
+      const file = await open(this.path, 'a');
+      try {
+        await file.appendFile(line);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+    });
   }
 
-  async replay(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }> {
-    const lines = await this.readLines();
+  replay(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }> {
+    const run = this.replayTurn.then(() => this.replayOnce(save));
+    this.replayTurn = run.catch(() => {});
+    return run;
+  }
+
+  private async replayOnce(save: (entry: FailedInboundEntry) => Promise<void>): Promise<{ saved: number; kept: number }> {
+    const { lines, size } = await this.onFile(() => this.read());
     const kept: string[] = [];
     for (const line of lines) {
       try {
         await save(parseEntry(line));
       } catch (err) {
         kept.push(line);
-        getLogger().error('Failed inbound entry not stored', { error: err instanceof Error ? err.message : String(err) });
+        getLogger().warn('Failed inbound entry not stored', { error: err instanceof Error ? err.message : String(err) });
       }
     }
 
     const saved = lines.length - kept.length;
-    if (saved > 0) await this.keepOnly(kept);
+    if (saved > 0) await this.onFile(() => this.keepOnly(kept, size));
     return { saved, kept: kept.length };
   }
 
-  private async readLines(): Promise<string[]> {
+  private onFile<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.fileTurn.then(operation);
+    this.fileTurn = run.catch(() => {});
+    return run;
+  }
+
+  private async read(): Promise<{ lines: string[]; size: number }> {
     try {
-      return (await readFile(this.path, 'utf8')).split('\n').filter((line) => line.trim() !== '');
+      const content = await readFile(this.path);
+      return { lines: content.toString('utf8').split('\n').filter((line) => line.trim() !== ''), size: content.length };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { lines: [], size: 0 };
       throw err;
     }
   }
 
-  /** Write then rename: a crash here leaves the old file, and saving those entries again is a no-op. */
-  private async keepOnly(lines: string[]): Promise<void> {
-    if (lines.length === 0) {
+  /**
+   * Leaves `lines` plus whatever was appended past the `replayedSize` bytes the replay read. Write, flush, rename,
+   * flush the directory: a crash at any point leaves the old file whole, and saving those entries again is a no-op.
+   */
+  private async keepOnly(lines: string[], replayedSize: number): Promise<void> {
+    const arrived = (await readFile(this.path)).subarray(replayedSize);
+    if (lines.length === 0 && arrived.length === 0) {
       await rm(this.path, { force: true });
       return;
     }
     const tmp = `${this.path}.tmp`;
-    await writeFile(tmp, `${lines.join('\n')}\n`);
+    const file = await open(tmp, 'w');
+    try {
+      await file.writeFile(Buffer.concat([Buffer.from(lines.map((line) => `${line}\n`).join('')), arrived]));
+      await file.sync();
+    } finally {
+      await file.close();
+    }
     await rename(tmp, this.path);
+    await this.syncDirectory();
+  }
+
+  /** A failure here costs nothing but the guarantee: the old file may come back after a power cut, and that is a no-op too. */
+  private async syncDirectory(): Promise<void> {
+    const directory = dirname(this.path);
+    try {
+      const handle = await open(directory, 'r');
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch (err) {
+      const { code } = err as NodeJS.ErrnoException;
+      if (!code || !CANNOT_SYNC_A_DIRECTORY.has(code)) {
+        getLogger().warn('Failed to flush the directory of the failed log', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
   }
 }

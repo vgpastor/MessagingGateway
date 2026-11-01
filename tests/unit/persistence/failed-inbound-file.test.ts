@@ -161,6 +161,52 @@ describe('FailedInboundFile', () => {
     expect((await readFile(path, 'utf8')).trim()).toBe('{"envelope":{"id":"trunc');
   });
 
+  it('does not lose what arrives while it replays: appends go on during an outage', async () => {
+    await file.append({ envelope: envelope('saved', 'W1'), raw: undefined });
+    await file.append({ envelope: envelope('kept', 'W2'), raw: undefined });
+
+    const result = await file.replay(async ({ envelope: e }) => {
+      await file.append({ envelope: envelope(`while-${e.id}`, `W-${e.id}`), raw: undefined });
+      if (e.id === 'kept') throw new Error('still failing');
+    });
+
+    expect(result).toEqual({ saved: 1, kept: 1 });
+    const ids = (await readFile(path, 'utf8')).trim().split(/\r?\n/).map((line) => JSON.parse(line).envelope.id);
+    expect(ids).toEqual(['kept', 'while-saved', 'while-kept']);
+  });
+
+  it('does not remove the file when everything was saved but something new arrived meanwhile', async () => {
+    await file.append({ envelope: envelope('saved', 'W1'), raw: undefined });
+
+    await file.replay(async () => {
+      await file.append({ envelope: envelope('late', 'W2'), raw: undefined });
+    });
+
+    const lines = (await readFile(path, 'utf8')).trim().split(/\r?\n/);
+    expect(lines.map((line) => JSON.parse(line).envelope.id)).toEqual(['late']);
+  });
+
+  it('runs replays one at a time, so two of them never save an entry twice', async () => {
+    await file.append({ envelope: envelope('once', 'W1'), raw: undefined });
+    const seen: string[] = [];
+    const save = async ({ envelope: e }: { envelope: UnifiedEnvelope }) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      seen.push(e.id);
+    };
+
+    await Promise.all([file.replay(save), file.replay(save)]);
+
+    expect(seen).toEqual(['once']);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('keeps entries appended at the same time, each on its own line', async () => {
+    await Promise.all(['a', 'b', 'c', 'd'].map((id) => file.append({ envelope: envelope(id, id), raw: undefined })));
+
+    const lines = (await readFile(path, 'utf8')).trim().split(/\r?\n/);
+    expect(lines.map((line) => JSON.parse(line).envelope.id).sort()).toEqual(['a', 'b', 'c', 'd']);
+  });
+
   it('replaying with no file is nothing to do', async () => {
     expect(await file.replay(async () => { throw new Error('unexpected'); })).toEqual({ saved: 0, kept: 0 });
   });
