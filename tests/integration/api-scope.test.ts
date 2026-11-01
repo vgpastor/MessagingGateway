@@ -6,6 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { SqliteMessageStore } from '../../src/persistence/sqlite-message-store.js';
 import { buildTestServer, createLogCapture, ADMIN_KEY, READ_KEY } from './helpers/test-server.js';
+import type { WebhookConfigRepository } from '../../src/core/webhooks/webhook-config.repository.js';
 
 const READ = { 'x-api-key': READ_KEY };
 const ADMIN = { 'x-api-key': ADMIN_KEY };
@@ -111,6 +112,23 @@ describe('request logs', () => {
     expect(requestLogs[0]).toMatchObject({ method: 'GET', url: '/api/v1/accounts', statusCode: 200 });
     expect(typeof requestLogs[0]!['responseTime']).toBe('number');
     expect(logs.text()).not.toContain('/health');
+  });
+
+  it('logs only the host of a webhook being configured: its URL may carry a secret', async () => {
+    const logs = createLogCapture();
+    const url = 'https://hooks.example.com/services/S3CRET-PATH';
+    const stored = { id: 'wh_1', accountId: 'wa-acme', url, events: ['*'], enabled: true, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const server = await buildTestServer({
+      logLevel: 'info',
+      logStream: logs.stream,
+      webhookConfigRepo: { add: async () => stored, update: async () => stored } as unknown as WebhookConfigRepository,
+    });
+    await server.inject({ method: 'POST', url: '/api/v1/accounts/wa-acme/webhooks', headers: ADMIN, payload: { url } });
+    await server.inject({ method: 'PUT', url: '/api/v1/webhooks/wh_1', headers: ADMIN, payload: { url } });
+    await server.close();
+
+    expect(logs.text()).toContain('hooks.example.com');
+    expect(logs.text()).not.toContain('S3CRET-PATH');
   });
 
   it('never logs the token of a failed request', async () => {

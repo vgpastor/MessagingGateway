@@ -6,7 +6,6 @@ import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
 import { matchesFilter } from '../../core/filters/envelope-filter.js';
 import type { MetricsPort } from '../../core/metrics/metrics.port.js';
 import { noopMetrics } from '../../core/metrics/metrics.port.js';
-import { redactUrl } from '../../infrastructure/logging/redact-url.js';
 
 /** Longest a webhook may take to answer. A hung endpoint only ever holds back its own queue. */
 export const WEBHOOK_TIMEOUT_MS = 10_000;
@@ -20,12 +19,23 @@ interface QueuedDelivery {
   eventType: WebhookEventType;
   headers: Record<string, string>;
   body: string;
+  /** Told once whether the destination answered 2xx; a delivery dropped from a full queue did not. */
+  onSettled?: (delivered: boolean) => void;
 }
 
 interface DestinationQueue {
   pending: QueuedDelivery[];
   /** Sends `pending` one at a time, in order; settles once it is empty. Never rejects. */
   worker: Promise<void>;
+}
+
+/** A webhook URL often carries its secret in the path or the query, so logs name the host and nothing else. */
+export function destinationHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'invalid-url';
+  }
 }
 
 /**
@@ -86,6 +96,30 @@ export class WebhookForwarder {
     eventType: WebhookEventType,
     channel?: string,
   ): void {
+    this.enqueue(this.buildDelivery(url, secret, accountId, data, eventType, channel));
+  }
+
+  /** Like {@link send}, for whoever must know: resolves to whether the destination answered 2xx. Never rejects. */
+  sendConfirmed(
+    url: string,
+    secret: string | undefined,
+    accountId: string,
+    data: unknown,
+    eventType: WebhookEventType,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.enqueue({ ...this.buildDelivery(url, secret, accountId, data, eventType), onSettled: resolve });
+    });
+  }
+
+  private buildDelivery(
+    url: string,
+    secret: string | undefined,
+    accountId: string,
+    data: unknown,
+    eventType: WebhookEventType,
+    channel?: string,
+  ): QueuedDelivery {
     const body = JSON.stringify(data);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -103,7 +137,7 @@ export class WebhookForwarder {
       headers['X-UMG-Signature'] = `sha256=${signature}`;
     }
 
-    this.enqueue({ url, accountId, eventType, headers, body });
+    return { url, accountId, eventType, headers, body };
   }
 
   /** Resolves once every queue is empty. Bound the wait on the caller's side: a hung destination takes its time. */
@@ -124,9 +158,10 @@ export class WebhookForwarder {
 
     if (queue.pending.length >= WEBHOOK_QUEUE_CAPACITY) {
       const oldest = queue.pending.shift();
+      oldest?.onSettled?.(false);
       this.metrics.incCounter('umg_webhook_dropped_total', { account: oldest?.accountId ?? delivery.accountId });
       getLogger().error('Webhook queue full, dropped the oldest event', {
-        accountId: oldest?.accountId, eventType: oldest?.eventType, url: redactUrl(delivery.url), capacity: WEBHOOK_QUEUE_CAPACITY,
+        accountId: oldest?.accountId, eventType: oldest?.eventType, host: destinationHost(delivery.url), capacity: WEBHOOK_QUEUE_CAPACITY,
       });
     }
     queue.pending.push(delivery);
@@ -134,12 +169,14 @@ export class WebhookForwarder {
 
   private async deliverAll(url: string, queue: DestinationQueue): Promise<void> {
     for (let next = queue.pending.shift(); next; next = queue.pending.shift()) {
-      await this.post(next);
+      const delivered = await this.post(next);
+      next.onSettled?.(delivered);
     }
     this.queues.delete(url);
   }
 
-  private async post({ url, accountId, headers, body }: QueuedDelivery): Promise<void> {
+  /** Whether the destination answered 2xx. Never rejects. */
+  private async post({ url, accountId, headers, body }: QueuedDelivery): Promise<boolean> {
     const start = performance.now();
     try {
       const response = await fetch(url, {
@@ -155,17 +192,21 @@ export class WebhookForwarder {
       if (!response.ok) {
         this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
         const text = await response.text().catch(() => '');
-        getLogger().error('Webhook forwarding failed', { accountId, url, httpStatus: response.status, response: text });
+        getLogger().error('Webhook forwarding failed', { accountId, host: destinationHost(url), httpStatus: response.status, response: text });
       }
+      return response.ok;
     } catch (err) {
       const durationInSeconds = (performance.now() - start) / 1000;
       this.metrics.observeHistogram('umg_webhook_forward_duration_seconds', durationInSeconds, { account: accountId, status: 'error' });
       this.metrics.incCounter('umg_webhook_failures_total', { account: accountId });
-      const message = err instanceof Error ? err.message : String(err);
+      const host = destinationHost(url);
+      // fetch quotes the whole URL when it cannot parse it.
+      const message = (err instanceof Error ? err.message : String(err)).replaceAll(url, host);
       const timedOut = err instanceof Error && err.name === 'TimeoutError';
       getLogger().error(timedOut ? 'Webhook forwarding timed out' : 'Webhook forwarding error', {
-        accountId, url, error: message, ...(timedOut ? { timeoutMs: WEBHOOK_TIMEOUT_MS } : {}),
+        accountId, host, error: message, ...(timedOut ? { timeoutMs: WEBHOOK_TIMEOUT_MS } : {}),
       });
+      return false;
     }
   }
 }

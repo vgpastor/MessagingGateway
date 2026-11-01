@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ChannelAccountRepository } from '../../core/accounts/channel-account.repository.js';
 import type { WebhookConfigRepository } from '../../core/webhooks/webhook-config.repository.js';
 import type { WebhookConfigInput } from '../../core/webhooks/webhook-config.js';
+import { destinationHost } from '../webhooks/webhook-forwarder.js';
 import { errorResponseSchema } from './schemas.js';
 
 interface WebhookConfigDeps {
@@ -117,7 +118,7 @@ export async function webhookConfigController(
     }
 
     const config = await deps.webhookConfigRepo.add(id, request.body);
-    fastify.log.info({ accountId: id, webhookId: config.id, url: config.url }, 'Webhook added');
+    fastify.log.info({ accountId: id, webhookId: config.id, host: destinationHost(config.url) }, 'Webhook added');
     return reply.status(201).send(config);
   });
 
@@ -142,7 +143,7 @@ export async function webhookConfigController(
     if (!updated) {
       return reply.status(404).send({ error: 'Not Found', code: 'WEBHOOK_NOT_FOUND', message: `Webhook '${webhookId}' not found` });
     }
-    fastify.log.info({ webhookId, url: updated.url }, 'Webhook updated');
+    fastify.log.info({ webhookId, host: destinationHost(updated.url) }, 'Webhook updated');
     return updated;
   });
 

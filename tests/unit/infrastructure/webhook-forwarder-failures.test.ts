@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { WebhookForwarder } from '../../../src/connections/webhooks/webhook-forwarder.js';
+import { WebhookForwarder, WEBHOOK_QUEUE_CAPACITY } from '../../../src/connections/webhooks/webhook-forwarder.js';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import type { WebhookConfig } from '../../../src/core/webhooks/webhook-config.js';
 import type { WebhookConfigRepository } from '../../../src/core/webhooks/webhook-config.repository.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
@@ -151,5 +152,122 @@ describe('WebhookForwarder metrics exposure', () => {
     expect(text).not.toContain('SECRET');
     expect(text).not.toContain('hook.example.com');
     expect(text).not.toContain('url=');
+  });
+});
+
+describe('WebhookForwarder logs', () => {
+  const SECRET_URL = 'https://hooks.example.com/services/T000/B000/s3cr3t-token?key=abc';
+  const original = getLogger();
+
+  function capture() {
+    const lines: string[] = [];
+    const record = (msg: string, ctx?: Record<string, unknown>) => { lines.push(`${msg} ${JSON.stringify(ctx ?? {})}`); };
+    const fake = { info: record, warn: record, error: record, debug: record, child: () => fake };
+    setGlobalLogger(fake as unknown as Logger);
+    return lines;
+  }
+
+  afterEach(() => {
+    setGlobalLogger(original);
+    vi.unstubAllGlobals();
+  });
+
+  async function deliver(url = SECRET_URL) {
+    const forwarder = new WebhookForwarder(makeRepo({ ...hook, url }), undefined, undefined);
+    await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
+  }
+
+  it('name only the host when the destination answers an error', async () => {
+    const lines = capture();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no', { status: 500 })));
+
+    await deliver();
+
+    expect(lines.join('\n')).toContain('hooks.example.com');
+    expect(lines.join('\n')).not.toContain('s3cr3t-token');
+    expect(lines.join('\n')).not.toContain('key=abc');
+  });
+
+  it('name only the host when the request fails, even if the error quotes the URL', async () => {
+    const lines = capture();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError(`Failed to parse URL from ${SECRET_URL}`)));
+
+    await deliver();
+
+    expect(lines.join('\n')).toContain('hooks.example.com');
+    expect(lines.join('\n')).not.toContain('s3cr3t-token');
+  });
+
+  it('name only the host when the queue drops an event', async () => {
+    const lines = capture();
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))); // the first delivery never ends
+    const forwarder = new WebhookForwarder(makeRepo({ ...hook, url: SECRET_URL }), undefined, undefined);
+
+    for (let i = 0; i < WEBHOOK_QUEUE_CAPACITY + 2; i++) forwarder.send(SECRET_URL, undefined, 'wa-acme', {}, 'message.inbound');
+
+    expect(lines.join('\n')).toContain('hooks.example.com');
+    expect(lines.join('\n')).not.toContain('s3cr3t-token');
+  });
+
+  it('do not leak a URL that cannot be parsed', async () => {
+    const lines = capture();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to parse URL from not a url/s3cr3t-token')));
+
+    await deliver('not a url/s3cr3t-token');
+
+    expect(lines.join('\n')).not.toContain('s3cr3t-token');
+  });
+});
+
+describe('WebhookForwarder.sendConfirmed', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const confirmed = (forwarder: WebhookForwarder) => forwarder.sendConfirmed('https://alerts.test/hook', undefined, 'wa-acme', { a: 1 }, 'connection.update');
+  const forwarder = () => new WebhookForwarder(makeRepo(hook), undefined, undefined);
+
+  it('resolves true on a 2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(confirmed(forwarder())).resolves.toBe(true);
+  });
+
+  it('resolves false on any other answer', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no', { status: 503 })));
+    await expect(confirmed(forwarder())).resolves.toBe(false);
+  });
+
+  it('resolves false when the request fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    await expect(confirmed(forwarder())).resolves.toBe(false);
+  });
+
+  it('resolves false when the queue drops it, instead of never', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))); // the first delivery never ends
+    const sender = forwarder();
+    sender.send('https://alerts.test/hook', undefined, 'wa-acme', {}, 'connection.update');
+
+    const dropped = confirmed(sender);
+    for (let i = 0; i < WEBHOOK_QUEUE_CAPACITY; i++) sender.send('https://alerts.test/hook', undefined, 'wa-acme', {}, 'connection.update');
+
+    await expect(dropped).resolves.toBe(false);
+  });
+});
+
+describe('WebhookForwarder event filters', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('apply to messages but not to connection.update, which reaches any hook subscribed to it or to *', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const filtered: WebhookConfig = { ...hook, events: ['*'], filters: { exclude: { channel: 'whatsapp' } } };
+    const forwarder = new WebhookForwarder(makeRepo(filtered), undefined, undefined);
+
+    await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await forwarder.forwardRaw('wa-acme', { status: 'auth_expired' }, 'connection.update');
+    await forwarder.drain();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
