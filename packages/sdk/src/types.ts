@@ -68,8 +68,9 @@ export interface MessageContext {
   isViewOnce?: boolean;
 }
 
+/** Stored as JSON: a message read from the log keeps the shape of the version that wrote it. */
 export interface ChannelDetails {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
 }
 
@@ -107,15 +108,16 @@ export interface UnifiedEnvelope {
   gateway: GatewayMetadata;
 }
 
+/** Stored as JSON: a message read from the log keeps the shape of the version that wrote it. */
 export interface GatewayMetadata {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: {
-    id: string;
-    alias: string;
-    owner: string;
-    tags: string[];
+  account?: {
+    id?: string;
+    alias?: string;
+    owner?: string;
+    tags?: string[];
   };
 }
 

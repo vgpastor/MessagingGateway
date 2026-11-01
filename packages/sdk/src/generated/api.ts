@@ -94,22 +94,22 @@ export type PostWebhooksWhatsappAccountIdInbound200Context = {
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksWhatsappAccountIdInbound200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
+  account?: PostWebhooksWhatsappAccountIdInbound200GatewayAccount;
 };
 
 export type PostWebhooksWhatsappAccountIdInbound200 = {
@@ -229,22 +229,22 @@ export type PostWebhooksTelegramAccountIdUpdate200Context = {
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200ChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type PostWebhooksTelegramAccountIdUpdate200GatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200Gateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
+  account?: PostWebhooksTelegramAccountIdUpdate200GatewayAccount;
 };
 
 export type PostWebhooksTelegramAccountIdUpdate200 = {
@@ -1401,22 +1401,22 @@ export type GetApiV1Messages200MessagesItemContext = {
  };
 
 export type GetApiV1Messages200MessagesItemChannelDetails = {
-  platform: string;
+  platform?: string;
   [key: string]: unknown;
  };
 
 export type GetApiV1Messages200MessagesItemGatewayAccount = {
-  id: string;
-  alias: string;
-  owner: string;
-  tags: string[];
+  id?: string;
+  alias?: string;
+  owner?: string;
+  tags?: string[];
 };
 
 export type GetApiV1Messages200MessagesItemGateway = {
-  receivedAt: string;
-  adapterId: string;
+  receivedAt?: string;
+  adapterId?: string;
   rawPayloadRef?: string;
-  account: GetApiV1Messages200MessagesItemGatewayAccount;
+  account?: GetApiV1Messages200MessagesItemGatewayAccount;
 };
 
 export type GetApiV1Messages200MessagesItem = {

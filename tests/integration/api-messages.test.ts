@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadAccountsFromYaml } from '../../src/infrastructure/config/accounts.loader.js';
 import { InMemoryAccountRepository } from '../../src/infrastructure/config/in-memory-account.repository.js';
@@ -636,6 +637,28 @@ describe('GET /api/v1/messages?afterAccountSeq=', () => {
     const body = (await get('accountId=nobody&afterAccountSeq=0')).json();
 
     expect(body).toEqual({ messages: [], nextAfterAccountSeq: null, lastAccountSeq: 0, firstAccountSeq: null });
+  });
+
+  it.each([
+    ['without the gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys"}', '{"platform":"whatsapp"}'],
+    ['with a partial gateway account', '{"receivedAt":"2026-04-05T11:09:00Z","adapterId":"baileys","account":{"id":"wa-old"}}', '{"platform":"whatsapp"}'],
+    ['with an empty gateway', '{}', '{"platform":"whatsapp"}'],
+    ['without the channel platform', '{"adapterId":"baileys"}', '{"messageId":"W"}'],
+  ])('a row written by an older version %s does not block the page', async (_name, gateway, channelDetails) => {
+    const id = `msg-old-${randomUUID()}`;
+    const accountId = `wa-old-${randomUUID()}`;
+    await seqStore.insertInbound({ ...inbound(1), id, accountId, channelDetails: { platform: 'whatsapp' } });
+    (seqStore as unknown as { db: import('better-sqlite3').Database }).db
+      .prepare('UPDATE messages SET gateway_json = ?, channel_details_json = ? WHERE id = ?')
+      .run(gateway, channelDetails, id);
+
+    const keyset = await get(`accountId=${accountId}&afterAccountSeq=0`);
+    const legacy = await get(`accountId=${accountId}`);
+
+    expect(keyset.statusCode).toBe(200);
+    expect(keyset.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json().messages.map((m: { id: string }) => m.id)).toEqual([id]);
   });
 
   it('legacy query without afterAccountSeq unchanged', async () => {
