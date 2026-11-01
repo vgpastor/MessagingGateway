@@ -77,7 +77,8 @@ describe('WebhookForwarder failure handling', () => {
     const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined, metrics);
 
     let settled = false;
-    const done = forwarder.forward(makeEnvelope()).then(() => { settled = true; });
+    await forwarder.forward(makeEnvelope());
+    const done = forwarder.drain().then(() => { settled = true; });
 
     await vi.advanceTimersByTimeAsync(9_999);
     expect(settled).toBe(false);
@@ -98,6 +99,7 @@ describe('WebhookForwarder failure handling', () => {
     const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined, metrics);
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(metrics.incCounter).toHaveBeenCalledWith('umg_webhook_failures_total', { account: 'wa-acme' });
   });
@@ -108,6 +110,7 @@ describe('WebhookForwarder failure handling', () => {
     const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined, metrics);
 
     await expect(forwarder.forward(makeEnvelope())).resolves.toBeUndefined();
+    await forwarder.drain();
 
     expect(metrics.incCounter).toHaveBeenCalledWith('umg_webhook_failures_total', { account: 'wa-acme' });
   });
@@ -118,6 +121,7 @@ describe('WebhookForwarder failure handling', () => {
     const forwarder = new WebhookForwarder(makeRepo(hook), undefined, undefined, metrics);
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(metrics.incCounter).not.toHaveBeenCalled();
   });
@@ -140,6 +144,7 @@ describe('WebhookForwarder metrics exposure', () => {
     const forwarder = new WebhookForwarder(makeRepo(secretHook), undefined, undefined, new PrometheusMetrics());
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     const text = await registry.metrics();
     expect(text).toContain('umg_webhook_forward_duration_seconds_count{account="wa-acme"');

@@ -59,6 +59,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, 'https://global.example.com', 'global-secret');
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(
@@ -77,6 +78,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, 'https://global.example.com', undefined);
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(
@@ -98,6 +100,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, 'https://global.example.com', undefined);
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(fetch).toHaveBeenCalledWith(
       'https://global.example.com',
@@ -118,6 +121,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, 'https://global.example.com', undefined);
 
     await forwarder.forward(makeEnvelope(), 'message.inbound');
+    await forwarder.drain();
 
     // Should fall back to global since event doesn't match
     expect(fetch).toHaveBeenCalledWith(
@@ -131,6 +135,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, undefined, undefined);
 
     await forwarder.forward(makeEnvelope());
+    await forwarder.drain();
 
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -148,6 +153,7 @@ describe('WebhookForwarder', () => {
     const forwarder = new WebhookForwarder(repo, undefined, undefined);
 
     await forwarder.forward(makeEnvelope(), 'message.inbound');
+    await forwarder.drain();
 
     expect(fetch).toHaveBeenCalledWith(
       'https://hook.example.com',
@@ -177,5 +183,6 @@ describe('WebhookForwarder', () => {
 
     // Should not throw
     await expect(forwarder.forward(makeEnvelope())).resolves.toBeUndefined();
+    await forwarder.drain();
   });
 });

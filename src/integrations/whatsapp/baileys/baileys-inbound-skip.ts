@@ -1,6 +1,18 @@
 import { WAMessageStubType, extractMessageContent, type WAMessage } from '@whiskeysockets/baileys';
 import type { InboundSkipReason } from '../../../core/metrics/metrics.port.js';
 
+/** Upsert types that deliver a message (`notify`: live, `append`: caught up on reconnect). */
+const INBOUND_UPSERT_TYPES: ReadonlySet<string> = new Set(['notify', 'append']);
+
+export function isInboundUpsert(type: string): boolean {
+  return INBOUND_UPSERT_TYPES.has(type);
+}
+
+/** WhatsApp status stories travel as messages to this pseudo conversation. */
+export function isStatusBroadcast(msg: WAMessage): boolean {
+  return msg.key?.remoteJid === 'status@broadcast';
+}
+
 /**
  * Why a Baileys message must not reach the inbound pipeline, or undefined to process it.
  *

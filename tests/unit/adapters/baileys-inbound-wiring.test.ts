@@ -62,7 +62,7 @@ describe('Baileys inbound wiring', () => {
     return { inbound, account, socket: sockets.at(-1)! };
   }
 
-  it('hands every received message to the pipeline with the upsert type and the raw message', async () => {
+  it('hands every received message to the pipeline with the raw message', async () => {
     const { inbound, account, socket } = await setup('wire-1');
     const msg = waMessage();
 
@@ -74,8 +74,32 @@ describe('Baileys inbound wiring', () => {
       account,
       expect.objectContaining({ direction: 'inbound', conversationId: '34600111222@s.whatsapp.net', accountId: 'wire-1' }),
       msg,
-      'append',
     );
+  });
+
+  it('accepts notify and append upserts only', async () => {
+    const { inbound, socket } = await setup('wire-types');
+
+    socket.ev.emit('messages.upsert', { messages: [waMessage()], type: 'notify' });
+    socket.ev.emit('messages.upsert', { messages: [waMessage()], type: 'append' });
+    await flush();
+    expect(inbound.handle).toHaveBeenCalledTimes(2);
+
+    socket.ev.emit('messages.upsert', { messages: [waMessage()], type: 'other' });
+    await flush();
+    expect(inbound.handle).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops status@broadcast', async () => {
+    const { inbound, socket } = await setup('wire-status');
+
+    socket.ev.emit('messages.upsert', {
+      messages: [waMessage({ key: { remoteJid: 'status@broadcast', id: 'ST1', fromMe: false, participant: '34600111222@s.whatsapp.net' } })],
+      type: 'notify',
+    });
+    await flush();
+
+    expect(inbound.handle).not.toHaveBeenCalled();
   });
 
   it('skips own messages and does not inline media as base64', async () => {

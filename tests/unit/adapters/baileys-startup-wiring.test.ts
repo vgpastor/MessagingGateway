@@ -117,6 +117,6 @@ describe('Baileys startup ordering', () => {
     socket.ev.emit('messages.upsert', { messages: [msg], type: 'notify' });
     await waitFor(() => inbound.handle.mock.calls.length === 1);
 
-    expect(inbound.handle).toHaveBeenCalledWith(account, expect.objectContaining({ accountId: id }), msg, 'notify');
+    expect(inbound.handle).toHaveBeenCalledWith(account, expect.objectContaining({ accountId: id }), msg);
   });
 });

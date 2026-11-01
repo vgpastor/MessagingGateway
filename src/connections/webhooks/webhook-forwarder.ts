@@ -6,14 +6,35 @@ import type { WebhookEventType } from '../../core/webhooks/webhook-config.js';
 import { matchesFilter } from '../../core/filters/envelope-filter.js';
 import type { MetricsPort } from '../../core/metrics/metrics.port.js';
 import { noopMetrics } from '../../core/metrics/metrics.port.js';
+import { redactUrl } from '../../infrastructure/logging/redact-url.js';
 
-/**
- * Longest a webhook may take to answer. Inbound events are emitted per account in order and the emit
- * awaits its handlers, so a hung endpoint would otherwise block that account's ingestion forever.
- */
+/** Longest a webhook may take to answer. A hung endpoint only ever holds back its own queue. */
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 
+/** Events waiting per destination. A consumer that loses some catches up with `GET /api/v1/messages?afterAccountSeq=`. */
+export const WEBHOOK_QUEUE_CAPACITY = 1000;
+
+interface QueuedDelivery {
+  url: string;
+  accountId: string;
+  eventType: WebhookEventType;
+  headers: Record<string, string>;
+  body: string;
+}
+
+interface DestinationQueue {
+  pending: QueuedDelivery[];
+  /** Sends `pending` one at a time, in order; settles once it is empty. Never rejects. */
+  worker: Promise<void>;
+}
+
+/**
+ * Forwards events to webhooks from an in-memory queue per destination: `forward` and `send`
+ * only enqueue, so the caller never waits for a webhook and a slow destination delays no other.
+ */
 export class WebhookForwarder {
+  private readonly queues = new Map<string, DestinationQueue>();
+
   constructor(
     private readonly webhookConfigRepo: WebhookConfigRepository,
     private readonly globalCallbackUrl: string | undefined,
@@ -46,28 +67,26 @@ export class WebhookForwarder {
     });
 
     if (matching.length > 0) {
-      // Send to all matching webhooks in parallel
-      await Promise.allSettled(
-        matching.map((c) => this.send(c.url, c.secret, accountId, payload, eventType, channel)),
-      );
+      for (const c of matching) this.send(c.url, c.secret, accountId, payload, eventType, channel);
       return;
     }
 
     // Global fallback (only if no account-specific webhooks matched)
     if (this.globalCallbackUrl) {
-      await this.send(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
+      this.send(this.globalCallbackUrl, this.globalSecret, accountId, payload, eventType, channel);
     }
   }
 
-  async send(
+  /** Queue one event for a destination. The body is serialized now: later changes to `data` do not reach it. */
+  send(
     url: string,
     secret: string | undefined,
     accountId: string,
     data: unknown,
     eventType: WebhookEventType,
     channel?: string,
-  ): Promise<void> {
-    const payload = JSON.stringify(data);
+  ): void {
+    const body = JSON.stringify(data);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-UMG-Event': eventType,
@@ -79,17 +98,54 @@ export class WebhookForwarder {
 
     if (secret) {
       const signature = createHmac('sha256', secret)
-        .update(payload)
+        .update(body)
         .digest('hex');
       headers['X-UMG-Signature'] = `sha256=${signature}`;
     }
 
+    this.enqueue({ url, accountId, eventType, headers, body });
+  }
+
+  /** Resolves once every queue is empty. Bound the wait on the caller's side: a hung destination takes its time. */
+  async drain(): Promise<void> {
+    while (this.queues.size > 0) {
+      await Promise.all([...this.queues.values()].map((queue) => queue.worker));
+    }
+  }
+
+  private enqueue(delivery: QueuedDelivery): void {
+    const queue = this.queues.get(delivery.url);
+    if (!queue) {
+      const created: DestinationQueue = { pending: [delivery], worker: Promise.resolve() };
+      this.queues.set(delivery.url, created);
+      created.worker = this.deliverAll(delivery.url, created);
+      return;
+    }
+
+    if (queue.pending.length >= WEBHOOK_QUEUE_CAPACITY) {
+      const oldest = queue.pending.shift();
+      this.metrics.incCounter('umg_webhook_dropped_total', { account: oldest?.accountId ?? delivery.accountId });
+      getLogger().error('Webhook queue full, dropped the oldest event', {
+        accountId: oldest?.accountId, eventType: oldest?.eventType, url: redactUrl(delivery.url), capacity: WEBHOOK_QUEUE_CAPACITY,
+      });
+    }
+    queue.pending.push(delivery);
+  }
+
+  private async deliverAll(url: string, queue: DestinationQueue): Promise<void> {
+    for (let next = queue.pending.shift(); next; next = queue.pending.shift()) {
+      await this.post(next);
+    }
+    this.queues.delete(url);
+  }
+
+  private async post({ url, accountId, headers, body }: QueuedDelivery): Promise<void> {
     const start = performance.now();
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers,
-        body: payload,
+        body,
         signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
 

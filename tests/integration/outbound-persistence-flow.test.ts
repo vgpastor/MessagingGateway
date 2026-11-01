@@ -310,7 +310,7 @@ describe('Inbound message persistence flow', () => {
   });
 
   it('should persist inbound message through the pipeline, once, before it is emitted', async () => {
-    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never, 'notify');
+    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never);
 
     expect(insertInbound).toHaveBeenCalledTimes(1);
     expect(logged[0].id).toBe('msg_test-inbound-001');
@@ -322,7 +322,7 @@ describe('Inbound message persistence flow', () => {
   });
 
   it('should not store inbound a second time from the persistence subscriber', async () => {
-    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never, 'notify');
+    await pipeline.handle(whatsappAccount, inboundEnvelope(), {} as never);
 
     expect(store.save).not.toHaveBeenCalled();
   });
@@ -345,7 +345,7 @@ describe('Inbound message persistence flow', () => {
       },
     };
 
-    await pipeline.handle(whatsappAccount, inboundEnvelope({ id: 'msg_in-001' }), {} as never, 'notify');
+    await pipeline.handle(whatsappAccount, inboundEnvelope({ id: 'msg_in-001' }), {} as never);
     await eventBus.emit({
       id: 'evt-out', type: Events.MESSAGE_OUTBOUND,
       timestamp: new Date(), source: 'router',

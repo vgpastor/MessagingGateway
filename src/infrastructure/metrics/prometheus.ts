@@ -45,9 +45,16 @@ export const webhookFailuresTotal = new Counter({
   registers: [registry],
 });
 
+export const webhookDroppedTotal = new Counter({
+  name: 'umg_webhook_dropped_total',
+  help: 'Events dropped because the queue of their webhook destination was full (oldest first)',
+  labelNames: ['account'] as const,
+  registers: [registry],
+});
+
 export const persistFailuresTotal = new Counter({
   name: 'umg_persist_failures_total',
-  help: 'Inbound messages that could not be written to the message log',
+  help: 'Inbound messages the message log would not take after the retries: they went to the failed log (data/failed-inbound.jsonl)',
   registers: [registry],
 });
 

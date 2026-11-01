@@ -14,7 +14,7 @@ import { mapBaileysToWhatsAppEvent } from './baileys.mapper.js';
 import { createBaileysMessageLookup } from './baileys-message-lookup.js';
 import type { MessageLogPort } from '../../../core/persistence/message-store.port.js';
 import { noopMetrics, type MetricsPort } from '../../../core/metrics/metrics.port.js';
-import { baileysInboundSkipReason } from './baileys-inbound-skip.js';
+import { baileysInboundSkipReason, isInboundUpsert, isStatusBroadcast } from './baileys-inbound-skip.js';
 import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const socketManager = new BaileysSocketManager();
@@ -79,8 +79,9 @@ export const baileysProvider: ProviderBundle = {
     const inboundAdapter = new BaileysWebhookAdapter();
 
     socketManager.onMessage(account.id, async (event) => {
+      if (!isInboundUpsert(event.type)) return;
       for (const msg of event.messages) {
-        if (msg.key?.fromMe) continue;
+        if (msg.key?.fromMe || isStatusBroadcast(msg)) continue;
         const skip = baileysInboundSkipReason(msg);
         if (skip) {
           metrics.inboundSkipped(skip);
@@ -118,7 +119,7 @@ export const baileysProvider: ProviderBundle = {
           }
 
           // Filter → persist → emit → media all happen in the pipeline
-          await inbound.handle(account, envelope, msg, event.type);
+          await inbound.handle(account, envelope, msg);
         } catch (err) {
           getLogger().error('Failed to process inbound message', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
         }
