@@ -6,9 +6,18 @@
 -- Existing rows get `seq` from the table rewrite of ADD COLUMN (heap order) and inbound rows get
 -- `account_seq` per account by `created_at`, then `seq`. Outbound rows have no `account_seq`.
 
--- Unused GIN index over every message body: expensive to maintain, and dropping it first
--- spares the full-table UPDATE below from rewriting it for every row.
+-- Every message is deleted or written anew below, and each index gets an entry per row, so they all go first:
+-- building one at the end costs far less than maintaining it row by row. Only the primary key stays, which
+-- is what the dedupe and the UPDATE find rows with. The transaction puts them back if anything fails.
+-- The GIN index over every message body is not recreated: nothing uses it, and it is expensive to maintain.
 DROP INDEX IF EXISTS idx_messages_content_json;
+DROP INDEX IF EXISTS idx_messages_search;
+DROP INDEX IF EXISTS idx_messages_account;
+DROP INDEX IF EXISTS idx_messages_conversation;
+DROP INDEX IF EXISTS idx_messages_timestamp;
+DROP INDEX IF EXISTS idx_messages_sender;
+DROP INDEX IF EXISTS idx_messages_type;
+DROP INDEX IF EXISTS idx_messages_direction;
 
 ALTER TABLE messages
   ADD COLUMN seq BIGSERIAL,
@@ -79,6 +88,15 @@ CREATE UNIQUE INDEX uq_messages_seq ON messages(seq);
 -- Retention (DELETE ... WHERE created_at < ...) and pending-media recovery at boot
 CREATE INDEX idx_messages_created_at ON messages(created_at);
 CREATE INDEX idx_messages_media_pending ON messages(seq) WHERE (content_json->'media'->>'status') = 'pending';
+
+-- The ones dropped at the top.
+CREATE INDEX idx_messages_account ON messages(account_id);
+CREATE INDEX idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX idx_messages_sender ON messages(sender_id);
+CREATE INDEX idx_messages_type ON messages(content_type);
+CREATE INDEX idx_messages_direction ON messages(direction);
+CREATE INDEX idx_messages_search ON messages USING GIN(search_vector);
 
 -- The rewrite left the planner statistics out of date.
 ANALYZE messages;

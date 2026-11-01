@@ -199,6 +199,100 @@ describe.skipIf(!PG_URL)('message-log migration 002 on existing data (postgres)'
   });
 });
 
+describe.skipIf(!PG_URL)('message-log migration 002: the indexes during the rewrite (postgres)', () => {
+  const OLD_INDEXES = [
+    'idx_messages_account', 'idx_messages_conversation', 'idx_messages_direction', 'idx_messages_search',
+    'idx_messages_sender', 'idx_messages_timestamp', 'idx_messages_type',
+  ];
+  let root: import('pg').Pool;
+  let admin: import('pg').Pool;
+  let schema: string;
+  let legacyDir: string;
+  let store: PostgresMessageStore;
+
+  const indexes = async () => (await admin.query(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'messages' ORDER BY indexname`, [schema],
+  )).rows.map((r) => r.indexname as string);
+
+  beforeEach(async () => {
+    const { Pool } = await import('pg');
+    schema = `mlogidx_${randomUUID().replace(/-/g, '')}`;
+    root = new Pool({ connectionString: PG_URL });
+    await root.query(`CREATE SCHEMA "${schema}"`);
+    const url = new URL(PG_URL!);
+    url.searchParams.set('options', `-c search_path=${schema}`);
+    admin = new Pool({ connectionString: url.toString() });
+
+    legacyDir = await copyInitialMigration('postgres');
+    await new MigrationRunner({ scriptsDir: join(legacyDir, 'postgres'), adapter: new PostgresMigrationAdapter(admin), logger: silent }).run();
+    for (const row of LEGACY) {
+      await admin.query(
+        `INSERT INTO messages (id, account_id, channel, direction, conversation_id, sender_id, sender_name,
+           recipient_id, content_type, content_preview, content_json, context_json, channel_details_json,
+           gateway_json, timestamp, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        legacyColumns(row),
+      );
+    }
+    store = new PostgresMessageStore(url.toString());
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    await admin.end();
+    await root.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await root.end();
+    await rm(legacyDir, { recursive: true, force: true });
+  });
+
+  it('leaves only the primary key on the table while it deletes and rewrites rows, and puts the rest back at the end', async () => {
+    await admin.query(`
+      CREATE TABLE index_probe (operation TEXT, names TEXT);
+      CREATE FUNCTION probe_indexes() RETURNS trigger AS $fn$
+      BEGIN
+        INSERT INTO index_probe
+          SELECT TG_OP, string_agg(indexname, ',' ORDER BY indexname)
+          FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'messages';
+        RETURN NULL;
+      END $fn$ LANGUAGE plpgsql;
+      CREATE TRIGGER probe_delete BEFORE DELETE ON messages FOR EACH STATEMENT EXECUTE FUNCTION probe_indexes();
+      CREATE TRIGGER probe_update BEFORE UPDATE ON messages FOR EACH STATEMENT EXECUTE FUNCTION probe_indexes();
+    `);
+
+    await store.runMigrations();
+
+    const probed = (await admin.query('SELECT operation, names FROM index_probe ORDER BY operation')).rows;
+    expect(probed).toEqual([
+      { operation: 'DELETE', names: 'messages_pkey' },
+      { operation: 'UPDATE', names: 'messages_pkey' },
+    ]);
+    const after = await indexes();
+    expect(after).toEqual(expect.arrayContaining([...OLD_INDEXES, 'messages_pkey', 'uq_messages_account_wa', 'uq_messages_account_seq', 'uq_messages_seq']));
+    expect(after).not.toContain('idx_messages_content_json');
+  });
+
+  it('search still works on the recreated full-text index', async () => {
+    await store.runMigrations();
+
+    expect((await store.search('m4')).messages.map((m) => m.id)).toEqual(['m4']);
+  });
+
+  it('a failure half way leaves every old index in place and nothing recorded', async () => {
+    const before = await indexes();
+    expect(before).toEqual(expect.arrayContaining([...OLD_INDEXES, 'idx_messages_content_json']));
+    await admin.query('CREATE TABLE account_counters (taken BOOLEAN)'); // 002 creates it after the rewrite
+
+    await expect(store.runMigrations()).rejects.toThrow(/account_counters/);
+
+    expect(await indexes()).toEqual(before);
+    const recorded = (await admin.query('SELECT name FROM _migrations ORDER BY name')).rows.map((r) => r.name);
+    expect(recorded).toEqual(['001_initial_schema']);
+    const columns = (await admin.query(`SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'messages' AND column_name = 'account_seq'`, [schema])).rows;
+    expect(columns).toEqual([]);
+  });
+});
+
 // ── SQLite ────────────────────────────────────────────────────────
 
 describe('message-log migration 003 on existing data (sqlite)', () => {
