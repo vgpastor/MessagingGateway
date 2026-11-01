@@ -18,6 +18,7 @@ import { resolveMigrationScriptsDir } from '../../../src/persistence/migrations/
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
+import { testDatabaseUrl } from '../../helpers/test-database-url.js';
 
 const silent = { info: () => {}, error: () => {} };
 
@@ -84,7 +85,7 @@ function makeEnvelope(accountId: string, wa: string): UnifiedEnvelope {
 
 // ── PostgreSQL ────────────────────────────────────────────────────
 
-const PG_URL = process.env.TEST_DATABASE_URL;
+const PG_URL = testDatabaseUrl();
 
 describe.skipIf(!PG_URL)('message-log migration 002 on existing data (postgres)', () => {
   let admin: import('pg').Pool;

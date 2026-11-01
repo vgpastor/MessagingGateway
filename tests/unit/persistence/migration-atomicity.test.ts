@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { MigrationRunner } from '../../../src/persistence/migrations/migration-runner.js';
 import { PostgresMigrationAdapter } from '../../../src/persistence/migrations/adapters/postgres-migration.adapter.js';
 import { SqliteMigrationAdapter } from '../../../src/persistence/migrations/adapters/sqlite-migration.adapter.js';
+import { testDatabaseUrl } from '../../helpers/test-database-url.js';
 
 const silent = { info: () => {}, error: () => {} };
 
@@ -61,7 +62,7 @@ describe('migration atomicity (sqlite)', () => {
   });
 });
 
-const PG_URL = process.env.TEST_DATABASE_URL;
+const PG_URL = testDatabaseUrl();
 
 describe.skipIf(!PG_URL)('migration atomicity (postgres)', () => {
   let dir: string;

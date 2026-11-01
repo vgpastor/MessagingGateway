@@ -14,6 +14,7 @@ import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-stor
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
 import { MAX_EXPORT_LIMIT, MAX_PAGE_LIMIT } from '../../../src/core/persistence/message-store.utils.js';
 import { PermanentStoreError } from '../../../src/core/errors.js';
+import { testDatabaseUrl } from '../../helpers/test-database-url.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────
 
@@ -78,7 +79,7 @@ async function createSqliteBackend(): Promise<Backend> {
   };
 }
 
-const PG_URL = process.env.TEST_DATABASE_URL;
+const PG_URL = testDatabaseUrl();
 
 /** Postgres backend isolated in its own throw-away schema (search_path) */
 async function createPostgresBackend(schemaSuffix = randomUUID().replace(/-/g, '')): Promise<Backend & { schema: string; admin: import('pg').Pool }> {

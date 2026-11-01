@@ -8,8 +8,9 @@ import type { PoolClient, Pool } from 'pg';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
 import { PostgresMessageStore } from '../../../src/persistence/postgres-message-store.js';
 import { PostgresMigrationAdapter } from '../../../src/persistence/migrations/adapters/postgres-migration.adapter.js';
+import { testDatabaseUrl } from '../../helpers/test-database-url.js';
 
-const PG_URL = process.env.TEST_DATABASE_URL;
+const PG_URL = testDatabaseUrl();
 const ACCOUNT = 'wa-1';
 const TIMEOUT_MS = 1_000;
 
