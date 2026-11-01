@@ -449,7 +449,7 @@ export type PostApiV1AccountsBodyMetadata = {
 export type PostApiV1AccountsBody = {
   /**
      * Unique account identifier (e.g. "wa-acme")
-     * @pattern ^[A-Za-z0-9][A-Za-z0-9_-]*$
+     * @pattern ^[A-Za-z0-9][A-Za-z0-9._-]*$
      */
   id: string;
   /**
@@ -772,12 +772,24 @@ export type PutApiV1AccountsId404 = {
   message: string;
 };
 
+export type PutApiV1AccountsId500 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
 export type DeleteApiV1AccountsId200 = {
   deleted: boolean;
   accountId: string;
 };
 
 export type DeleteApiV1AccountsId404 = {
+  error: string;
+  code?: string;
+  message: string;
+};
+
+export type DeleteApiV1AccountsId500 = {
   error: string;
   code?: string;
   message: string;
@@ -2135,10 +2147,15 @@ export type putApiV1AccountsIdResponse404 = {
   status: 404
 }
 
+export type putApiV1AccountsIdResponse500 = {
+  data: PutApiV1AccountsId500
+  status: 500
+}
+
 export type putApiV1AccountsIdResponseSuccess = (putApiV1AccountsIdResponse200) & {
   headers: Headers;
 };
-export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse400 | putApiV1AccountsIdResponse404) & {
+export type putApiV1AccountsIdResponseError = (putApiV1AccountsIdResponse400 | putApiV1AccountsIdResponse404 | putApiV1AccountsIdResponse500) & {
   headers: Headers;
 };
 
@@ -2185,10 +2202,15 @@ export type deleteApiV1AccountsIdResponse404 = {
   status: 404
 }
 
+export type deleteApiV1AccountsIdResponse500 = {
+  data: DeleteApiV1AccountsId500
+  status: 500
+}
+
 export type deleteApiV1AccountsIdResponseSuccess = (deleteApiV1AccountsIdResponse200) & {
   headers: Headers;
 };
-export type deleteApiV1AccountsIdResponseError = (deleteApiV1AccountsIdResponse404) & {
+export type deleteApiV1AccountsIdResponseError = (deleteApiV1AccountsIdResponse404 | deleteApiV1AccountsIdResponse500) & {
   headers: Headers;
 };
 
