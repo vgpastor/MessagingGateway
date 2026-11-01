@@ -25,13 +25,16 @@ function parseOffset(raw: string | undefined): number | undefined {
   return Number.isSafeInteger(offset) && offset >= 0 ? offset : undefined;
 }
 
+/** A number or a phone: it starts like a formula, but a spreadsheet can only read it as what it is. */
+const PLAIN_NUMBER = /^[+-]?[0-9][0-9 ]*$/;
+
 /**
  * One CSV cell. A spreadsheet runs a cell that starts with one of these as a formula, and the text comes
  * from whoever wrote to the account: the leading `'` makes it show as text.
  */
 function csvCell(value: unknown): string {
   const text = String(value ?? '');
-  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  const safe = /^[=+\-@\t\r]/.test(text) && !PLAIN_NUMBER.test(text) ? `'${text}` : text;
   return `"${safe.replace(/"/g, '""')}"`;
 }
 

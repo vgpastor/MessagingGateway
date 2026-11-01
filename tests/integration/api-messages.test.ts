@@ -382,6 +382,8 @@ describe('text from a message or a query is only text', () => {
     await localStore.save(textMessage('m-and', 'Luis', 'this AND that'));
     await localStore.save(textMessage('m-eq', '=HYPERLINK("http://evil","x")', '=1+1'));
     await localStore.save(textMessage('m-plus', '+34600000001', '+cmd|calc'));
+    await localStore.save(textMessage('m-spaced', '+34 600 000 002', '-42'));
+    await localStore.save(textMessage('m-phone-then-formula', '+34600000003+cmd|calc', '-3 4 x'));
     await localStore.save(textMessage('m-minus', 'Eva', '-2+3'));
     await localStore.save(textMessage('m-at', 'Eva', '@SUM(A1)'));
     await localStore.save(textMessage('m-tab', 'Eva', '\t=1+1'));
@@ -420,9 +422,13 @@ describe('text from a message or a query is only text', () => {
     const csv = res.body;
 
     expect(csv).toContain(`"'=HYPERLINK(""http://evil"",""x"")"`);
-    expect(csv).toContain(`"'+34600000001"`);
-    for (const preview of ['=1+1', '+cmd|calc', '-2+3', '@SUM(A1)', '\t=1+1', '\r=1+1']) {
+    for (const preview of ['=1+1', '+cmd|calc', '-2+3', '@SUM(A1)', '\t=1+1', '\r=1+1', '+34600000003+cmd|calc', '-3 4 x']) {
       expect(csv).toContain(`"'${preview}"`);
+    }
+    // A number or a phone is no formula, and the quote would get in the way of whoever reads the export.
+    for (const plain of ['+34600000001', '+34 600 000 002', '-42']) {
+      expect(csv).toContain(`"${plain}"`);
+      expect(csv).not.toContain(`"'${plain}"`);
     }
     expect(csv).toContain('"the a-b plan"');
     expect(csv).toContain('"Ana"');
