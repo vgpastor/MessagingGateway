@@ -75,6 +75,10 @@ jobs:
         working-directory: packages/sdk
         run: npm run build
 
+      - name: Test SDK
+        working-directory: packages/sdk
+        run: npm test
+
   sdk-sync-check:
     runs-on: ubuntu-latest
     # Only run when API source files change (not on dependency-only updates)
