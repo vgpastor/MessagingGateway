@@ -566,6 +566,44 @@ describe('FailedInboundFile', () => {
     expect(JSON.parse(lines[0]!).envelope.id).toBe('bad');
   });
 
+  it('warns once per pass, with the count, however many entries stay, and the pipeline adds no other for them', async () => {
+    const warn = vi.fn();
+    const fake = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn(), child: () => fake };
+    const originalLogger = getLogger();
+    setGlobalLogger(fake as unknown as Logger);
+    try {
+      for (const id of ['a', 'b', 'c']) await file.append({ envelope: envelope(id, `W-${id}`), raw: undefined });
+      const pipeline = new InboundPipeline({
+        store, failedLog: file, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics,
+        accounts: { findById: async () => { throw new Error('repo down'); } }, persistRetryDelaysMs: [],
+      });
+
+      await pipeline.replayFailed();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kept: 3, error: 'repo down' }));
+      await pipeline.drain(10);
+    } finally {
+      setGlobalLogger(originalLogger);
+    }
+  });
+
+  it('with nothing staying it does not warn', async () => {
+    const warn = vi.fn();
+    const fake = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn(), child: () => fake };
+    const originalLogger = getLogger();
+    setGlobalLogger(fake as unknown as Logger);
+    try {
+      await file.append({ envelope: envelope('ok', 'W1'), raw: undefined });
+
+      await file.replay(async () => {});
+
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      setGlobalLogger(originalLogger);
+    }
+  });
+
   it('leaves the file alone when nothing could be stored', async () => {
     await file.append({ envelope: envelope('bad', 'W1'), raw: undefined });
     const before = await readFile(path, 'utf8');

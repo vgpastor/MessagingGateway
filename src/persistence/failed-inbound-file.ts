@@ -78,6 +78,7 @@ export class FailedInboundFile implements FailedInboundLog {
     const { lines, size } = await this.onFile(() => this.read());
     const kept: string[] = [];
     const rejected: RejectedLine[] = [];
+    let firstFailure: unknown;
     for (const line of lines) {
       let entry: FailedInboundEntry;
       try {
@@ -92,12 +93,13 @@ export class FailedInboundFile implements FailedInboundLog {
         if (err instanceof PermanentStoreError) {
           rejected.push({ line, reason: err.message });
         } else {
+          if (kept.length === 0) firstFailure = err;
           kept.push(line);
-          getLogger().warn('Failed inbound entry not stored', { error: errorMessage(err) });
         }
       }
     }
 
+    if (kept.length > 0) getLogger().warn('Inbound messages remain in the failed log', { kept: kept.length, error: errorMessage(firstFailure) });
     const saved = lines.length - kept.length - rejected.length;
     // In this order: a crash between the two leaves the entry in both files, and it is rejected again.
     if (rejected.length > 0) await this.onFile(() => this.reject(rejected));

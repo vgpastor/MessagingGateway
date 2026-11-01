@@ -164,7 +164,6 @@ export class InboundPipeline {
     if (kept > 0) this.retryHeldLater();
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
-    if (kept > 0) this.logger.warn('Inbound messages remain in the failed log', { kept });
     if (rejected > 0) {
       this.deps.metrics.inboundRejected(rejected);
       this.logger.error('Inbound messages moved to the log of rejects: they will not be stored', { rejected });
