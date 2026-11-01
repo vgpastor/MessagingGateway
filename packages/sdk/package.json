@@ -20,6 +20,7 @@
     "generate": "orval --config orval.config.ts",
     "build": "tsc",
     "lint": "tsc --noEmit",
+    "prepack": "npm run build",
     "clean": "rm -rf dist",
     "test": "npm run build && vitest run"
   },
