@@ -416,6 +416,52 @@ describe('InboundPipeline', () => {
     await expect(pipeline.handle(makeAccount(), makeImageEnvelope(), raw)).resolves.toBeUndefined();
   });
 
+  describe('enrichment', () => {
+    it('runs inside the queue: the turn is taken when handle() is called, not when enrichment ends', async () => {
+      const { pipeline, insertInbound } = setup();
+      let release = () => {};
+      const slow = new Promise<void>((resolve) => { release = resolve; });
+
+      const first = pipeline.handle(makeAccount(), makeEnvelope({ id: 'first' }), {}, () => slow);
+      const second = pipeline.handle(makeAccount(), makeEnvelope({ id: 'second' }), {});
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(insertInbound).not.toHaveBeenCalled();
+
+      release();
+      await Promise.all([first, second]);
+
+      expect(insertInbound.mock.calls.map(([envelope]) => (envelope as UnifiedEnvelope).id)).toEqual(['first', 'second']);
+    });
+
+    it('applies the conversation filter to what enrichment resolved', async () => {
+      const { pipeline, insertInbound } = setup();
+      const account = makeAccount({ conversations: ['34600111222@s.whatsapp.net'] });
+      const envelope = makeEnvelope({ conversationId: '100000000000001@lid' });
+
+      await pipeline.handle(account, envelope, {}, async () => { envelope.conversationId = '34600111222@s.whatsapp.net'; });
+
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+    });
+
+    it('stores the message anyway when enrichment fails', async () => {
+      const { pipeline, insertInbound } = setup();
+
+      await pipeline.handle(makeAccount(), makeEnvelope(), {}, async () => { throw new Error('no socket'); });
+
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+    });
+
+    it('a shutdown keeps a message it could not enrich: the filter cannot judge an unresolved conversation', async () => {
+      const { pipeline, failedLog } = setup();
+      const account = makeAccount({ conversations: ['34600111222@s.whatsapp.net'] });
+
+      void pipeline.handle(account, makeEnvelope({ conversationId: '100000000000001@lid' }), {}, () => new Promise(() => {}));
+      await pipeline.drain(10);
+
+      expect(failedLog.append).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('per-account ordering', () => {
     const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

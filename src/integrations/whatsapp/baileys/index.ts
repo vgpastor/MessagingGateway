@@ -5,6 +5,7 @@ import { getLogger } from '../../../core/logger/logger.port.js';
 import { Events, createEvent } from '../../../core/events.js';
 import type { ConnectionUpdatePayload } from '../../../core/events.js';
 import type { InboundPipeline } from '../../../core/inbound/inbound-pipeline.js';
+import type { UnifiedEnvelope } from '../../../core/messaging/unified-envelope.js';
 import { BaileysAdapter } from './baileys.adapter.js';
 import { BaileysHealthChecker } from './baileys.health-checker.js';
 import { BaileysConnectionManager } from './baileys.connection-manager.js';
@@ -18,6 +19,23 @@ import { baileysInboundSkipReason, isInboundUpsert, isStatusBroadcast } from './
 import { jidNormalizedUser, DisconnectReason } from '@whiskeysockets/baileys';
 
 const GROUP_CACHE_TTL = 5 * 60 * 1000;
+/** How long a group that could not be resolved is left alone: a burst from it must not wait once per message. */
+const GROUP_MISS_TTL = 60 * 1000;
+/** Enrichment runs inside the account's queue, so what it asks WhatsApp may hold back every later message up to this long. */
+const ENRICH_TIMEOUT_MS = 5_000;
+
+/** Undefined when `work` takes longer than {@link ENRICH_TIMEOUT_MS}: the message goes on without that detail. */
+async function withinEnrichBudget<T>(work: Promise<T>): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ENRICH_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface BaileysProviderDeps {
   /** Counts messages dropped before the pipeline (see {@link baileysInboundSkipReason}). */
@@ -37,23 +55,45 @@ export function createBaileysProvider({ metrics = noopMetrics, messageStore }: B
   });
 
   // Cache group names to avoid API calls on every message
-  const groupNameCache = new Map<string, { name: string; expires: number }>();
+  const groupNameCache = new Map<string, { name: string | undefined; expires: number }>();
 
   async function resolveGroupName(accountId: string, groupId: string): Promise<string | undefined> {
     const cacheKey = `${accountId}:${groupId}`;
     const cached = groupNameCache.get(cacheKey);
     if (cached && cached.expires > Date.now()) return cached.name;
 
-    try {
-      const info = await socketManager.getGroupInfo(accountId, groupId);
-      if (info) {
-        groupNameCache.set(cacheKey, { name: info.name, expires: Date.now() + GROUP_CACHE_TTL });
-        return info.name;
+    const name = (await withinEnrichBudget(socketManager.getGroupInfo(accountId, groupId)))?.name;
+    groupNameCache.set(cacheKey, { name, expires: Date.now() + (name ? GROUP_CACHE_TTL : GROUP_MISS_TTL) });
+    return name;
+  }
+
+  /** What takes a look-up: it runs in the message's turn, never before it. */
+  async function enrichEnvelope(accountId: string, envelope: UnifiedEnvelope): Promise<void> {
+    // Resolve LID → phone number for DMs so conversationId matches outbound
+    if (envelope.conversationId.endsWith('@lid')) {
+      const originalLid = envelope.conversationId;
+      const phoneJid = await withinEnrichBudget(socketManager.resolveLidToPhone(accountId, originalLid));
+      if (phoneJid) {
+        // jidNormalizedUser strips the device suffix (e.g. ":0")
+        envelope.conversationId = jidNormalizedUser(phoneJid);
+        envelope.sender.id = jidNormalizedUser(phoneJid);
       }
-    } catch {
-      // Non-blocking
+      // Preserve original LID and resolved JID (with device) in channelDetails for future use
+      if (envelope.channelDetails) {
+        (envelope.channelDetails as Record<string, unknown>).senderLid = originalLid;
+        if (phoneJid) {
+          (envelope.channelDetails as Record<string, unknown>).senderPhoneJid = phoneJid;
+        }
+      }
     }
-    return undefined;
+
+    // Resolve group name for group messages (cached, 5 min TTL)
+    if (envelope.channelDetails && envelope.conversationId.endsWith('@g.us')) {
+      const groupName = await resolveGroupName(accountId, envelope.conversationId);
+      if (groupName) {
+        (envelope.channelDetails as Record<string, unknown>).groupName = groupName;
+      }
+    }
   }
 
   return {
@@ -79,50 +119,28 @@ export function createBaileysProvider({ metrics = noopMetrics, messageStore }: B
       if (socketManager.isWired(account.id)) return;
       const inboundAdapter = new BaileysWebhookAdapter();
 
-      socketManager.onMessage(account.id, async (event) => {
+      const logFailure = (err: unknown) => {
+        getLogger().error('Failed to process inbound message', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
+      };
+
+      // Nothing here may await: each message must take its turn in the pipeline's queue
+      // before the next one, and the next upsert, can run. The slow part goes in `enrich`.
+      socketManager.onMessage(account.id, (event) => {
         if (!isInboundUpsert(event.type)) return;
         for (const msg of event.messages) {
-          if (msg.key?.fromMe || isStatusBroadcast(msg)) continue;
-          const skip = baileysInboundSkipReason(msg);
-          if (skip) {
-            metrics.inboundSkipped(skip);
-            getLogger().debug('Skipped inbound message', { provider: 'baileys', accountId: account.id, messageId: msg.key?.id, reason: skip });
-            continue;
-          }
           try {
-            const waEvent = mapBaileysToWhatsAppEvent(msg);
-            const envelope = inboundAdapter.toEnvelope(waEvent, account);
-
-            // Resolve LID → phone number for DMs so conversationId matches outbound
-            if (envelope.conversationId.endsWith('@lid')) {
-              const originalLid = envelope.conversationId;
-              const phoneJid = await socketManager.resolveLidToPhone(account.id, originalLid);
-              if (phoneJid) {
-                // jidNormalizedUser strips the device suffix (e.g. ":0")
-                envelope.conversationId = jidNormalizedUser(phoneJid);
-                envelope.sender.id = jidNormalizedUser(phoneJid);
-              }
-              // Preserve original LID and resolved JID (with device) in channelDetails for future use
-              if (envelope.channelDetails) {
-                (envelope.channelDetails as Record<string, unknown>).senderLid = originalLid;
-                if (phoneJid) {
-                  (envelope.channelDetails as Record<string, unknown>).senderPhoneJid = phoneJid;
-                }
-              }
+            if (msg.key?.fromMe || isStatusBroadcast(msg)) continue;
+            const skip = baileysInboundSkipReason(msg);
+            if (skip) {
+              metrics.inboundSkipped(skip);
+              getLogger().debug('Skipped inbound message', { provider: 'baileys', accountId: account.id, messageId: msg.key?.id, reason: skip });
+              continue;
             }
-
-            // Resolve group name for group messages (cached, 5 min TTL)
-            if (envelope.channelDetails && envelope.conversationId.endsWith('@g.us')) {
-              const groupName = await resolveGroupName(account.id, envelope.conversationId);
-              if (groupName) {
-                (envelope.channelDetails as Record<string, unknown>).groupName = groupName;
-              }
-            }
-
+            const envelope = inboundAdapter.toEnvelope(mapBaileysToWhatsAppEvent(msg), account);
             // Filter → persist → emit → media all happen in the pipeline
-            await inbound.handle(account, envelope, msg);
+            inbound.handle(account, envelope, msg, () => enrichEnvelope(account.id, envelope)).catch(logFailure);
           } catch (err) {
-            getLogger().error('Failed to process inbound message', { provider: 'baileys', accountId: account.id, error: err instanceof Error ? err.message : String(err) });
+            logFailure(err);
           }
         }
       });

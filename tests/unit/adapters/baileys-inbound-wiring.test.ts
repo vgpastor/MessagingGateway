@@ -7,12 +7,13 @@ import type { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline
 
 // A fake WhatsApp socket per connect(): the test drives its 'messages.upsert'.
 const sockets: Array<{ ev: EventEmitter; logout: () => Promise<void> }> = [];
+const groupMetadata = vi.fn(async (jid: string): Promise<unknown> => ({ id: jid, subject: 'Grupo', participants: [] }));
 
 vi.mock('@whiskeysockets/baileys', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@whiskeysockets/baileys')>()),
   default: () => {
     const ev = new EventEmitter();
-    const socket = { ev, logout: async () => {} };
+    const socket = { ev, logout: async () => {}, groupMetadata };
     sockets.push(socket);
     return socket;
   },
@@ -75,6 +76,7 @@ describe('Baileys inbound wiring', () => {
       account,
       expect.objectContaining({ direction: 'inbound', conversationId: '34600111222@s.whatsapp.net', accountId: 'wire-1' }),
       msg,
+      expect.any(Function),
     );
   });
 
@@ -120,6 +122,100 @@ describe('Baileys inbound wiring', () => {
     const envelope = (inbound.handle.mock.calls[0] as unknown as [unknown, { content: { media?: Record<string, unknown> } }])[1];
     expect(envelope.content.media).toBeDefined();
     expect(envelope.content.media).not.toHaveProperty('base64');
+  });
+});
+
+describe('Baileys inbound wiring: order and robustness', () => {
+  const accounts: string[] = [];
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+  const GROUP = '120363000000000001@g.us';
+  const DM = '34600111222@s.whatsapp.net';
+  const inChat = (remoteJid: string, id: string) => waMessage({ key: { remoteJid, id, fromMe: false, participant: remoteJid === GROUP ? DM : undefined } });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    groupMetadata.mockReset();
+    groupMetadata.mockImplementation(async (jid) => ({ id: jid, subject: 'Grupo', participants: [] }));
+    for (const id of accounts.splice(0)) {
+      await rm(resolve(process.cwd(), 'data', 'baileys-auth', id), { recursive: true, force: true });
+    }
+  });
+
+  async function setupReal(accountId: string) {
+    accounts.push(accountId);
+    const store = new SqliteMessageStore(':memory:');
+    await store.init();
+    await store.runMigrations();
+    const pipeline = new RealInboundPipeline({ store, eventBus: new EventBus(), media: noopMediaService, metrics: noopMetrics });
+    const account = {
+      id: accountId, alias: accountId, channel: 'whatsapp', provider: 'baileys', providerConfig: {},
+      identity: { channel: 'whatsapp', phoneNumber: '+34600000001' },
+      metadata: { owner: 'org', environment: 'production', tags: [] },
+    } as unknown as ChannelAccount;
+    const provider = createBaileysProvider();
+    await provider.connection!().connect(accountId, {});
+    await provider.wireEvents!(account, new EventBus(), pipeline);
+    const seqOf = async (id: string) => (await store.findByWaMessageId(accountId, id))?.accountSeq;
+    return { store, seqOf, socket: sockets.at(-1)! };
+  }
+
+  it('numbers messages in arrival order even when the first one waits for its group name', async () => {
+    const { store, seqOf, socket } = await setupReal('order-group');
+    let answer = (_metadata: unknown) => {};
+    groupMetadata.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+
+    socket.ev.emit('messages.upsert', { messages: [inChat(GROUP, 'FIRST')], type: 'notify' });
+    socket.ev.emit('messages.upsert', { messages: [inChat(DM, 'SECOND')], type: 'notify' });
+    await settle();
+    expect(await store.maxAccountSeq('order-group')).toBe(0);
+
+    answer({ id: GROUP, subject: 'Grupo', participants: [] });
+    await settle();
+
+    expect(await seqOf('FIRST')).toBe(1);
+    expect(await seqOf('SECOND')).toBe(2);
+    const stored = await store.findByWaMessageId('order-group', 'FIRST');
+    expect((stored?.channelDetails as Record<string, unknown>)['groupName']).toBe('Grupo');
+    await store.close();
+  });
+
+  it('keeps the order of an upsert against the next one', async () => {
+    const { seqOf, socket, store } = await setupReal('order-batch');
+
+    socket.ev.emit('messages.upsert', { messages: [inChat(DM, 'A'), inChat(DM, 'B')], type: 'append' });
+    socket.ev.emit('messages.upsert', { messages: [inChat(DM, 'C')], type: 'notify' });
+    await settle();
+
+    expect([await seqOf('A'), await seqOf('B'), await seqOf('C')]).toEqual([1, 2, 3]);
+    await store.close();
+  });
+
+  it('a group lookup that hangs delays the queue for a bounded time, once per group', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { seqOf, socket, store } = await setupReal('order-hung');
+    groupMetadata.mockImplementation(() => new Promise(() => {}));
+
+    socket.ev.emit('messages.upsert', { messages: [inChat(GROUP, 'H1'), inChat(GROUP, 'H2'), inChat(DM, 'H3')], type: 'notify' });
+    await settle();
+    expect(await seqOf('H1')).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle();
+
+    expect([await seqOf('H1'), await seqOf('H2'), await seqOf('H3')]).toEqual([1, 2, 3]);
+    expect(groupMetadata).toHaveBeenCalledTimes(1);
+    await store.close();
+  });
+
+  it('a message that cannot even be read does not stop the rest nor reject', async () => {
+    const { seqOf, socket, store } = await setupReal('poison');
+    const poison = { get key(): never { throw new Error('malformed'); } };
+
+    socket.ev.emit('messages.upsert', { messages: [poison, inChat(DM, 'AFTER')], type: 'notify' });
+    await settle();
+
+    expect(await seqOf('AFTER')).toBe(1);
+    await store.close();
   });
 });
 

@@ -33,6 +33,8 @@ interface InboundMessage {
   account: ChannelAccount;
   envelope: UnifiedEnvelope;
   raw: unknown;
+  /** Still to run, so the envelope is not final yet. */
+  enrich?: () => Promise<void>;
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -46,7 +48,9 @@ const errorMessage = (err: unknown): string => (err instanceof Error ? err.messa
  * emitted nor reprocessed.
  *
  * Messages of the same account are stored one at a time, in the order they
- * reach {@link handle}: the log assigns `accountSeq` in insert order. Their event
+ * reach {@link handle}: the log assigns `accountSeq` in insert order. So a message
+ * takes its turn synchronously and anything slow it needs (`enrich`) runs inside
+ * the queue, on the caller's promise to keep that work short. Their event
  * handlers start in that same order, but the queue never waits for them: storing
  * must not depend on how fast a subscriber is. Accounts do not block each other.
  *
@@ -69,8 +73,8 @@ export class InboundPipeline {
 
   constructor(private readonly deps: InboundPipelineDeps) {}
 
-  handle(account: ChannelAccount, envelope: UnifiedEnvelope, raw: unknown): Promise<void> {
-    const message: InboundMessage = { account, envelope, raw };
+  handle(account: ChannelAccount, envelope: UnifiedEnvelope, raw: unknown, enrich?: () => Promise<void>): Promise<void> {
+    const message: InboundMessage = { account, envelope, raw, enrich };
     this.unsaved.add(message);
     const previous = this.queues.get(account.id) ?? Promise.resolve();
     const run = previous.then(() => this.process(message));
@@ -119,9 +123,10 @@ export class InboundPipeline {
 
     const left = [...this.unsaved];
     this.unsaved.clear();
-    for (const { account, envelope, raw } of left) {
+    for (const { account, envelope, raw, enrich } of left) {
       try {
-        if (!this.accepts(account, envelope)) continue;
+        // An envelope still to enrich may carry a conversation the filter cannot judge (a LID): keep it.
+        if (!enrich && !this.accepts(account, envelope)) continue;
         this.markMediaPending(envelope);
         await this.writeOff(envelope, this.storableRaw(raw), new Error('shutting down'));
       } catch (err) {
@@ -134,6 +139,8 @@ export class InboundPipeline {
     if (!this.unsaved.has(message)) return; // already written off by drain()
     const { account, envelope, raw } = message;
     try {
+      await this.enrich(message);
+      if (!this.unsaved.has(message)) return; // drain() gave up on it meanwhile
       if (!this.accepts(account, envelope)) return;
 
       await this.resolveSenderPhone(envelope);
@@ -148,6 +155,19 @@ export class InboundPipeline {
     } finally {
       this.unsaved.delete(message);
     }
+  }
+
+  /** A failure leaves the envelope as it was: losing a detail must not lose the message. */
+  private async enrich(message: InboundMessage): Promise<void> {
+    if (!message.enrich) return;
+    try {
+      await message.enrich();
+    } catch (err) {
+      this.logger.warn('Failed to enrich inbound message', {
+        accountId: message.account.id, messageId: message.envelope.id, error: errorMessage(err),
+      });
+    }
+    message.enrich = undefined;
   }
 
   private accepts(account: ChannelAccount, envelope: UnifiedEnvelope): boolean {
