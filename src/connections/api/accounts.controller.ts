@@ -118,6 +118,7 @@ function sanitizeAccount(account: ChannelAccount, providerRegistry: ProviderLook
     provider: account.provider,
     status: account.status,
     identity: account.identity,
+    conversations: account.conversations,
     connection: connectionInfo.managed
       ? { managed: true, status: connectionInfo.status, qr: connectionInfo.qr }
       : undefined,

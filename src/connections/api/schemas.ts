@@ -172,6 +172,14 @@ export const messageResultSchema = {
   required: ['messageId', 'status', 'timestamp'] as const,
 };
 
+const conversationsSchema = {
+  description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
+  anyOf: [
+    { type: 'string' as const, enum: ['*'] },
+    { type: 'array' as const, items: { type: 'string' as const } },
+  ],
+};
+
 export const accountResponseSchema = {
   type: 'object' as const,
   properties: {
@@ -181,6 +189,7 @@ export const accountResponseSchema = {
     provider: { type: 'string' as const },
     status: { type: 'string' as const, enum: ['active', 'suspended', 'auth_expired', 'error', 'unchecked'] },
     identity: { type: 'object' as const, additionalProperties: true },
+    conversations: conversationsSchema,
     connection: {
       type: 'object' as const,
       description: 'Live connection info for providers that manage their own connection (e.g. Baileys). Absent for API-key providers.',
@@ -212,14 +221,6 @@ export const errorResponseSchema = {
     message: { type: 'string' as const },
   },
   required: ['error', 'message'] as const,
-};
-
-const conversationsSchema = {
-  description: 'Inbound conversations (chat/group JIDs) this account keeps. `*` or absent keeps them all.',
-  anyOf: [
-    { type: 'string' as const, enum: ['*'] },
-    { type: 'array' as const, items: { type: 'string' as const } },
-  ],
 };
 
 export const createAccountBodySchema = {
