@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import { getLogger } from '../../core/logger/logger.port.js';
@@ -10,6 +10,8 @@ import { matchesRoutingCriteria } from '../../core/routing/routing-rules.js';
 export class InMemoryAccountRepository implements ChannelAccountRepository {
   private accounts: ChannelAccount[];
   private readonly persistPath?: string;
+  /** The write in progress: the next one starts when it ends, so two can never interleave in the file. */
+  private lastWrite: Promise<void> = Promise.resolve();
 
   constructor(accounts: ChannelAccount[], persistPath?: string) {
     this.accounts = accounts;
@@ -54,7 +56,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
       throw new Error(`Account '${account.id}' already exists`);
     }
     this.accounts.push(account);
-    this.persist();
+    await this.persist();
     return account;
   }
 
@@ -75,7 +77,7 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
     };
 
     this.accounts[index] = updated;
-    this.persist();
+    await this.persist();
     return updated;
   }
 
@@ -85,12 +87,13 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
       return false;
     }
     this.accounts.splice(index, 1);
-    this.persist();
+    await this.persist();
     return true;
   }
 
-  private persist(): void {
-    if (!this.persistPath) return;
+  /** Never rejects: the change stands in memory, and a failed write is logged and left to the next one. */
+  private persist(): Promise<void> {
+    if (!this.persistPath) return Promise.resolve();
 
     const data = {
       accounts: this.accounts.map((a) => ({
@@ -117,11 +120,35 @@ export class InMemoryAccountRepository implements ChannelAccountRepository {
     };
 
     const path = this.persistPath;
-    mkdir(dirname(path), { recursive: true })
-      .then(() => writeFile(path, stringifyYaml(data), 'utf-8'))
+    const content = stringifyYaml(data);
+    this.lastWrite = this.lastWrite
+      .then(() => this.writeAtomically(path, content))
       .catch((err) => {
         getLogger().warn('Failed to persist accounts', { path, error: (err as Error).message });
       });
+    return this.lastWrite;
+  }
+
+  /**
+   * A file cut halfway would stop the next start, so the old one stays until the new one is complete and on
+   * disk. It holds credentials: only the owner can read it.
+   */
+  private async writeAtomically(path: string, content: string): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    try {
+      const file = await open(tmp, 'w', 0o600);
+      try {
+        await file.writeFile(content, 'utf-8');
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(tmp, path);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 
   private serializeIdentity(account: ChannelAccount): Record<string, unknown> {
