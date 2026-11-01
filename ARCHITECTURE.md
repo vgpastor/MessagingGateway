@@ -509,6 +509,7 @@ src/
 ├── persistence/                           # Storage adapters (infra layer)
 │   ├── sqlite-message-store.ts            # SQLite adapter (better-sqlite3)
 │   ├── postgres-message-store.ts          # PostgreSQL adapter (pg)
+│   ├── message-row.ts                     # Envelope ↔ row mapping and the SQL both adapters share
 │   ├── message-store.factory.ts           # Driver selection + lifecycle orchestration
 │   ├── persistence-subscriber.ts          # EventBus listener → store.save()
 │   └── migrations/

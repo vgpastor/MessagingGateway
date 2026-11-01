@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Retención**: `MEDIA_RETENTION_DAYS` (30 por defecto) y `MESSAGE_RETENTION_DAYS` (opcional: con 0, el valor por defecto, nunca se borra un mensaje).
 - **`READ_API_KEY`**: clave de solo lectura para los mensajes, los medios y el flujo de eventos por WebSocket.
 - **`conversations`** en cada cuenta (`accounts.yaml` y `POST /api/v1/accounts`): limita qué conversaciones entrantes se guardan.
-- **Métricas Prometheus** en `/metrics`, solo con la clave de administración.
+- **Métricas Prometheus** en `/metrics`, solo con la clave de administración. `umg_inbound_filtered_total{reason}` cuenta lo que deja fuera el filtro de conversaciones.
 - **Alertas de cuenta caída** en `ALERT_WEBHOOK_URL`: `auth_expired` al momento y `disconnected` tras 15 minutos, reintentadas hasta un 2xx y repetidas cada 6 horas. Los webhooks de las cuentas pueden suscribirse a `connection.update`.
 - **WebSocket**: autenticación por cabecera o subprotocolo (`umg.<clave>`) y ping cada 30 s, que corta a quien no responde.
 - **SDK**: `messages.after()`, `messages.media()`, `timeoutMs` en el cliente REST, reconexión con espera creciente y vigilancia del latido. El paquete se puede cargar con `require()` desde CommonJS.
@@ -34,17 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `?token=` en el WebSocket queda obsoleto, porque las URL acaban en los logs. Sigue funcionando.
 - **`/health` informa de verdad**, pero solo del estado general: `degraded` si una cuenta no suspendida no está `active` o ha perdido la conexión. Es público, así que no nombra cuentas; el detalle está en `GET /api/v1/accounts`.
 - **`GET /api/v1/accounts/:id` solo lee**: ya no abre conexiones.
-- **El primer arranque aplica las migraciones `postgres/002_message_log` y `sqlite/003_message_log`**, que reescriben la tabla de mensajes y pueden tardar. Se aplican sin límite de tiempo.
+- **El primer arranque aplica las migraciones `postgres/002_message_log` y `sqlite/003_message_log`**, que reescriben la tabla de mensajes y pueden tardar. Se aplican sin límite de tiempo: `docker-compose.prod.example.yml` da 30 minutos antes de marcar el contenedor como `unhealthy`.
 
 ### Fixed
 
 - **Suspender una cuenta cierra su socket**, sin `logout` y conservando la sesión en disco, y reactivarla reconecta sin QR nuevo. Antes una cuenta ya conectada seguía recibiendo mensajes. Ninguna señal de conexión ni comprobación de salud saca a una cuenta de `suspended`.
 - **Una conexión caída ya no se confunde con una sesión perdida**, y la reconexión usa espera creciente con jitter, sin tope de intentos; solo se detiene con una sesión perdida, una desconexión deliberada o un reset.
 - **Una cuenta creada en caliente recibe sus eventos sin reiniciar**, reactivar una cuenta suspendida la conecta, y borrar una cuenta cierra su socket y su sesión.
-- **Ningún mensaje se pierde si el almacén lo rechaza**: se entrega en directo, sin `accountSeq`, y se guarda en el siguiente arranque, de modo que puede llegar dos veces: hay que deduplicar por `id`. Los webhooks ya no frenan la cola de entrada y caducan a los 10 s.
+- **Ningún mensaje se pierde si el almacén lo rechaza**: se entrega en directo, sin `accountSeq`, y se guarda en cuanto vuelve la base de datos o, si no, en el siguiente arranque, de modo que puede llegar dos veces: hay que deduplicar por `id`. Con la base de datos caída los mensajes van directos a `data/failed-inbound.jsonl`, sin esperar, y cada 30 s se prueba un guardado real. Los webhooks ya no frenan la cola de entrada y caducan a los 10 s.
 - **Postgres**: cada consulta tiene un límite de 30 s, para que un insert colgado no retenga la cola de la cuenta; una transacción abierta e inactiva termina a los 60 s, para que una partición de red no retenga el contador de la cuenta; y un insert fallido descarta su conexión. La retención dispone de 15 minutos por consulta.
 - **Filas de versiones anteriores**: ya no bloquean la lectura del registro, y el historial en base64 queda fuera de las lecturas. Toda lectura limita el tamaño de la página.
-- **Apagado**: termina limpio en 10 s y sin `logout`, de modo que el siguiente arranque retoma las sesiones.
+- **Apagado**: termina limpio en 10 s y sin `logout`, de modo que el siguiente arranque retoma las sesiones. Un error no controlado también pasa por él, y sale con un código distinto de 0.
 - **Un fallo al guardar credenciales o un handler que lanza** ya no terminan el proceso.
 - **OpenAPI y SDK**: `POST /api/v1/accounts` declara `conversations`, el SDK deja de prometer `accounts` en `/health` y `sdk-build` corre por fin las pruebas del SDK en CI.
 
