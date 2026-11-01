@@ -8,6 +8,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventBus } from '../../../src/core/event-bus.js';
+import { Events } from '../../../src/core/events.js';
+import type { MessageInboundPayload } from '../../../src/core/events.js';
 import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import { noopMediaService } from '../../../src/core/inbound/media-service.js';
 import { noopMetrics } from '../../../src/core/metrics/metrics.port.js';
@@ -66,6 +68,65 @@ describe('FailedInboundFile', () => {
     metrics: noopMetrics,
     accounts,
     persistRetryDelaysMs: [],
+  });
+
+  it('an outage end to end: what arrives goes to the file, delivered live; when the store is back it all reaches the log, in order', async () => {
+    let down = true;
+    const flaky = {
+      insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+        if (down) throw new Error('db down');
+        return store.insertInbound(e, r);
+      },
+    };
+    const emitted: Array<number | undefined> = [];
+    const bus = new EventBus();
+    bus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (event) => { emitted.push(event.data.envelope.accountSeq); });
+    const media = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
+    const pipeline = new InboundPipeline({
+      store: flaky as MessageLogPort, failedLog: file, eventBus: bus, media, metrics: noopMetrics, accounts: knownAccount,
+      persistRetryDelaysMs: [], storeProbeIntervalMs: 5,
+    });
+
+    for (const n of [1, 2, 3]) await pipeline.handle(account, envelope(`m${n}`, `W${n}`), { n });
+    expect(emitted).toEqual([undefined, undefined, undefined]);
+    expect(await store.count({ accountId: 'wa-1' })).toBe(0);
+
+    down = false;
+    await vi.waitFor(() => expect(existsSync(path)).toBe(false));
+    await pipeline.handle(account, envelope('m4', 'W4'), { n: 4 });
+
+    const page = await store.queryAfter({ accountId: 'wa-1', afterAccountSeq: 0, limit: 10 });
+    expect(page.messages.map((m) => [m.id, m.accountSeq])).toEqual([['m1', 1], ['m2', 2], ['m3', 3], ['m4', 4]]);
+    expect(emitted).toEqual([undefined, undefined, undefined, 4]);
+    expect(media.resumePendingMedia).toHaveBeenCalled();
+    await pipeline.drain(10);
+  });
+
+  it('a COMMIT whose answer was lost: the retry finds the row and the message goes out with its real number', async () => {
+    let lost = true;
+    const answerLost = {
+      insertInbound: async (e: UnifiedEnvelope, r?: unknown) => {
+        const result = await store.insertInbound(e, r);
+        if (lost) {
+          lost = false;
+          throw new Error('Connection terminated unexpectedly');
+        }
+        return result;
+      },
+    };
+    const emitted: Array<number | undefined> = [];
+    const bus = new EventBus();
+    bus.on<MessageInboundPayload>(Events.MESSAGE_INBOUND, (event) => { emitted.push(event.data.envelope.accountSeq); });
+    const pipeline = new InboundPipeline({
+      store: answerLost as MessageLogPort, failedLog: file, eventBus: bus, media: noopMediaService, metrics: noopMetrics, accounts: knownAccount,
+      persistRetryDelaysMs: [0],
+    });
+
+    await pipeline.handle(account, envelope('m1', 'W1'), { n: 1 });
+
+    expect(emitted).toEqual([1]);
+    expect(existsSync(path)).toBe(false);
+    expect(await store.maxAccountSeq('wa-1')).toBe(1);
   });
 
   it('what the filter or a missing account rejects at the next start is neither stored nor kept in the file', async () => {

@@ -54,7 +54,7 @@ export const webhookDroppedTotal = new Counter({
 
 export const persistFailuresTotal = new Counter({
   name: 'umg_persist_failures_total',
-  help: 'Inbound messages the message log would not take after the retries: they went to the failed log (data/failed-inbound.jsonl)',
+  help: 'Inbound messages the message log did not take (refused, retries run out, or down): they went to the failed log (data/failed-inbound.jsonl)',
   registers: [registry],
 });
 

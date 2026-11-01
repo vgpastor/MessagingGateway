@@ -1,11 +1,12 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import { EventBus } from '../../../src/core/event-bus.js';
 import { Events } from '../../../src/core/events.js';
 import type { MessageInboundPayload } from '../../../src/core/events.js';
 import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import type { FailedInboundLog } from '../../../src/core/inbound/failed-inbound-log.js';
-import { PERSIST_RETRY_DELAYS_MS } from '../../../src/core/inbound/inbound-pipeline.js';
+import { PERSIST_RETRY_DELAYS_MS, STORE_PROBE_INTERVAL_MS } from '../../../src/core/inbound/store-guard.js';
+import { PermanentStoreError } from '../../../src/core/errors.js';
 import type { MediaService } from '../../../src/core/inbound/media-service.js';
 import type { MessageLogPort, InsertResult } from '../../../src/core/persistence/message-store.port.js';
 import { noopMetrics, type MetricsPort } from '../../../src/core/metrics/metrics.port.js';
@@ -276,12 +277,253 @@ describe('InboundPipeline', () => {
       expect(emitted).toHaveLength(1);
     });
 
+    it.each([
+      ['a row the database refuses', new PermanentStoreError('invalid input syntax')],
+      ['a TypeError', new TypeError('bad value')],
+      ['a RangeError', new RangeError('Invalid time value')],
+    ])('does not retry %s: it goes to the failed log at once, delivered live, and the store stays in use', async (_name, failure) => {
+      const { pipeline, insertInbound, emitted, metrics, failedLog } = setup({ persistRetryDelaysMs: [60_000, 60_000] });
+      insertInbound.mockRejectedValueOnce(failure);
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'bad' }), raw);
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'next' }), raw);
+
+      expect(insertInbound).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['bad']);
+      expect(metrics.persistFailures).toHaveBeenCalledTimes(1);
+      expect(emitted.map((e) => [e.id, e.accountSeq])).toEqual([['bad', undefined], ['next', 3]]);
+    });
+
+    it('counts as stored a retry that finds this same message: the COMMIT went through and only the answer was lost', async () => {
+      const { pipeline, insertInbound, emitted, failedLog, media } = setup({ persistRetryDelaysMs: [0] });
+      const envelope = makeImageEnvelope();
+      insertInbound
+        .mockRejectedValueOnce(new Error('connection lost'))
+        .mockResolvedValueOnce({ inserted: false, storedId: envelope.id, seq: 7, accountSeq: 4 });
+
+      await pipeline.handle(makeAccount(), envelope, raw);
+
+      expect(emitted.map((e) => [e.seq, e.accountSeq])).toEqual([[7, 4]]);
+      expect(failedLog.append).not.toHaveBeenCalled();
+      expect(media.process).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not emit a retry that finds another envelope with the same WhatsApp id: that is a real duplicate', async () => {
+      const { pipeline, insertInbound, emitted, failedLog } = setup({ persistRetryDelaysMs: [0] });
+      insertInbound
+        .mockRejectedValueOnce(new Error('connection lost'))
+        .mockResolvedValueOnce({ inserted: false, storedId: 'the-first-copy', seq: 7, accountSeq: 4 });
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'second-copy' }), raw);
+
+      expect(emitted).toEqual([]);
+      expect(failedLog.append).not.toHaveBeenCalled();
+    });
+
+    it('does not emit a duplicate found at the first attempt, even of this same id: nothing suggests it is new', async () => {
+      const { pipeline, insertInbound, emitted } = setup();
+      const envelope = makeEnvelope();
+      insertInbound.mockResolvedValueOnce({ inserted: false, storedId: envelope.id, seq: 7, accountSeq: 4 });
+
+      await pipeline.handle(makeAccount(), envelope, raw);
+
+      expect(emitted).toEqual([]);
+    });
+
+    it('does not download the media of a message that was not stored: there is no row to record it on', async () => {
+      const { pipeline, media, failedLog } = setup({ insert: new Error('db down') });
+
+      await pipeline.handle(makeAccount(), makeImageEnvelope(), raw);
+
+      expect(failedLog.append).toHaveBeenCalledTimes(1);
+      expect(media.process).not.toHaveBeenCalled();
+    });
+
     it('still stores the message when its raw form cannot be serialized', async () => {
       const { pipeline, insertInbound } = setup({ toStorableRaw: () => { throw new Error('bad raw'); } });
 
       await pipeline.handle(makeAccount(), makeEnvelope(), raw);
 
       expect(insertInbound).toHaveBeenCalledWith(expect.anything(), undefined);
+    });
+  });
+
+  describe('when the store is down', () => {
+    const flush = () => vi.advanceTimersByTimeAsync(0);
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    /** A store down from the start, whose failure has already used up the retries of the message `opener`. */
+    async function withOpenCircuit() {
+      const context = setup({ persistRetryDelaysMs: [] });
+      context.insertInbound.mockRejectedValue(new Error('db down'));
+      await context.pipeline.handle(makeAccount(), makeEnvelope({ id: 'opener' }), { raw: 'opener' });
+      context.insertInbound.mockClear();
+      vi.mocked(context.failedLog.append).mockClear();
+      context.emitted.length = 0;
+      return context;
+    }
+
+    it('sends what comes next straight to the failed log, without touching the store or waiting, and still delivers it', async () => {
+      const { pipeline, insertInbound, failedLog, emitted, metrics } = await withOpenCircuit();
+      vi.mocked(metrics.persistFailures).mockClear();
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'during-1' }), raw);
+      await pipeline.handle(makeAccount({ id: 'wa-2' }), makeEnvelope({ id: 'during-2', accountId: 'wa-2' }), raw);
+
+      expect(insertInbound).not.toHaveBeenCalled();
+      expect(vi.mocked(failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['during-1', 'during-2']);
+      expect(metrics.persistFailures).toHaveBeenCalledTimes(2);
+      expect(emitted.map((e) => [e.id, e.accountSeq])).toEqual([['during-1', undefined], ['during-2', undefined]]);
+    });
+
+    it('does not open before the retries run out', async () => {
+      const { pipeline, insertInbound, failedLog } = setup({ persistRetryDelaysMs: [1_000] });
+      insertInbound.mockRejectedValueOnce(new Error('blip'));
+
+      const first = pipeline.handle(makeAccount(), makeEnvelope({ id: 'retried' }), raw);
+      await flush();
+      await pipeline.handle(makeAccount({ id: 'wa-2' }), makeEnvelope({ id: 'other', accountId: 'wa-2' }), raw);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+
+      expect(insertInbound).toHaveBeenCalledTimes(3);
+      expect(failedLog.append).not.toHaveBeenCalled();
+    });
+
+    it('frees a message of another account waiting for its next retry as soon as the circuit opens', async () => {
+      const { pipeline, insertInbound, failedLog } = setup({ persistRetryDelaysMs: [1_000, 60_000] });
+      insertInbound.mockRejectedValue(new Error('db down'));
+
+      const opener = pipeline.handle(makeAccount(), makeEnvelope({ id: 'opener' }), raw);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const waiting = pipeline.handle(makeAccount({ id: 'wa-2' }), makeEnvelope({ id: 'waiting', accountId: 'wa-2' }), raw);
+      await vi.advanceTimersByTimeAsync(31_000); // the opener runs out at 61 s; the other would wait until 91 s
+
+      await Promise.all([opener, waiting]);
+      expect(vi.mocked(failedLog.append).mock.calls.map(([entry]) => entry.envelope.id)).toEqual(['opener', 'waiting']);
+      expect(insertInbound).toHaveBeenCalledTimes(5);
+    });
+
+    it('tries a real save every 30 s, of the message that opened it, and stays open while it fails', async () => {
+      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS - 1);
+      expect(insertInbound).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+      expect(insertInbound).toHaveBeenCalledWith(expect.objectContaining({ id: 'opener' }), { raw: 'opener' });
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+      expect(insertInbound).toHaveBeenCalledTimes(2);
+      insertInbound.mockClear();
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'still-out' }), raw);
+      expect(insertInbound).not.toHaveBeenCalled();
+      expect(failedLog.append).toHaveBeenCalledTimes(1);
+      expect(failedLog.replay).not.toHaveBeenCalled();
+    });
+
+    it('closes when the save works: the failed log is recovered at once, with its media, and messages reach the store again', async () => {
+      const { pipeline, insertInbound, failedLog, media, emitted } = await withOpenCircuit();
+      vi.mocked(failedLog.replay).mockImplementation(async (save) => {
+        await save({ envelope: makeEnvelope({ id: 'opener' }), raw: {} });
+        return { saved: 1, kept: 0 };
+      });
+      insertInbound.mockResolvedValue({ inserted: true, seq: 20, accountSeq: 9 });
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(failedLog.replay).toHaveBeenCalledTimes(1);
+      expect(media.resumePendingMedia).toHaveBeenCalledTimes(1);
+      expect(emitted).toEqual([]);
+      insertInbound.mockClear();
+
+      await pipeline.handle(makeAccount(), makeEnvelope({ id: 'after' }), raw);
+      expect(insertInbound).toHaveBeenCalledTimes(1);
+      expect(emitted.map((e) => [e.id, e.accountSeq])).toEqual([['after', 9]]);
+    });
+
+    it('closes too when the save is refused for the message itself: the store answered', async () => {
+      const { insertInbound, failedLog } = await withOpenCircuit();
+      insertInbound.mockRejectedValue(new PermanentStoreError('value too long'));
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(failedLog.replay).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens again if the store falls during the recovery, and leaves the rest of the log for the next one', async () => {
+      const { insertInbound, failedLog } = await withOpenCircuit();
+      const results: string[] = [];
+      vi.mocked(failedLog.replay).mockImplementation(async (save) => {
+        for (const id of ['first', 'second', 'third']) {
+          await save({ envelope: makeEnvelope({ id }), raw: {} }).then(() => results.push(`${id}:ok`), () => results.push(`${id}:kept`));
+        }
+        return { saved: 1, kept: 2 };
+      });
+      insertInbound
+        .mockResolvedValueOnce({ inserted: false }) // the probe
+        .mockResolvedValueOnce({ inserted: true, seq: 1, accountSeq: 1 })
+        .mockRejectedValueOnce(new Error('down again'));
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(results).toEqual(['first:ok', 'second:kept', 'third:kept']);
+      expect(insertInbound).toHaveBeenCalledTimes(3);
+
+      vi.mocked(failedLog.replay).mockClear();
+      insertInbound.mockClear();
+      insertInbound.mockResolvedValue({ inserted: false });
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(insertInbound.mock.calls[0]?.[0 as never]).toMatchObject({ id: 'second' });
+      expect(failedLog.replay).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not resume media when the recovery stored nothing', async () => {
+      const { insertInbound, failedLog, media } = await withOpenCircuit();
+      insertInbound.mockResolvedValue({ inserted: false });
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+
+      expect(failedLog.replay).toHaveBeenCalledTimes(1);
+      expect(media.resumePendingMedia).not.toHaveBeenCalled();
+    });
+
+    it('survives a recovery that fails', async () => {
+      const { insertInbound, failedLog } = await withOpenCircuit();
+      insertInbound.mockResolvedValue({ inserted: false });
+      vi.mocked(failedLog.replay).mockRejectedValue(new Error('disk gone'));
+
+      await expect(vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS)).resolves.toBeDefined();
+
+      expect(failedLog.replay).toHaveBeenCalledTimes(1);
+    });
+
+    it('a shutdown stops the probing and starts no recovery', async () => {
+      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
+
+      await pipeline.drain(10);
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS * 2);
+
+      expect(insertInbound).not.toHaveBeenCalled();
+      expect(failedLog.replay).not.toHaveBeenCalled();
+    });
+
+    it('a shutdown during the probe starts no recovery either', async () => {
+      const { pipeline, insertInbound, failedLog } = await withOpenCircuit();
+      let answer = (_result: InsertResult) => {};
+      insertInbound.mockImplementation(() => new Promise<InsertResult>((resolve) => { answer = resolve; }));
+
+      await vi.advanceTimersByTimeAsync(STORE_PROBE_INTERVAL_MS);
+      const draining = pipeline.drain(10);
+      await vi.advanceTimersByTimeAsync(10);
+      await draining;
+      answer({ inserted: false });
+      await flush();
+
+      expect(failedLog.replay).not.toHaveBeenCalled();
     });
   });
 
@@ -535,12 +777,12 @@ describe('InboundPipeline', () => {
     finishHandler();
   });
 
-  it('still schedules media when storage is disabled or insert fails', async () => {
-    for (const insert of [null, new Error('boom')]) {
-      const { pipeline, media } = setup({ insert });
-      await pipeline.handle(makeAccount(), makeImageEnvelope(), raw);
-      expect(media.process).toHaveBeenCalledTimes(1);
-    }
+  it('still schedules media when storage is disabled', async () => {
+    const { pipeline, media } = setup({ insert: null });
+
+    await pipeline.handle(makeAccount(), makeImageEnvelope(), raw);
+
+    expect(media.process).toHaveBeenCalledTimes(1);
   });
 
   it('does not let a failing media job break the pipeline', async () => {

@@ -7,17 +7,15 @@ import { getLogger } from '../logger/logger.port.js';
 import type { MediaInfo } from '../messaging/content.js';
 import type { UnifiedEnvelope } from '../messaging/unified-envelope.js';
 import type { MetricsPort } from '../metrics/metrics.port.js';
-import type { InsertResult, MessageLogPort } from '../persistence/message-store.port.js';
+import type { MessageLogPort } from '../persistence/message-store.port.js';
 import type { FailedInboundLog } from './failed-inbound-log.js';
 import type { MediaService } from './media-service.js';
-
-/** Waits between attempts to store a message: 5 retries over about 30 s, inside the account's queue. */
-export const PERSIST_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
+import { StoreGuard } from './store-guard.js';
 
 export interface InboundPipelineDeps {
   /** Message log. Undefined when storage is disabled: messages are then emitted without a sequence. */
   store?: MessageLogPort;
-  /** Where a message goes when the log will not take it, to be stored at the next start. */
+  /** Where a message goes when the log will not take it, until the log is back or the next start. */
   failedLog?: FailedInboundLog;
   eventBus: EventBus;
   media: MediaService;
@@ -30,7 +28,12 @@ export interface InboundPipelineDeps {
   toStorableRaw?: (raw: unknown) => unknown;
   /** {@link PERSIST_RETRY_DELAYS_MS} by default. */
   persistRetryDelaysMs?: readonly number[];
+  /** {@link STORE_PROBE_INTERVAL_MS} by default. */
+  storeProbeIntervalMs?: number;
 }
+
+/** What became of a message on its way to the log. Storage disabled counts as stored: there is nothing to wait for. */
+type PersistOutcome = 'stored' | 'duplicate' | 'written_off';
 
 interface InboundMessage {
   account: ChannelAccount;
@@ -61,9 +64,9 @@ const phoneDigits = (resolved: string | undefined): string | undefined =>
  * handlers start in that same order, but the queue never waits for them: storing
  * must not depend on how fast a subscriber is. Accounts do not block each other.
  *
- * A store failure is retried inside the queue. When the retries run out the message
- * goes to the failed log, which is stored at the next start ({@link replayFailed}),
- * and is still delivered live, without a sequence.
+ * A message the log will not take ({@link StoreGuard} decides how hard to try) goes to the
+ * failed log and is still delivered live, without a sequence. The failed log is stored
+ * ({@link replayFailed}) as soon as the log is back after an outage, and at every start.
  */
 export class InboundPipeline {
   private get logger() {
@@ -74,11 +77,15 @@ export class InboundPipeline {
   private readonly queues = new Map<string, Promise<void>>();
   /** Accepted by {@link handle} and neither stored nor written off yet: what a shutdown must not lose. */
   private readonly unsaved = new Set<InboundMessage>();
-  /** Wakes a message waiting for its next attempt. */
-  private readonly retryWaits = new Set<() => void>();
-  private draining = false;
+  private readonly guard: StoreGuard | undefined;
 
-  constructor(private readonly deps: InboundPipelineDeps) {}
+  constructor(private readonly deps: InboundPipelineDeps) {
+    this.guard = deps.store && new StoreGuard(deps.store, {
+      retryDelaysMs: deps.persistRetryDelaysMs,
+      probeIntervalMs: deps.storeProbeIntervalMs,
+      onRecovered: () => void this.recoverFailedLog(),
+    });
+  }
 
   handle(account: ChannelAccount, envelope: UnifiedEnvelope, raw: unknown, enrich?: () => Promise<void>): Promise<void> {
     const message: InboundMessage = { account, envelope, raw, enrich };
@@ -104,11 +111,12 @@ export class InboundPipeline {
    * media they left `pending` is picked up by {@link MediaService.resumePendingMedia}.
    *
    * The conversation filter applies again, failing closed like the live path: what it rejects,
-   * or cannot judge, is not stored and leaves the log.
+   * or cannot judge, is not stored and leaves the log. Resolves to how many entries reached the log.
    */
-  async replayFailed(): Promise<void> {
-    const { store, failedLog } = this.deps;
-    if (!store || !failedLog) return;
+  async replayFailed(): Promise<number> {
+    const { guard } = this;
+    const { failedLog } = this.deps;
+    if (!guard || !failedLog) return 0;
     let discarded = 0;
     const { saved, kept } = await failedLog.replay(async ({ envelope, raw }) => {
       const reason = await this.replayRejection(envelope);
@@ -117,10 +125,21 @@ export class InboundPipeline {
         this.logger.warn('Discarded an inbound message from the failed log', { accountId: envelope.accountId, messageId: envelope.id, reason });
         return;
       }
-      await store.insertInbound(envelope, raw);
+      await guard.insertOnce(envelope, raw);
     });
-    if (saved > discarded) this.logger.info('Stored inbound messages from the failed log', { saved: saved - discarded });
+    const stored = saved - discarded;
+    if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
     if (kept > 0) this.logger.error('Inbound messages remain in the failed log', { kept });
+    return stored;
+  }
+
+  /** {@link replayFailed} outside the start-up: nobody else will pick up the media of what it stores. */
+  private async recoverFailedLog(): Promise<void> {
+    try {
+      if ((await this.replayFailed()) > 0) await this.deps.media.resumePendingMedia();
+    } catch (err) {
+      this.logger.error('Failed to recover the failed inbound log', { error: errorMessage(err) });
+    }
   }
 
   /** Why this entry must not be stored, if so. Resolving a LID on the way leaves the envelope as live enrichment would. */
@@ -155,8 +174,7 @@ export class InboundPipeline {
    * and writes off to the failed log whatever is still not stored by then.
    */
   async drain(timeoutMs: number): Promise<void> {
-    this.draining = true;
-    for (const wake of this.retryWaits) wake();
+    this.guard?.stop();
 
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([
@@ -194,12 +212,14 @@ export class InboundPipeline {
       await this.resolveSenderPhone(envelope);
       const media = this.markMediaPending(envelope);
 
-      if (!(await this.persist(message))) return;
+      const outcome = await this.persist(message);
+      if (outcome === 'duplicate') return;
 
       this.deps.metrics.lastInbound(account.id, Math.floor(Date.now() / 1000));
       this.emit(account, envelope);
 
-      if (media) this.scheduleMedia(envelope, raw);
+      // Not stored means no row to record it on: it is downloaded once the failed log reaches the message log.
+      if (media && outcome === 'stored') this.scheduleMedia(envelope, raw);
     } finally {
       this.unsaved.delete(message);
     }
@@ -252,53 +272,21 @@ export class InboundPipeline {
     return media;
   }
 
-  /**
-   * Writes the message to the log and stamps `seq`/`accountSeq` on the envelope.
-   * Returns false only for a duplicate. When the store keeps failing the message
-   * is written off, and goes out live without a sequence.
-   */
-  private async persist(message: InboundMessage): Promise<boolean> {
-    const { store } = this.deps;
-    if (!store) return true;
+  /** Writes the message to the log and stamps `seq`/`accountSeq` on the envelope, or writes it off without them. */
+  private async persist(message: InboundMessage): Promise<PersistOutcome> {
+    if (!this.guard) return 'stored';
     const { envelope } = message;
     const raw = this.storableRaw(message.raw);
     try {
-      const result = await this.insertWithRetries(store, envelope, raw);
-      if (!result.inserted) return false;
+      const result = await this.guard.insert(envelope, raw);
+      if (!result.inserted) return 'duplicate';
       envelope.seq = result.seq;
       envelope.accountSeq = result.accountSeq;
+      return 'stored';
     } catch (err) {
       if (this.unsaved.has(message)) await this.writeOff(envelope, raw, err);
+      return 'written_off';
     }
-    return true;
-  }
-
-  private async insertWithRetries(store: MessageLogPort, envelope: UnifiedEnvelope, raw: unknown): Promise<InsertResult> {
-    const delays = this.deps.persistRetryDelaysMs ?? PERSIST_RETRY_DELAYS_MS;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await store.insertInbound(envelope, raw);
-      } catch (err) {
-        const delay = delays[attempt];
-        if (delay === undefined || this.draining) throw err;
-        this.logger.warn('Failed to persist inbound message, retrying', {
-          accountId: envelope.accountId, messageId: envelope.id, attempt: attempt + 1, delayMs: delay, error: errorMessage(err),
-        });
-        await this.waitToRetry(delay);
-      }
-    }
-  }
-
-  private waitToRetry(delayMs: number): Promise<void> {
-    return new Promise((resolve) => {
-      const wake = () => {
-        clearTimeout(timer);
-        this.retryWaits.delete(wake);
-        resolve();
-      };
-      const timer = setTimeout(wake, delayMs);
-      this.retryWaits.add(wake);
-    });
   }
 
   private storableRaw(raw: unknown): unknown {
@@ -313,7 +301,7 @@ export class InboundPipeline {
   private async writeOff(envelope: UnifiedEnvelope, raw: unknown, cause: unknown): Promise<void> {
     const context = { accountId: envelope.accountId, messageId: envelope.id };
     this.deps.metrics.persistFailures();
-    this.logger.error('Failed to persist inbound message, keeping it for the next start', { ...context, error: errorMessage(cause) });
+    this.logger.error('Failed to persist inbound message, keeping it in the failed log', { ...context, error: errorMessage(cause) });
     try {
       await this.deps.failedLog?.append({ envelope, raw });
     } catch (err) {

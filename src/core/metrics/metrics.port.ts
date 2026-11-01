@@ -17,7 +17,7 @@ export interface MetricsPort {
   decGauge(name: string, labels?: Record<string, string>): void;
   incGauge(name: string, labels?: Record<string, string>): void;
   observeHistogram(name: string, value: number, labels?: Record<string, string>): void;
-  /** An inbound message could not be written to the message log after the retries, and went to the failed log */
+  /** An inbound message did not reach the message log (refused, retries run out, or down), and went to the failed log */
   persistFailures(): void;
   /** An inbound media was not stored (over the size cap, or the download/write failed) */
   mediaSkipped(reason: MediaSkipReason): void;

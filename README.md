@@ -362,7 +362,7 @@ curl -H "X-API-Key: your-key" \
 
 Repeat with `nextAfterAccountSeq` until it is `null`. `lastAccountSeq` is where to start to get only what comes from now on. If your cursor is below `firstAccountSeq`, retention removed the messages in between: that jump is not a loss.
 
-**Deduplicate by `id`.** A message the gateway could not store is still delivered live, without `accountSeq`, and is stored at the next start: it then comes again, with the same `id`, when you catch up. The same message can reach you twice, so an `accountSeq` alone does not tell you whether you have already seen it.
+**Deduplicate by `id`.** A message the gateway could not store is still delivered live, without `accountSeq`, and is stored as soon as the database is back, or at the next start: it then comes again, with the same `id`, when you catch up. The same message can reach you twice, so an `accountSeq` alone does not tell you whether you have already seen it.
 
 #### AI-ready conversation context
 
