@@ -35,7 +35,8 @@ const HEARTBEAT_TIMEOUT_MS = 75_000;
  * `umg.<key>` subprotocol (browser) — never in the URL. Reconnects with
  * exponential backoff and full jitter, and drops connections that go silent
  * for 75 s. After a reconnect, use `client.messages.after(...)` with the last
- * seen `accountSeq` to catch up on anything missed.
+ * seen `accountSeq` to catch up on anything missed, and deduplicate by `id`: a
+ * message may arrive both ways.
  *
  * @example
  * ```typescript
@@ -54,25 +55,26 @@ const HEARTBEAT_TIMEOUT_MS = 75_000;
  */
 export class MessagingGatewayEvents {
   private ws: GatewaySocket | null = null;
-  private readonly config: Required<Omit<EventsConfig, 'reconnectIntervalMs'>>;
+  private readonly config: Required<Omit<EventsConfig, 'reconnectIntervalMs' | 'accounts'>>;
+  /** The filter the server holds for this client (empty: every account), so a reconnect asks for it again. */
+  private subscriptions: string[];
   private readonly emitter = new EventEmitter();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private intentionalClose = false;
-  private pendingSends: Array<{ resolve: (id: string) => void; reject: (err: Error) => void; id: string }> = [];
 
   constructor(config: EventsConfig) {
     this.config = {
       baseUrl: config.baseUrl.replace(/\/$/, ''),
       apiKey: config.apiKey ?? '',
-      accounts: config.accounts ?? [],
       autoReconnect: config.autoReconnect ?? true,
       reconnectBaseMs: config.reconnectBaseMs ?? config.reconnectIntervalMs ?? DEFAULT_BACKOFF_BASE_MS,
       reconnectMaxMs: config.reconnectMaxMs ?? DEFAULT_BACKOFF_MAX_MS,
       handshakeTimeoutMs: config.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
       random: config.random ?? Math.random,
     };
+    this.subscriptions = [...(config.accounts ?? [])];
   }
 
   /** Connect to the WebSocket server */
@@ -108,7 +110,6 @@ export class MessagingGatewayEvents {
         if (wasCurrent && this.config.autoReconnect && !this.intentionalClose) {
           this.scheduleReconnect();
         }
-        this.rejectPendingSends('WebSocket disconnected');
         this.emit('disconnected', code, reason);
       },
       onError: (err) => {
@@ -135,17 +136,25 @@ export class MessagingGatewayEvents {
     const socket = this.ws;
     this.ws = null;
     socket?.close(1000, 'Client disconnect');
-    this.rejectPendingSends('Client disconnected');
   }
 
-  /** Subscribe to events from specific accounts */
+  /**
+   * Listen to these accounts only, replacing the current filter; an empty list means every account.
+   * Survives reconnects. Throws when not connected, and then nothing changes.
+   */
   subscribe(accounts: string[]): void {
     this.sendAction({ action: 'subscribe', accounts });
+    this.subscriptions = [...accounts];
   }
 
-  /** Unsubscribe from account events */
+  /**
+   * Remove accounts from the filter. Removing the last one leaves no filter, which means every
+   * account, and with no filter this does nothing. Survives reconnects. Throws when not connected,
+   * and then nothing changes.
+   */
   unsubscribe(accounts: string[]): void {
     this.sendAction({ action: 'unsubscribe', accounts });
+    this.subscriptions = this.subscriptions.filter((account) => !accounts.includes(account));
   }
 
   /** Send a message via WebSocket (returns correlation ID) */
@@ -234,7 +243,7 @@ export class MessagingGatewayEvents {
       .replace(/^https:/, 'wss:');
 
     const params = new URLSearchParams();
-    if (this.config.accounts.length) params.set('accounts', this.config.accounts.join(','));
+    if (this.subscriptions.length) params.set('accounts', this.subscriptions.join(','));
 
     const qs = params.toString();
     return `${base}/ws/events${qs ? `?${qs}` : ''}`;
@@ -296,12 +305,5 @@ export class MessagingGatewayEvents {
       clearTimeout(this.watchdogTimer);
       this.watchdogTimer = null;
     }
-  }
-
-  private rejectPendingSends(reason: string): void {
-    for (const pending of this.pendingSends) {
-      pending.reject(new Error(reason));
-    }
-    this.pendingSends = [];
   }
 }
