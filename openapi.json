@@ -14,7 +14,7 @@
         "tags": [
           "Health"
         ],
-        "description": "Health check endpoint. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active`. `accounts` maps each account id to its status.",
+        "description": "Health check endpoint. Public, so it reports the general state only. Always answers 200 (Docker healthcheck); `status` is `degraded` when any account that is not deliberately suspended is not `active` or has lost its connection. The detail per account is in GET /api/v1/accounts, with an API key.",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -39,25 +39,11 @@
                     },
                     "uptime": {
                       "type": "number"
-                    },
-                    "accounts": {
-                      "type": "object",
-                      "additionalProperties": {
-                        "type": "string",
-                        "enum": [
-                          "active",
-                          "suspended",
-                          "auth_expired",
-                          "error",
-                          "unchecked"
-                        ]
-                      }
                     }
                   },
                   "required": [
                     "status",
-                    "timestamp",
-                    "accounts"
+                    "timestamp"
                   ]
                 }
               }
