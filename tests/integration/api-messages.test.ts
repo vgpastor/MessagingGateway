@@ -213,6 +213,48 @@ afterAll(async () => {
   await store.close();
 });
 
+// ── Page size and offset from the query string ───────────────
+
+describe('limit and offset of the read routes', () => {
+  const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH_HEADERS });
+
+  it.each([
+    ['/api/v1/messages?limit=abc', 200, 50],
+    ['/api/v1/messages?limit=999999', 200, 500],
+    ['/api/v1/messages?limit=0', 200, 1],
+    ['/api/v1/messages?limit=-5', 200, 1],
+    ['/api/v1/messages/search?q=order&limit=abc', 200, 50],
+    ['/api/v1/messages/search?q=order&limit=999999', 200, 500],
+    ['/api/v1/messages/export?limit=abc', 200, 1000],
+    ['/api/v1/messages/export?limit=999999', 200, 1000],
+    ['/api/v1/messages/export?limit=-5', 200, 1],
+  ])('GET %s answers %i with limit %i', async (url, status, limit) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.json().limit).toBe(limit);
+  });
+
+  it.each([
+    '/api/v1/messages?offset=abc',
+    '/api/v1/messages?offset=-1',
+    '/api/v1/messages/search?q=order&offset=abc',
+    '/api/v1/messages/export?offset=-1',
+  ])('GET %s falls back to offset 0', async (url) => {
+    const res = await get(url);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().offset).toBe(0);
+  });
+
+  it.each(['abc', '-5', '999999'])('the conversation context takes limit=%s without failing', async (limit) => {
+    const res = await get(`/api/v1/conversations/34600000001@s.whatsapp.net/context?limit=${limit}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().messages.length).toBeGreaterThan(0);
+  });
+});
+
 // ── GET /api/v1/messages ─────────────────────────────────────
 
 describe('GET /api/v1/messages', () => {

@@ -3941,7 +3941,8 @@
             },
             "in": "query",
             "name": "limit",
-            "required": false
+            "required": false,
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {
@@ -3949,7 +3950,8 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
           },
           {
             "schema": {
@@ -4348,7 +4350,8 @@
             },
             "in": "query",
             "name": "limit",
-            "required": false
+            "required": false,
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {
@@ -4356,7 +4359,8 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
           }
         ],
         "responses": {
@@ -4412,7 +4416,7 @@
         "tags": [
           "Messages"
         ],
-        "description": "Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.",
+        "description": "Export messages in CSV or JSON format, up to 1000 per request (default and maximum): use `offset` for the rest. Requires STORAGE_ENABLED=true.",
         "parameters": [
           {
             "schema": {
@@ -4460,7 +4464,7 @@
             "in": "query",
             "name": "limit",
             "required": false,
-            "description": "Max messages to export (default: 1000)"
+            "description": "Max messages to export (default and maximum: 1000). Not a number: the default"
           },
           {
             "schema": {
@@ -4468,7 +4472,8 @@
             },
             "in": "query",
             "name": "offset",
-            "required": false
+            "required": false,
+            "description": "Rows to skip (default: 0). Not a non-negative number: the default"
           }
         ],
         "responses": {
@@ -4492,7 +4497,7 @@
             "in": "query",
             "name": "limit",
             "required": false,
-            "description": "Max messages to return (default: 50)"
+            "description": "Page size (default: 50, max: 500). Not a number: the default"
           },
           {
             "schema": {

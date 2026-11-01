@@ -1310,7 +1310,13 @@ contentType?: string;
 direction?: GetApiV1MessagesDirection;
 since?: string;
 until?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 /**
  * Keyset cursor: return messages of `accountId` with accountSeq greater than this (0 = from the start). Requires accountId.
@@ -1473,7 +1479,13 @@ export type GetApiV1MessagesSearchParams = {
  */
 q: string;
 accountId?: string;
+/**
+ * Page size (default: 50, max: 500). Not a number: the default
+ */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1489,9 +1501,12 @@ since?: string;
 until?: string;
 format?: GetApiV1MessagesExportFormat;
 /**
- * Max messages to export (default: 1000)
+ * Max messages to export (default and maximum: 1000). Not a number: the default
  */
 limit?: string;
+/**
+ * Rows to skip (default: 0). Not a non-negative number: the default
+ */
 offset?: string;
 };
 
@@ -1505,7 +1520,7 @@ export const GetApiV1MessagesExportFormat = {
 
 export type GetApiV1ConversationsConversationIdContextParams = {
 /**
- * Max messages to return (default: 50)
+ * Page size (default: 50, max: 500). Not a number: the default
  */
 limit?: string;
 /**
@@ -3185,7 +3200,7 @@ export const getGetApiV1MessagesExportUrl = (params?: GetApiV1MessagesExportPara
 }
 
 /**
- * Export messages in CSV or JSON format. Default limit: 1000. Requires STORAGE_ENABLED=true.
+ * Export messages in CSV or JSON format, up to 1000 per request (default and maximum): use `offset` for the rest. Requires STORAGE_ENABLED=true.
  */
 export const getApiV1MessagesExport = async (params?: GetApiV1MessagesExportParams, options?: Parameters<typeof customFetch>[1]): Promise<getApiV1MessagesExportResponse> => {
 

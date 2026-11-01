@@ -60,13 +60,16 @@ export function extractPreview(envelope: UnifiedEnvelope): string | null {
 
 // ── Message log helpers ─────────────────────────────────────────
 
-/** Hard cap for one page of `queryAfter` */
-export const MAX_QUERY_AFTER_LIMIT = 500;
+/** Hard cap for one page of messages */
+export const MAX_PAGE_LIMIT = 500;
 
-/** Clamp a requested page size to [1, MAX_QUERY_AFTER_LIMIT] */
-export function clampPageLimit(limit: number): number {
-  if (!Number.isFinite(limit)) return MAX_QUERY_AFTER_LIMIT;
-  return Math.min(Math.max(Math.trunc(limit), 1), MAX_QUERY_AFTER_LIMIT);
+/** Hard cap for one export, the one read allowed past a page: `query` serves it, so `query` caps at this */
+export const MAX_EXPORT_LIMIT = 1000;
+
+/** Clamp a requested page size to [1, max] */
+export function clampPageLimit(limit: number, max: number = MAX_PAGE_LIMIT): number {
+  if (!Number.isFinite(limit)) return max;
+  return Math.min(Math.max(Math.trunc(limit), 1), max);
 }
 
 /** WhatsApp message id carried by the envelope, or null when absent/empty (null never dedupes) */

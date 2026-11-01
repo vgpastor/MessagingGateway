@@ -19,7 +19,7 @@ import type {
 import type { MediaInfo } from '../core/messaging/content.js';
 import {
   toUTC, parseJsonColumnRequired, parseJsonColumn,
-  clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
+  MAX_EXPORT_LIMIT, clampPageLimit, cutoffUTC, envelopeColumns, readLogFields, readSender,
   MESSAGE_INSERT_COLUMNS, messageRowValues, toJsonColumn,
 } from '../core/persistence/message-store.utils.js';
 
@@ -93,7 +93,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
     const db = this.requireDb();
 
     const { where, params } = this.buildWhere(filters);
-    const limit = filters.limit ?? 50;
+    const limit = clampPageLimit(filters.limit ?? 50, MAX_EXPORT_LIMIT);
     const offset = filters.offset ?? 0;
 
     const countRow = db.prepare(`SELECT COUNT(*) as total FROM messages ${where}`).get(...params) as { total: number };
@@ -125,7 +125,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
   async search(query: string, options?: SearchOptions): Promise<MessageQueryResult> {
     const db = this.requireDb();
 
-    const limit = options?.limit ?? 50;
+    const limit = clampPageLimit(options?.limit ?? 50);
     const offset = options?.offset ?? 0;
 
     let where = 'messages_fts MATCH ?';
@@ -209,7 +209,7 @@ export class SqliteMessageStore implements FullMessageStorePort {
   ): Promise<RawConversationHistory> {
     const db = this.requireDb();
 
-    const limit = options?.limit ?? 50;
+    const limit = clampPageLimit(options?.limit ?? 50);
     const conditions = ['conversation_id = ?'];
     const params: unknown[] = [conversationId];
 
