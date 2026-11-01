@@ -457,6 +457,7 @@ export async function accountsController(
     } catch (err) {
       fastify.log.warn(`Closing deleted account ${id} failed: ${(err as Error).message}`);
     }
+    manager?.forgetAccount?.(id);
 
     await deps.accountRepository.remove(id);
     fastify.log.info(`Account deleted: ${id}`);

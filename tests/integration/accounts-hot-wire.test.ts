@@ -292,6 +292,26 @@ describe('accounts created at runtime', () => {
     }
   });
 
+  it('DELETE /accounts/:id releases what the connection manager keeps for the account', async () => {
+    await create('hot-12b');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12b/connect', headers: HEADERS });
+    const socketManager = baileysProvider.connection!() as unknown as { socketManager: { getConnectionEnd(id: string): unknown } };
+
+    await app.inject({ method: 'DELETE', url: '/api/v1/accounts/hot-12b', headers: HEADERS });
+
+    expect(socketManager.socketManager.getConnectionEnd('hot-12b')).toBeUndefined();
+  });
+
+  it('POST /accounts/:id/disconnect keeps it closed: only DELETE forgets the account', async () => {
+    await create('hot-12c');
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12c/connect', headers: HEADERS });
+    const socketManager = baileysProvider.connection!() as unknown as { socketManager: { getConnectionEnd(id: string): unknown } };
+
+    await app.inject({ method: 'POST', url: '/api/v1/accounts/hot-12c/disconnect', headers: HEADERS });
+
+    expect(socketManager.socketManager.getConnectionEnd('hot-12c')).toBe('closed');
+  });
+
   it('DELETE /accounts/:id still deletes the account when closing it fails', async () => {
     await create('hot-13');
     const manager = baileysProvider.connection!();

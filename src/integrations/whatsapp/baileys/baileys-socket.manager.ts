@@ -18,6 +18,7 @@ import { TtlCache } from '../../../core/util/ttl-cache.js';
 import type { BaileysMessageLookup } from './baileys-message-lookup.js';
 import type { SocketManagerPort, ConnectionStatus } from '../../../core/providers/socket-manager.port.js';
 import type { GroupInfo } from '../../../core/groups/group.types.js';
+import { STABLE_CONNECTION_MS } from '../../../core/accounts/connection-manager.port.js';
 
 /**
  * Fallback WhatsApp Web version, used only when {@link fetchLatestBaileysVersion}
@@ -50,9 +51,6 @@ const SESSION_LOST_CODES: ReadonlySet<number> = new Set([DisconnectReason.logged
 /** WhatsApp rejects the version we advertise. Baileys has no name for this code. */
 const VERSION_REJECTED_CODE = 405;
 
-/** An open socket this young says nothing about the connection being good: the failure streak stays. */
-const STABLE_CONNECTION_MS = 60_000;
-
 /**
  * After a 440 another session holds the account. Coming back soon just kicks that one out, which then
  * does the same to us. Waiting this long keeps the fight harmless, while a passing conflict still heals by itself.
@@ -72,6 +70,22 @@ const CACHE_MAX_ENTRIES = 5000;
 /** Baileys types its caches with a generic `get<T>`; ours is typed by value, so adapt once here. */
 function asCacheStore(cache: TtlCache<unknown>): CacheStore {
   return cache as unknown as CacheStore;
+}
+
+function toGroupInfo(group: GroupMetadata): GroupInfo {
+  return {
+    id: group.id,
+    name: group.subject,
+    description: group.desc ?? undefined,
+    participants: group.participants.map(p => ({
+      id: p.id,
+      isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+      isSuperAdmin: p.admin === 'superadmin',
+    })),
+    createdAt: group.creation ? new Date(group.creation * 1000).toISOString() : undefined,
+    createdBy: group.subjectOwner ?? undefined,
+    isAnnouncement: group.announce ?? false,
+  };
 }
 
 export interface BaileysSocketManagerOptions {
@@ -264,7 +278,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
 
     socket.ev.on('messages.upsert', (event) => {
       const handlers = this.handlersFor(this.messageHandlers, accountId);
-      getLogger().info('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
+      getLogger().debug('messages.upsert received', { provider: 'baileys', accountId, messageCount: event.messages.length, type: event.type, handlers: handlers.length });
       this.notify(this.messageHandlers, accountId, event);
     });
 
@@ -365,6 +379,16 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** For an account that no longer exists, after {@link disconnect}: {@link ended} and the caches would stay for good. */
+  forgetAccount(accountId: string): void {
+    // A connect still in flight reads this flag to give up: without it, it would open a socket for nobody.
+    if (!this.connecting.has(accountId)) {
+      this.ended.delete(accountId);
+    }
+    this.retryCounters.delete(accountId);
+    this.groupMetadata.delete(accountId);
   }
 
   /**
@@ -565,19 +589,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     const groups = await socket.groupFetchAllParticipating();
     const cache = this.groupMetadataFor(accountId);
     for (const metadata of Object.values(groups)) cache.set(metadata.id, metadata);
-    return Object.values(groups).map(g => ({
-      id: g.id,
-      name: g.subject,
-      description: g.desc ?? undefined,
-      participants: g.participants.map(p => ({
-        id: p.id,
-        isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
-        isSuperAdmin: p.admin === 'superadmin',
-      })),
-      createdAt: g.creation ? new Date(g.creation * 1000).toISOString() : undefined,
-      createdBy: g.subjectOwner ?? undefined,
-      isAnnouncement: g.announce ?? false,
-    }));
+    return Object.values(groups).map(toGroupInfo);
   }
 
   async getGroupInfo(accountId: string, groupId: string): Promise<GroupInfo | undefined> {
@@ -586,19 +598,7 @@ export class BaileysSocketManager implements SocketManagerPort<BaileysProviderCo
     try {
       const metadata = await socket.groupMetadata(groupId);
       this.groupMetadataFor(accountId).set(groupId, metadata);
-      return {
-        id: metadata.id,
-        name: metadata.subject,
-        description: metadata.desc ?? undefined,
-        participants: metadata.participants.map(p => ({
-          id: p.id,
-          isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
-          isSuperAdmin: p.admin === 'superadmin',
-        })),
-        createdAt: metadata.creation ? new Date(metadata.creation * 1000).toISOString() : undefined,
-        createdBy: metadata.subjectOwner ?? undefined,
-        isAnnouncement: metadata.announce ?? false,
-      };
+      return toGroupInfo(metadata);
     } catch {
       return undefined;
     }

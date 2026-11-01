@@ -10,6 +10,9 @@ import type { GroupInfo } from '../groups/group.types.js';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
+/** A connection that lasted less than this says nothing good: neither a recovery nor the end of a failure streak. */
+export const STABLE_CONNECTION_MS = 60_000;
+
 export interface ConnectionInfo {
   status: ConnectionStatus;
   /** QR code data string (render with a QR library) */
@@ -44,6 +47,9 @@ export interface ConnectionManagerPort {
    * account is stuck reconnecting without producing a QR. Optional capability.
    */
   clearSession?(accountId: string, providerConfig: Record<string, unknown>): Promise<void>;
+
+  /** The account no longer exists: release what is kept for it beyond its connection. Optional capability. */
+  forgetAccount?(accountId: string): void;
 
   /** List all groups the account participates in (optional capability) */
   getGroups?(accountId: string): Promise<GroupInfo[]>;

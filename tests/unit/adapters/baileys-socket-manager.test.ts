@@ -316,6 +316,81 @@ describe('BaileysSocketManager subscriptions', () => {
   });
 });
 
+describe('BaileysSocketManager.forgetAccount', () => {
+  const GONE_ID = 'test-forget';
+  const goneAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', GONE_ID);
+
+  afterEach(async () => {
+    fakeSockets.length = 0;
+    await rm(goneAuthDir, { recursive: true, force: true });
+  });
+
+  function kept(manager: BaileysSocketManager) {
+    const state = manager as unknown as { retryCounters: Map<string, unknown>; groupMetadata: Map<string, unknown> };
+    return [state.retryCounters.has(GONE_ID), state.groupMetadata.has(GONE_ID)];
+  }
+
+  it('releases what is kept for an account beyond its socket', async () => {
+    const manager = new BaileysSocketManager();
+    await manager.connect(GONE_ID, {});
+    await manager.disconnect(GONE_ID);
+    expect(manager.getConnectionEnd(GONE_ID)).toBe('closed');
+    expect(kept(manager)).toEqual([true, true]);
+
+    manager.forgetAccount(GONE_ID);
+
+    expect(manager.getConnectionEnd(GONE_ID)).toBeUndefined();
+    expect(kept(manager)).toEqual([false, false]);
+  });
+
+  it('does not let a connect still in flight open the socket of the account it forgot', async () => {
+    const manager = new BaileysSocketManager();
+
+    const inFlight = manager.connect(GONE_ID, {});
+    await manager.disconnect(GONE_ID);
+    manager.forgetAccount(GONE_ID);
+    await inFlight;
+
+    expect(fakeSockets).toHaveLength(0);
+    expect(manager.hasSocket(GONE_ID)).toBe(false);
+  });
+});
+
+describe('BaileysSocketManager groups', () => {
+  const GROUP_ID = 'test-groups';
+  const groupsAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', GROUP_ID);
+
+  afterEach(async () => {
+    fakeSockets.length = 0;
+    await rm(groupsAuthDir, { recursive: true, force: true });
+  });
+
+  it('the list and the single lookup describe a group the same way', async () => {
+    const metadata = {
+      id: '123@g.us', subject: 'Grupo', desc: 'Una', creation: 1_700_000_000, subjectOwner: 'o@s.whatsapp.net', announce: true,
+      participants: [{ id: 'a', admin: 'superadmin' }, { id: 'b', admin: 'admin' }, { id: 'c', admin: null }],
+    };
+    const manager = new BaileysSocketManager();
+    await manager.connect(GROUP_ID, {});
+    Object.assign(fakeSockets.at(-1)!, {
+      groupFetchAllParticipating: async () => ({ [metadata.id]: metadata }),
+      groupMetadata: async () => metadata,
+    });
+
+    const expected = {
+      id: '123@g.us', name: 'Grupo', description: 'Una', createdAt: new Date(1_700_000_000_000).toISOString(),
+      createdBy: 'o@s.whatsapp.net', isAnnouncement: true,
+      participants: [
+        { id: 'a', isAdmin: true, isSuperAdmin: true },
+        { id: 'b', isAdmin: true, isSuperAdmin: false },
+        { id: 'c', isAdmin: false, isSuperAdmin: false },
+      ],
+    };
+    expect(await manager.getGroups(GROUP_ID)).toEqual([expected]);
+    expect(await manager.getGroupInfo(GROUP_ID, metadata.id)).toEqual(expected);
+  });
+});
+
 describe('BaileysSocketManager.requestPairingCode', () => {
   const PAIR_ID = 'test-pair';
   const pairAuthDir = resolve(process.cwd(), 'data', 'baileys-auth', PAIR_ID);
