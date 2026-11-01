@@ -49,8 +49,11 @@ export function gatewayShutdownSteps(deps: GatewayShutdownDeps): ShutdownStep[] 
 export interface GracefulShutdown {
   /** Whether a signal has already started the shutdown. */
   readonly started: boolean;
-  /** Runs the steps in order and exits. A second call while it runs does nothing. */
-  run(signal: string): Promise<void>;
+  /**
+   * Runs the steps in order and exits, with 0 only if all went well. A second call while it runs
+   * runs nothing. `failed` makes the exit code non-zero whatever the steps do, even on that second call.
+   */
+  run(signal: string, options?: { failed?: boolean }): Promise<void>;
 }
 
 export function createGracefulShutdown(
@@ -60,14 +63,16 @@ export function createGracefulShutdown(
   const totalMs = options.totalMs ?? SHUTDOWN_TOTAL_MS;
   const exit = options.exit ?? ((code: number) => process.exit(code));
   let started = false;
+  let failed = false;
 
   return {
     get started() {
       return started;
     },
 
-    async run(signal) {
+    async run(signal, options) {
       const logger = getLogger();
+      failed ||= options?.failed === true;
       if (started) {
         logger.warn('Already shutting down, signal ignored', { signal });
         return;
@@ -94,9 +99,34 @@ export function createGracefulShutdown(
 
       clearTimeout(hardStop);
       logger.info('Shutdown complete', { clean });
-      exit(clean ? 0 : 1);
+      exit(clean && !failed ? 0 : 1);
     },
   };
+}
+
+/**
+ * Whatever escapes every handler ends the process, since its state can no longer be trusted. It goes through
+ * the shutdown, so that what was accepted is not lost; before there is one there is nothing to save.
+ */
+export function exitOnCrash(
+  getShutdown: () => GracefulShutdown | undefined,
+  options: { target?: Pick<NodeJS.EventEmitter, 'on'>; exit?: (code: number) => void } = {},
+): void {
+  const target = options.target ?? process;
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+
+  const crashed = (event: string) => (err: unknown) => {
+    getLogger().error(`Crash: ${event}`, {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    const shutdown = getShutdown();
+    if (shutdown) void shutdown.run(event, { failed: true });
+    else exit(1);
+  };
+
+  target.on('unhandledRejection', crashed('unhandledRejection'));
+  target.on('uncaughtException', crashed('uncaughtException'));
 }
 
 async function withinBudget(step: ShutdownStep, budgetMs: number): Promise<void> {

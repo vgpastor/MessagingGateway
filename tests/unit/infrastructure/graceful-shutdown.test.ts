@@ -3,6 +3,7 @@
  * message log going through it. Only the HTTP server and the webhook endpoint are fakes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,11 +16,12 @@ import type { ChannelAccount } from '../../../src/core/accounts/channel-account.
 import { InboundPipeline } from '../../../src/core/inbound/inbound-pipeline.js';
 import { noopMediaService } from '../../../src/core/inbound/media-service.js';
 import type { UnifiedEnvelope } from '../../../src/core/messaging/unified-envelope.js';
+import { getLogger, setGlobalLogger, type Logger } from '../../../src/core/logger/logger.port.js';
 import { noopMetrics } from '../../../src/core/metrics/metrics.port.js';
 import type { MessageLogPort } from '../../../src/core/persistence/message-store.port.js';
 import type { WebhookConfigRepository } from '../../../src/core/webhooks/webhook-config.repository.js';
 import {
-  createGracefulShutdown, gatewayShutdownSteps, SHUTDOWN_TOTAL_MS, type GatewayShutdownDeps,
+  createGracefulShutdown, exitOnCrash, gatewayShutdownSteps, SHUTDOWN_TOTAL_MS, type GatewayShutdownDeps, type GracefulShutdown,
 } from '../../../src/infrastructure/graceful-shutdown.js';
 import { FailedInboundFile } from '../../../src/persistence/failed-inbound-file.js';
 import { SqliteMessageStore } from '../../../src/persistence/sqlite-message-store.js';
@@ -117,6 +119,96 @@ describe('createGracefulShutdown', () => {
     await done;
 
     expect(budgets).toEqual([400, 200]);
+  });
+});
+
+describe('exitOnCrash', () => {
+  const originalLogger = getLogger();
+  afterEach(() => setGlobalLogger(originalLogger));
+
+  function capturingErrors() {
+    const error = vi.fn();
+    const fake = { info: vi.fn(), warn: vi.fn(), error, debug: vi.fn(), child: () => fake };
+    setGlobalLogger(fake as unknown as Logger);
+    return error;
+  }
+
+  const untilExit = (exit: ReturnType<typeof vi.fn>) => vi.waitFor(() => expect(exit).toHaveBeenCalled());
+
+  it.each(['unhandledRejection', 'uncaughtException'])('%s logs the error, drains through the shutdown and exits with 1', async (event) => {
+    const error = capturingErrors();
+    const target = new EventEmitter();
+    const exit = vi.fn();
+    const steps = vi.fn();
+    const shutdown = createGracefulShutdown([{ name: 'drain', maxMs: 100, run: steps }], { exit });
+    exitOnCrash(() => shutdown, { target, exit });
+
+    target.emit(event, new Error('boom'));
+    await untilExit(exit);
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(event), expect.objectContaining({ error: 'boom' }));
+    expect(steps).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('exits with 1 at once when there is no shutdown yet: nothing can have arrived', () => {
+    capturingErrors();
+    const target = new EventEmitter();
+    const exit = vi.fn();
+    exitOnCrash(() => undefined, { target, exit });
+
+    target.emit('uncaughtException', new Error('too early'));
+
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('a crash during a clean shutdown does not run it twice, and the exit code says so', async () => {
+    capturingErrors();
+    const target = new EventEmitter();
+    const exit = vi.fn();
+    const steps = vi.fn(() => {
+      target.emit('unhandledRejection', new Error('while draining'));
+    });
+    const shutdown: GracefulShutdown = createGracefulShutdown([{ name: 'drain', maxMs: 100, run: steps }], { exit });
+    exitOnCrash(() => shutdown, { target, exit });
+
+    await shutdown.run('SIGTERM');
+
+    expect(steps).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('what is in the inbound queue reaches the failed log on the way out', async () => {
+    capturingErrors();
+    const dir = await mkdtemp(join(tmpdir(), 'mg-crash-'));
+    const path = join(dir, 'failed-inbound.jsonl');
+    const pipeline = new InboundPipeline({
+      store: { insertInbound: () => new Promise(() => {}) } as unknown as MessageLogPort,
+      failedLog: new FailedInboundFile(path),
+      eventBus: new EventBus(),
+      media: noopMediaService,
+      metrics: noopMetrics,
+      accounts: { findById: async () => undefined },
+    });
+    const target = new EventEmitter();
+    const exit = vi.fn();
+    const shutdown = createGracefulShutdown([{ name: 'drain', maxMs: 100, run: () => pipeline.drain(10) }], { exit });
+    exitOnCrash(() => shutdown, { target, exit });
+    const envelope = {
+      id: 'queued', accountId: 'wa-1', conversationId: 'c', sender: { id: 's' }, content: { type: 'text', body: 'x' },
+      gateway: { receivedAt: new Date() }, timestamp: new Date(),
+    } as unknown as UnifiedEnvelope;
+    void pipeline.handle({ id: 'wa-1', provider: 'baileys' } as ChannelAccount, envelope, {});
+    await new Promise((resolve) => setImmediate(resolve));
+
+    target.emit('uncaughtException', new Error('boom'));
+    await untilExit(exit);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(await readFile(path, 'utf8')).envelope.id).toBe('queued');
+    await rm(dir, { recursive: true, force: true });
   });
 });
 

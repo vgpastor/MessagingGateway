@@ -133,7 +133,7 @@ describe('the failed log through a real start', () => {
     await pipeline.drain(10);
   });
 
-  it('a LID still unresolved after connecting stays for the next start, and the next start can store it', async () => {
+  it('a LID still unresolved after connecting stays in the file for the next start', async () => {
     await file.append({ envelope: envelope('unknown', UNKNOWN_LID), raw: undefined });
     const { pipeline, connect, media } = start();
 

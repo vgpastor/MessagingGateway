@@ -36,7 +36,7 @@ import { CredentialValidator } from './infrastructure/credential-validator.js';
 import { HealthCheckScheduler } from './infrastructure/health-check-scheduler.js';
 import { createServer } from './infrastructure/server.js';
 import { connectManagedProviders } from './infrastructure/connect-managed-providers.js';
-import { createGracefulShutdown, gatewayShutdownSteps } from './infrastructure/graceful-shutdown.js';
+import { createGracefulShutdown, exitOnCrash, gatewayShutdownSteps, type GracefulShutdown } from './infrastructure/graceful-shutdown.js';
 import type { ChannelAccount } from './core/accounts/channel-account.js';
 
 /** Register all supported providers and inject the credential resolver */
@@ -242,6 +242,7 @@ async function main() {
     webhooks: webhookForwarder,
     store: messageStore,
   }));
+  runningShutdown = shutdown;
   process.on('SIGTERM', () => void shutdown.run('SIGTERM'));
   process.on('SIGINT', () => void shutdown.run('SIGINT'));
 
@@ -285,10 +286,9 @@ async function main() {
   }
 }
 
-process.on('unhandledRejection', (err) => {
-  getLogger().error('Unhandled rejection', { error: err instanceof Error ? err.message : String(err) });
-  process.exit(1);
-});
+/** Set once there is something to drain. */
+let runningShutdown: GracefulShutdown | undefined;
+exitOnCrash(() => runningShutdown);
 
 main().catch((err) => {
   getLogger().error('Fatal startup error', { error: err instanceof Error ? err.message : String(err) });

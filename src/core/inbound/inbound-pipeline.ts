@@ -138,7 +138,7 @@ export class InboundPipeline {
     });
     const stored = saved - discarded;
     if (stored > 0) this.logger.info('Stored inbound messages from the failed log', { saved: stored });
-    if (kept > 0) this.logger.error('Inbound messages remain in the failed log', { kept });
+    if (kept > 0) this.logger.warn('Inbound messages remain in the failed log', { kept });
     return stored;
   }
 
