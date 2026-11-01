@@ -8,6 +8,12 @@ interface MediaControllerDeps {
   mediaStore: MediaFileReader;
 }
 
+/** Documentation only: a stream is sent as it is, never serialized. */
+const mediaFileSchema = {
+  description: 'The file, with the Content-Type of the stored media',
+  content: { 'application/octet-stream': { schema: { type: 'string' as const, format: 'binary' } } },
+};
+
 const mediaPendingSchema = {
   type: 'object' as const,
   properties: { status: { type: 'string' as const, enum: ['pending'] } },
@@ -31,7 +37,7 @@ export async function mediaController(fastify: FastifyInstance, deps: MediaContr
         '200 streams the file; 202 while it is still being downloaded; 410 when it was skipped or has expired.',
       tags: ['Messages'],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 202: mediaPendingSchema, 404: errorResponseSchema, 410: mediaGoneSchema },
+      response: { 200: mediaFileSchema, 202: mediaPendingSchema, 404: errorResponseSchema, 410: mediaGoneSchema },
     },
   }, async (request, reply) => {
     const { id } = request.params;

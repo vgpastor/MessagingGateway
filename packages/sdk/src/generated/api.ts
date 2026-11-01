@@ -3260,6 +3260,11 @@ export const getApiV1ConversationsConversationIdContext = async (conversationId:
 
 
 
+export type getApiV1MediaIdResponse200 = {
+  data: Blob
+  status: 200
+}
+
 export type getApiV1MediaIdResponse202 = {
   data: GetApiV1MediaId202
   status: 202
@@ -3275,7 +3280,7 @@ export type getApiV1MediaIdResponse410 = {
   status: 410
 }
 
-export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse202) & {
+export type getApiV1MediaIdResponseSuccess = (getApiV1MediaIdResponse200 | getApiV1MediaIdResponse202) & {
   headers: Headers;
 };
 export type getApiV1MediaIdResponseError = (getApiV1MediaIdResponse404 | getApiV1MediaIdResponse410) & {

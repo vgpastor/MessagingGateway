@@ -202,7 +202,7 @@ export interface UpdateAccountInput {
 
 // ── Webhook Config ──────────────────────────────────────────────
 
-export type WebhookEventType = 'message.inbound' | 'message.status' | 'message.sent' | '*';
+export type WebhookEventType = 'message.inbound' | 'message.status' | 'message.sent' | 'connection.update' | '*';
 
 /** A filter value: single primitive or array of primitives (OR match) */
 export type FilterValue = string | number | boolean | Array<string | number | boolean>;
@@ -240,10 +240,13 @@ export interface WebhookConfigInput {
 // ── Health ───────────────────────────────────────────────────────
 
 export interface HealthStatus {
-  status: 'ok' | 'degraded' | 'error';
+  /** `degraded`: an account that is not deliberately suspended is not `active` */
+  status: 'ok' | 'degraded';
   timestamp: string;
   version: string;
   uptime: number;
+  /** Status of each account, by id */
+  accounts: Record<string, AccountStatus>;
 }
 
 // ── Error ────────────────────────────────────────────────────────
@@ -271,7 +274,8 @@ export interface WsEvent<T = unknown> {
 export interface ConnectionUpdateData {
   accountId: string;
   status: 'disconnected' | 'connecting' | 'connected' | 'auth_expired';
-  qr?: string;
+  /** `null` for a read-only key: it never gets the QR */
+  qr?: string | null;
 }
 
 export interface MessageSentData {
@@ -330,9 +334,20 @@ export interface MessagesAfterResult {
   messages: UnifiedEnvelope[];
   /** Cursor for the next page, or `null` when the caller has caught up */
   nextAfterAccountSeq: number | null;
-  /** Highest `accountSeq` stored for the account */
+  /** Highest `accountSeq` handed out for the account (0 if none): where to start "from now" */
   lastAccountSeq: number;
+  /**
+   * Lowest `accountSeq` still stored for the account (`null` if none). A cursor below it means
+   * retention removed the messages in between, so that jump is not a loss to report.
+   */
+  firstAccountSeq: number | null;
 }
+
+/** Result of `messages.media()`. Only `ready` carries the file. */
+export type MediaDownload =
+  | { status: 'ready'; data: ArrayBuffer; mimeType: string }
+  | { status: 'pending' }
+  | { status: 'skipped' | 'expired'; skipReason?: MediaInfo['skipReason'] };
 
 export interface MessageStats {
   totalMessages: number;
@@ -386,10 +401,13 @@ export interface ConversationMessage {
 
 export interface ClientConfig {
   baseUrl: string;
+  /** The admin `API_KEY`, or the `READ_API_KEY` to only read messages and media */
   apiKey?: string;
+  /** Max time (ms) for one request, reading the body included. Default 30000. */
+  timeoutMs?: number;
 }
 
-export interface EventsConfig extends ClientConfig {
+export interface EventsConfig extends Omit<ClientConfig, 'timeoutMs'> {
   accounts?: string[];
   autoReconnect?: boolean;
   /** Reconnect backoff base (ms); the delay ceiling doubles per attempt. Default 1000. */
