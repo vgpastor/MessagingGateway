@@ -27,6 +27,20 @@ const COLUMNS = envelopeColumns('postgres');
 const CONNECTION_TIMEOUT_MS = 5_000;
 
 /**
+ * How long a statement may take. A connection lost to a network partition never answers, and
+ * inserts run inside the account's queue: without this limit one hung insert blocks it for ever.
+ */
+const QUERY_TIMEOUT_MS = 30_000;
+
+/** A retention delete can be large, and it holds back no queue. `0` would not disable the limit: pg falls back to the pool's. */
+const RETENTION_QUERY_TIMEOUT_MS = 15 * 60 * 1000;
+
+export interface PostgresMessageStoreOptions {
+  /** {@link QUERY_TIMEOUT_MS} by default. */
+  queryTimeoutMs?: number;
+}
+
+/**
  * PostgreSQL-based message store using the `pg` driver.
  * Lazy-loads `pg` so it's only required when STORAGE_DRIVER=postgres.
  */
@@ -34,19 +48,13 @@ export class PostgresMessageStore implements FullMessageStorePort {
   private pool: PgPool | null = null;
   private readonly connectionString: string;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, private readonly options: PostgresMessageStoreOptions = {}) {
     this.connectionString = connectionString;
   }
 
   async init(): Promise<void> {
     try {
-      const { Pool } = await import('pg');
-      this.pool = new Pool({ connectionString: this.connectionString, connectionTimeoutMillis: CONNECTION_TIMEOUT_MS });
-      // An idle connection dying (Postgres restart) is not fatal: the pool opens another one.
-      // Without a listener the 'error' event would take the whole process down.
-      this.pool.on('error', (err) => {
-        getLogger().warn('PostgreSQL idle connection lost', { error: err.message });
-      });
+      this.pool = await this.createPool(this.options.queryTimeoutMs ?? QUERY_TIMEOUT_MS);
 
       // Verify connection
       const client = await this.pool.connect();
@@ -62,9 +70,28 @@ export class PostgresMessageStore implements FullMessageStorePort {
     }
   }
 
-  /** Run migrations — called externally by the factory after init() */
+  private async createPool(queryTimeoutMs?: number): Promise<PgPool> {
+    const { Pool } = await import('pg');
+    const pool = new Pool({
+      connectionString: this.connectionString,
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+      ...(queryTimeoutMs === undefined ? {} : { query_timeout: queryTimeoutMs }),
+    });
+    // An idle connection dying (Postgres restart) is not fatal: the pool opens another one.
+    // Without a listener the 'error' event would take the whole process down.
+    pool.on('error', (err) => {
+      getLogger().warn('PostgreSQL idle connection lost', { error: err.message });
+    });
+    return pool;
+  }
+
+  /**
+   * Run migrations — called externally by the factory after init(). On a pool of their own, with no
+   * query timeout: a migration may rewrite a whole table, and failing it would stop the gateway from starting.
+   */
   async runMigrations(): Promise<void> {
-    const pool = this.requirePool();
+    this.requirePool();
+    const pool = await this.createPool();
     const { MigrationRunner } = await import('./migrations/migration-runner.js');
     const { PostgresMigrationAdapter } = await import('./migrations/adapters/postgres-migration.adapter.js');
     const { resolveMigrationScriptsDir } = await import('./migrations/resolve-scripts-dir.js');
@@ -73,7 +100,11 @@ export class PostgresMessageStore implements FullMessageStorePort {
       adapter: new PostgresMigrationAdapter(pool),
       logger: getLogger().child({ module: 'migrations:postgres' }),
     });
-    await runner.run();
+    try {
+      await runner.run();
+    } finally {
+      await pool.end();
+    }
   }
 
   async save(envelope: UnifiedEnvelope, raw?: unknown): Promise<void> {
@@ -286,6 +317,7 @@ export class PostgresMessageStore implements FullMessageStorePort {
     // The running query rejects anyway, so there is nothing else to do here.
     const onConnectionError = () => {};
     client.on('error', onConnectionError);
+    let failure: Error | undefined;
     try {
       await client.query('BEGIN');
 
@@ -318,11 +350,13 @@ export class PostgresMessageStore implements FullMessageStorePort {
       await client.query('COMMIT');
       return { inserted: true, seq: Number(inserted.rows[0].seq), accountSeq };
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => { /* connection already unusable */ });
+      failure = err instanceof Error ? err : new Error(String(err));
       throw err;
     } finally {
       client.removeListener('error', onConnectionError);
-      client.release();
+      // A failure discards the connection, and Postgres rolls back when it closes. A ROLLBACK would queue behind
+      // a hung statement, take its own timeout, and return a connection with the transaction open to the pool.
+      client.release(failure);
     }
   }
 
@@ -382,7 +416,11 @@ export class PostgresMessageStore implements FullMessageStorePort {
 
   async deleteOlderThan(days: number): Promise<number> {
     const pool = this.requirePool();
-    const res = await pool.query('DELETE FROM messages WHERE created_at < $1', [cutoffUTC(days)]);
+    const res = await pool.query({
+      text: 'DELETE FROM messages WHERE created_at < $1',
+      values: [cutoffUTC(days)],
+      query_timeout: RETENTION_QUERY_TIMEOUT_MS,
+    } as import('pg').QueryConfig);
     return res.rowCount ?? 0;
   }
 
