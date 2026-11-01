@@ -115,9 +115,7 @@ export class MessagingGatewayEvents {
         if (wasCurrent && this.config.autoReconnect && !this.intentionalClose && !refused) {
           this.scheduleReconnect();
         }
-        if (wasCurrent && refused) {
-          this.emit('error', new Error(`The gateway refused the API key, so the client will not reconnect: ${reason}`));
-        }
+        if (wasCurrent && refused) this.reportRefusedKey(reason);
         this.emit('disconnected', code, reason);
       },
       onError: (err) => {
@@ -285,6 +283,16 @@ export class MessagingGatewayEvents {
         this.reportListenerError(event, err);
       }
     }
+  }
+
+  /** The client stops here for good, so it must not go unnoticed: with nobody listening for `error`, the console hears it. */
+  private reportRefusedKey(reason: string): void {
+    const error = new Error(`The gateway refused the API key, so the client will not reconnect: ${reason}`);
+    if (this.emitter.listenerCount('error') > 0) {
+      this.emit('error', error);
+      return;
+    }
+    console.error(`[messaging-gateway-sdk] ${error.message}`);
   }
 
   private reportListenerError(event: keyof EventMap, err: unknown): void {

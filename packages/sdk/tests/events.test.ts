@@ -228,6 +228,44 @@ describe('MessagingGatewayEvents reconnect', () => {
     expect(conns).toHaveLength(1);
   });
 
+  it('with nobody listening for errors a refused key is not silent: it goes to console.error, and the client stops all the same', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      client = new MessagingGatewayEvents({ baseUrl, apiKey: 'wrong', reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
+      const c = client;
+      const disconnected = next<[number, string]>((cb) => c.on('disconnected', cb));
+      client.connect();
+
+      (await connection(0)).ws.close(4401, 'Unauthorized: invalid or missing API key');
+      await disconnected;
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      expect(String(consoleError.mock.calls[0]?.[0])).toContain('Unauthorized');
+      expect(conns).toHaveLength(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('with someone listening for errors a refused key does not reach console.error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      client = new MessagingGatewayEvents({ baseUrl, apiKey: 'wrong', reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
+      const c = client;
+      c.on('error', () => {});
+      const disconnected = next<[number, string]>((cb) => c.on('disconnected', cb));
+      client.connect();
+
+      (await connection(0)).ws.close(4401, 'Unauthorized');
+      await disconnected;
+
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('an explicit connect() after a 4401 tries again, for a key that was fixed on the server', async () => {
     client = new MessagingGatewayEvents({ baseUrl, apiKey: 'k', reconnectBaseMs: 1, reconnectMaxMs: 1, random: () => 0 });
     const c = client;

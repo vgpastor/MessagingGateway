@@ -13,7 +13,8 @@ npm install @messaging-gateway/sdk
 - **Node.js** `>=20.19 <21 || >=22.12`: CommonJS consumers load the ESM build through `require(esm)`.
 - **Gateway:** SDK 0.4.x requires a gateway release with header/subprotocol WebSocket auth,
   `afterAccountSeq` and the server heartbeat (the release that ships with this SDK). Against an
-  older gateway the WebSocket handshake is rejected with `4401`: the client emits `error` and does not retry.
+  older gateway the WebSocket handshake is rejected with `4401`: the client reports it through `error` (or
+  `console.error`, with no listener) and does not retry.
 
 ### Upgrading from 0.3.x
 
@@ -142,7 +143,8 @@ events.disconnect();
 ```
 
 After a close with `4401` the gateway refused the API key, so the client emits `error` and does not reconnect,
-whatever `autoReconnect` says, until you call `connect()` again.
+whatever `autoReconnect` says, until you call `connect()` again. With no `error` listener it writes the
+message to `console.error` instead, because the client stops for good: listen for `error` if you need to react.
 
 `subscribe()` and `unsubscribe()` throw when the socket is not connected, and then nothing changes:
 call them again on `connected`, or set `accounts` in the config.
