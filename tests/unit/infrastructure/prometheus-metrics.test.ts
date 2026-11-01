@@ -26,6 +26,15 @@ describe('PrometheusMetrics', () => {
     expect(await sample('umg_ws_clients_connected')).toBe(1);
   });
 
+  it('inboundFiltered counts per reason', async () => {
+    metrics.inboundFiltered('conversation_excluded');
+    metrics.inboundFiltered('conversation_excluded');
+    metrics.inboundFiltered('lid_unresolved');
+    const output = await registry.metrics();
+    expect(output).toContain('umg_inbound_filtered_total{reason="conversation_excluded"} 2');
+    expect(output).toContain('umg_inbound_filtered_total{reason="lid_unresolved"} 1');
+  });
+
   it('persistFailures increments counter', async () => {
     metrics.persistFailures();
     metrics.persistFailures();

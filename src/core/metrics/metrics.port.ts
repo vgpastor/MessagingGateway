@@ -9,6 +9,9 @@ export type MediaSkipReason = 'too_large' | 'download_failed';
  */
 export type InboundSkipReason = 'ciphertext_stub' | 'empty';
 
+/** Why the conversation filter kept an inbound message out: not on the account's list, or a LID that could not be turned into a phone to look for it. */
+export type InboundFilterReason = 'conversation_excluded' | 'lid_unresolved';
+
 export interface MetricsPort {
   incCounter(name: string, labels?: Record<string, string>): void;
   decGauge(name: string, labels?: Record<string, string>): void;
@@ -20,6 +23,8 @@ export interface MetricsPort {
   mediaSkipped(reason: MediaSkipReason): void;
   /** An inbound provider message was dropped before the pipeline (never logged nor emitted) */
   inboundSkipped(reason: InboundSkipReason): void;
+  /** The conversation filter kept an inbound message out (never logged nor emitted) */
+  inboundFiltered(reason: InboundFilterReason): void;
   /** An inbound message of `account` went through the pipeline; `ts` is seconds since epoch */
   lastInbound(account: string, ts: number): void;
 }
@@ -33,5 +38,6 @@ export const noopMetrics: MetricsPort = {
   persistFailures: () => {},
   mediaSkipped: () => {},
   inboundSkipped: () => {},
+  inboundFiltered: () => {},
   lastInbound: () => {},
 };

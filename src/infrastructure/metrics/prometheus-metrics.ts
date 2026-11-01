@@ -1,10 +1,11 @@
 import { Counter, Gauge, Histogram, type Metric } from 'prom-client';
-import type { InboundSkipReason, MediaSkipReason, MetricsPort } from '../../core/metrics/metrics.port.js';
+import type { InboundFilterReason, InboundSkipReason, MediaSkipReason, MetricsPort } from '../../core/metrics/metrics.port.js';
 import {
   registry,
   persistFailuresTotal,
   mediaSkippedTotal,
   inboundSkippedTotal,
+  inboundFilteredTotal,
   lastInboundTimestamp,
 } from './prometheus.js';
 
@@ -43,6 +44,10 @@ export class PrometheusMetrics implements MetricsPort {
 
   inboundSkipped(reason: InboundSkipReason): void {
     inboundSkippedTotal.inc({ reason });
+  }
+
+  inboundFiltered(reason: InboundFilterReason): void {
+    inboundFilteredTotal.inc({ reason });
   }
 
   lastInbound(account: string, ts: number): void {

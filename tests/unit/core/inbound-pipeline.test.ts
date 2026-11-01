@@ -74,7 +74,7 @@ function setup(opts: {
   const media: MediaService = { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) };
   const metrics: MetricsPort = {
     incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(),
-    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn(),
+    mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), lastInbound: vi.fn(),
   };
   const failedLog: FailedInboundLog = { append: vi.fn(async () => {}), replay: vi.fn(async () => ({ saved: 0, kept: 0 })) };
   const pipeline = new InboundPipeline({
@@ -102,6 +102,45 @@ describe('InboundPipeline', () => {
     await pipeline.handle(account, makeEnvelope({ conversationId: 'g1@g.us' }), raw);
     expect(insertInbound).toHaveBeenCalledTimes(1);
     expect(emitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('what the filter drops', () => {
+    afterEach(() => setGlobalLogger(originalLogger));
+
+    function capturingDebug() {
+      const debug = vi.fn();
+      const fake = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug, child: () => fake };
+      setGlobalLogger(fake as unknown as Logger);
+      return debug;
+    }
+
+    it('counts a conversation outside the list, and logs it at debug level', async () => {
+      const debug = capturingDebug();
+      const { pipeline, metrics } = setup();
+
+      await pipeline.handle(makeAccount({ conversations: ['g1@g.us'] }), makeEnvelope({ id: 'out', conversationId: 'g2@g.us' }), raw);
+
+      expect(metrics.inboundFiltered).toHaveBeenCalledTimes(1);
+      expect(metrics.inboundFiltered).toHaveBeenCalledWith('conversation_excluded');
+      expect(debug).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ accountId: 'wa-1', messageId: 'out', reason: 'conversation_excluded' }));
+    });
+
+    it('tells apart a LID that could not be resolved: it may have been a conversation of the list', async () => {
+      capturingDebug();
+      const { pipeline, metrics } = setup();
+
+      await pipeline.handle(makeAccount({ conversations: ['34600111222@s.whatsapp.net'] }), makeEnvelope({ conversationId: '100000000000001@lid' }), raw);
+
+      expect(metrics.inboundFiltered).toHaveBeenCalledWith('lid_unresolved');
+    });
+
+    it('counts nothing for a message the filter lets through', async () => {
+      const { pipeline, metrics } = setup();
+
+      await pipeline.handle(makeAccount({ conversations: ['g1@g.us'] }), makeEnvelope({ conversationId: 'g1@g.us' }), raw);
+
+      expect(metrics.inboundFiltered).not.toHaveBeenCalled();
+    });
   });
 
   it('accepts every conversation when the allowlist is "*" or absent', async () => {
@@ -599,7 +638,7 @@ describe('InboundPipeline', () => {
       const pipeline = new InboundPipeline({
         store, eventBus,
         media: { process: vi.fn(async () => {}), resumePendingMedia: vi.fn(async () => 0) },
-        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), lastInbound: vi.fn() },
+        metrics: { incCounter: vi.fn(), decGauge: vi.fn(), incGauge: vi.fn(), observeHistogram: vi.fn(), persistFailures: vi.fn(), mediaSkipped: vi.fn(), inboundSkipped: vi.fn(), inboundFiltered: vi.fn(), lastInbound: vi.fn() },
       });
       return { pipeline, order };
     }

@@ -42,6 +42,10 @@ interface InboundMessage {
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** The phone number in what a LID resolves to: `34600111222:5@s.whatsapp.net` gives `34600111222`. */
+const phoneDigits = (resolved: string | undefined): string | undefined =>
+  resolved?.split('@')[0]?.split(':')[0]?.replace(/\D/g, '') || undefined;
+
 /**
  * Single entry point for inbound messages: filter → persist → emit → media.
  *
@@ -138,7 +142,7 @@ export class InboundPipeline {
 
   private async resolveLidToPhoneJid(accountId: string, lid: string): Promise<string | undefined> {
     try {
-      const digits = (await this.deps.resolveLidToPhone?.(accountId, lid))?.split('@')[0]?.split(':')[0]?.replace(/\D/g, '');
+      const digits = phoneDigits(await this.deps.resolveLidToPhone?.(accountId, lid));
       return digits ? `${digits}@s.whatsapp.net` : undefined;
     } catch (err) {
       this.logger.warn('Failed to resolve a LID from the failed log', { accountId, error: errorMessage(err) });
@@ -182,7 +186,10 @@ export class InboundPipeline {
     try {
       await this.enrich(message);
       if (!this.unsaved.has(message)) return; // drain() gave up on it meanwhile
-      if (!this.accepts(account, envelope)) return;
+      if (!this.accepts(account, envelope)) {
+        this.recordFiltered(envelope);
+        return;
+      }
 
       await this.resolveSenderPhone(envelope);
       const media = this.markMediaPending(envelope);
@@ -216,13 +223,18 @@ export class InboundPipeline {
     return allowed === undefined || allowed === '*' || allowed.includes(envelope.conversationId);
   }
 
+  private recordFiltered(envelope: UnifiedEnvelope): void {
+    const reason = envelope.conversationId.endsWith('@lid') ? 'lid_unresolved' : 'conversation_excluded';
+    this.deps.metrics.inboundFiltered(reason);
+    this.logger.debug('Inbound message filtered out', { accountId: envelope.accountId, messageId: envelope.id, reason });
+  }
+
   /** WhatsApp sometimes identifies a sender by LID only; the phone is what consumers match on. */
   private async resolveSenderPhone(envelope: UnifiedEnvelope): Promise<void> {
     const { sender } = envelope;
     if (sender.phone || !sender.lid || !this.deps.resolveLidToPhone) return;
     try {
-      const resolved = await this.deps.resolveLidToPhone(envelope.accountId, sender.lid);
-      const digits = resolved?.split('@')[0]?.split(':')[0]?.replace(/\D/g, '');
+      const digits = phoneDigits(await this.deps.resolveLidToPhone(envelope.accountId, sender.lid));
       if (digits) sender.phone = `+${digits}`;
     } catch (err) {
       this.logger.warn('Failed to resolve sender LID to phone', {

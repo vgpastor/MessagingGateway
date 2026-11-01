@@ -72,6 +72,13 @@ export const inboundSkippedTotal = new Counter({
   registers: [registry],
 });
 
+export const inboundFilteredTotal = new Counter({
+  name: 'umg_inbound_filtered_total',
+  help: 'Inbound messages the conversation filter kept out (conversation_excluded: not on the account list; lid_unresolved: a LID that could not be turned into a phone)',
+  labelNames: ['reason'] as const,
+  registers: [registry],
+});
+
 export const lastInboundTimestamp = new Gauge({
   name: 'umg_last_inbound_timestamp',
   help: 'Unix time (seconds) of the last inbound message processed per account',
