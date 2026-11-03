@@ -7,6 +7,11 @@ on:
       - 'package.json'
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -30,7 +35,7 @@ jobs:
           echo "gateway_version=$CURRENT" >> "$GITHUB_OUTPUT"
 
   release-gateway:
-    needs: detect-changes
+    needs: [ci, detect-changes]
     if: needs.detect-changes.outputs.gateway_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -82,3 +87,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+
+  # srv07 runs the image from Docker Hub with docker compose. The deploy key can only run
+  # /usr/local/sbin/messaging-gateway-deploy (deploy/srv07/messaging-gateway-deploy.sh), which takes the version.
+  deploy-srv07:
+    needs: [detect-changes, release-gateway]
+    runs-on: ubuntu-latest
+    # The key is an environment secret: only runs from main can read it.
+    environment: srv07
+    permissions: {}
+    concurrency: srv07-deploy
+    # The script waits up to 30 min for the health check (migrations run before the gateway listens).
+    timeout-minutes: 40
+    steps:
+      - name: Deploy to srv07
+        env:
+          HOST: srv07.ingenierosweb.co
+          SSH_KEY: ${{ secrets.SRV07_DEPLOY_KEY }}
+          VERSION: ${{ needs.detect-changes.outputs.gateway_version }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          # Pinned on purpose. If the server key rotates: ssh-keyscan -t ed25519 "$HOST" and check it out of band.
+          echo "$HOST ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcznWLBEBj0x0Y/w6mhRzYzCsunu5jUwMC8Pd/aQd10" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 "root@$HOST" "$VERSION"

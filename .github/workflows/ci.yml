@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The publish workflows call it so nothing is published unless CI passes on that same commit.
+  workflow_call:
 
 permissions:
   contents: read
@@ -124,3 +126,11 @@ jobs:
             exit 1
           fi
           echo "✅ SDK is in sync with OpenAPI schema"
+
+  deploy-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the srv07 deploy script guards
+        run: bash deploy/srv07/messaging-gateway-deploy.test.sh
