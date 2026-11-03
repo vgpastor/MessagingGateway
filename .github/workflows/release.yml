@@ -7,6 +7,11 @@ on:
       - 'package.json'
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -30,7 +35,7 @@ jobs:
           echo "gateway_version=$CURRENT" >> "$GITHUB_OUTPUT"
 
   release-gateway:
-    needs: detect-changes
+    needs: [ci, detect-changes]
     if: needs.detect-changes.outputs.gateway_changed == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -82,3 +87,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+
+  # srv07 runs the image from Docker Hub with docker compose. The deploy key can only run
+  # /usr/local/sbin/messaging-gateway-deploy (deploy/srv07/messaging-gateway-deploy.sh), which takes the version.
+  deploy-srv07:
+    needs: [detect-changes, release-gateway]
+    runs-on: ubuntu-latest
+    permissions: {}
+    concurrency: srv07-deploy
+    steps:
+      - name: Deploy to srv07
+        env:
+          SSH_KEY: ${{ secrets.SRV07_DEPLOY_KEY }}
+          VERSION: ${{ needs.detect-changes.outputs.gateway_version }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "srv07.ingenierosweb.co ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBcznWLBEBj0x0Y/w6mhRzYzCsunu5jUwMC8Pd/aQd10" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes root@srv07.ingenierosweb.co "$VERSION"

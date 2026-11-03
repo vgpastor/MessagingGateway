@@ -477,6 +477,11 @@ Releases are **version-driven** — just bump the version in `package.json` and 
 # → Automatically publishes to npm
 ```
 
+Each publish workflow runs the full CI (`ci.yml`) on the same commit first and publishes only if it passes.
+A gateway release then deploys to srv07 over SSH: the key can only run
+[`deploy/srv07/messaging-gateway-deploy.sh`](deploy/srv07/messaging-gateway-deploy.sh), which only moves forward
+and leaves the jump to 0.6.0 (migration 002) to a manual cutover. See the header of that script.
+
 ```bash
 docker pull vgpastor/messaging-gateway:latest
 npm install @messaging-gateway/sdk
